@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.bak
+.pytest_cache/
+.mypy_cache/
+.next/
+.next-dev/
+node_modules/
+dist/
+build/
+coverage/
+.runtime/
+backend/.runtime/
+frontend/.next/
+frontend/.next-dev/
+frontend/out/
+frontend/tsconfig.tsbuildinfo
+.env
+.env.local
+context.md
+
+# Local medical/source documents and runtime knowledge folders are kept outside Git.
+体检报告/
+功能医学相关资料/
+AI学习功能医学相关资料/
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+
+# Keep templates and docs trackable even though broad document ignores are above.
+!docs/**/*.md

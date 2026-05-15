@@ -1,0 +1,20 @@
+.git
+.gitignore
+.runtime
+backend/.runtime
+frontend/.next
+frontend/node_modules
+node_modules
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+coverage
+dist
+build
+功能医学相关资料
+25款粒子配方规格.xls
+20251208 8款产品的配方规格书.xlsx
+0316测试报告1.pdf

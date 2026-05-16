@@ -9,7 +9,9 @@
 - `backend/Dockerfile`
 - `frontend/Dockerfile`
 - 本地数据文件：产品目录、已审核知识、指标字典
-- 必要的本地资料目录：`功能医学相关资料/`
+- 可选外部资料目录：`knowledge/`
+
+真实病例、原始医学资料、`.env`、`.runtime/` 和本地数据库不要放入源码仓库。整理后的 JSON/CSV 规则数据可以随源码交付。
 
 ## 启动前准备
 
@@ -25,11 +27,11 @@ cp .env.example .env
 - `FM_UPLOAD_DIR`
 - `FM_SQLITE_PATH`
 - `FM_KNOWLEDGE_ROOT`
-- `FM_REPORT_REFERENCE_PATH`
+- `FM_REPORT_REFERENCE_PATH`（可选）
 
 3. 确认以下目录存在
-- `功能医学相关资料/`
 - `.runtime/`
+- `knowledge/`（如果需要加载外部资料清单）
 
 ## Docker 启动
 
@@ -62,5 +64,5 @@ docker compose up --build
 ## 常见注意事项
 
 - 如果前端能打开但请求后端失败，先检查 `NEXT_PUBLIC_API_BASE_URL` 是否指向浏览器可访问地址
-- 如果部署方没有完整的 `功能医学相关资料/` 目录，系统仍能启动，但知识资料清单会不完整
+- 如果部署方没有 `knowledge/` 目录或目录为空，系统仍能启动，但外部资料清单会为空
 - 如果以后要接云端 LLM，建议只把它作为报告整理层，不改变本地规则边界

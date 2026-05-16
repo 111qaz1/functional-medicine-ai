@@ -30,7 +30,7 @@ class LLMConfigValidationTests(unittest.TestCase):
     def test_update_llm_config_rejects_url_in_api_key_field(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            (root / "功能医学相关资料").mkdir(parents=True, exist_ok=True)
+            (root / "knowledge").mkdir(parents=True, exist_ok=True)
             settings = AppSettings(
                 project_root=root,
                 data_dir=Path(__file__).resolve().parents[1] / "app" / "data",
@@ -38,8 +38,8 @@ class LLMConfigValidationTests(unittest.TestCase):
                 upload_dir=root / ".runtime" / "uploads",
                 report_export_dir=root / ".runtime" / "reports",
                 sqlite_path=root / ".runtime" / "test.sqlite3",
-                knowledge_root=root / "功能医学相关资料",
-                report_reference_path=root / "0316测试报告1.pdf",
+                knowledge_root=root / "knowledge",
+                report_reference_path=root / "report-reference.pdf",
             )
             app = create_app()
             app.state.container = build_container(settings)

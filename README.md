@@ -152,6 +152,14 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 
 功能稳定后，可以直接用 Docker 方式把同一套本地版交给其他人部署。
 
+## 团队协作
+
+项目仍在开发阶段时，推荐使用“私有 Git 仓库交付源码 + Docker Compose 统一启动环境”的方式协作。Git 负责多人改代码、提交历史和合并；Docker Compose 负责让新成员快速跑起同一套前后端环境。
+
+医学资料需要分级管理：整理后的 JSON/CSV 规则数据可以进入仓库，真实病例、原始 PDF/Word/Excel、`.env`、`.runtime` 和本地数据库不要进入 Git。
+
+新成员加入、资料边界和分支流程详见：`docs/team-collaboration.md`。
+
 ## 验证
 
 后端测试：

@@ -57,7 +57,7 @@ def llm_config_validation_error(config: LLMConfig) -> str | None:
     api_key = normalize_llm_api_key(config.api_key)
     base_url = (config.base_url or "").strip().rstrip("/")
     if api_key and base_url and api_key.rstrip("/") == base_url:
-        return "API Key 不能填写 Base URL。请在 API Key 栏粘贴火山方舟控制台生成的鉴权 Key。"
+        return "API Key 不能填写 Base URL。请在 API Key 栏粘贴模型服务控制台生成的鉴权 Key。"
     if api_key and api_key.lower().startswith(("http://", "https://")):
         return "API Key 看起来像一个网址，请检查是否把 Base URL 填到了 API Key 栏。"
     return None
@@ -71,8 +71,8 @@ def load_settings() -> AppSettings:
     upload_dir = _resolve_path("FM_UPLOAD_DIR", runtime_dir / "uploads")
     report_export_dir = _resolve_path("FM_REPORT_EXPORT_DIR", runtime_dir / "reports")
     sqlite_path = _resolve_path("FM_SQLITE_PATH", runtime_dir / "app.sqlite3")
-    knowledge_root = _resolve_path("FM_KNOWLEDGE_ROOT", project_root / "功能医学相关资料")
-    report_reference_path = _resolve_path("FM_REPORT_REFERENCE_PATH", project_root / "0316测试报告1.pdf")
+    knowledge_root = _resolve_path("FM_KNOWLEDGE_ROOT", project_root / "knowledge")
+    report_reference_path = _resolve_path("FM_REPORT_REFERENCE_PATH", project_root / "report-reference.pdf")
     llm_base_url = os.getenv("LLM_BASE_URL") or None
     llm_api_key = normalize_llm_api_key(os.getenv("LLM_API_KEY"))
     llm_model = os.getenv("LLM_MODEL") or None

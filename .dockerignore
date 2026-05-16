@@ -14,7 +14,13 @@ __pycache__
 coverage
 dist
 build
+体检报告
 功能医学相关资料
-25款粒子配方规格.xls
-20251208 8款产品的配方规格书.xlsx
-0316测试报告1.pdf
+AI学习功能医学相关资料
+报告中的营养素表
+knowledge
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx

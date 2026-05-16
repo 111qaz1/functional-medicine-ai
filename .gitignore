@@ -23,6 +23,9 @@ context.md
 体检报告/
 功能医学相关资料/
 AI学习功能医学相关资料/
+报告中的营养素表/
+knowledge/
+report-reference.pdf
 *.pdf
 *.doc
 *.docx

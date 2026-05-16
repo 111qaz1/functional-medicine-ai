@@ -9,10 +9,10 @@ services:
       FM_RUNTIME_DIR: ${FM_RUNTIME_DIR:-/app/.runtime}
       FM_UPLOAD_DIR: ${FM_UPLOAD_DIR:-/app/.runtime/uploads}
       FM_SQLITE_PATH: ${FM_SQLITE_PATH:-/app/.runtime/app.sqlite3}
-      FM_KNOWLEDGE_ROOT: ${FM_KNOWLEDGE_ROOT:-/app/功能医学相关资料}
+      FM_KNOWLEDGE_ROOT: ${FM_KNOWLEDGE_ROOT:-/app/knowledge}
     volumes:
       - ./.runtime:/app/.runtime
-      - ./功能医学相关资料:/app/功能医学相关资料:ro
+      - ./knowledge:/app/knowledge:ro
     ports:
       - "8000:8000"
 

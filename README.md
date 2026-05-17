@@ -152,6 +152,8 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 
 功能稳定后，可以直接用 Docker 方式把同一套本地版交给其他人部署。
 
+新成员第一次用 Docker 启动项目时，优先参考：`docs/docker-first-run.md`。
+
 ## 团队协作
 
 项目仍在开发阶段时，推荐使用“私有 Git 仓库交付源码 + Docker Compose 统一启动环境”的方式协作。Git 负责多人改代码、提交历史和合并；Docker Compose 负责让新成员快速跑起同一套前后端环境。

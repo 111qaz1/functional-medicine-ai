@@ -35,6 +35,8 @@ cp .env.example .env
 
 ## Docker 启动
 
+新成员第一次本地复现项目，建议先阅读：`docs/docker-first-run.md`。
+
 ```bash
 docker compose up --build
 ```

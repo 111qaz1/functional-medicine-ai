@@ -204,6 +204,38 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(self.container.repository.list_clinician_rules(), [])
 
+    def test_parsing_review_manual_indicator_is_persisted_and_displayed(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "人工补录病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+
+        response = self.public_client.put(
+            f"/cases/{case_id}/parsing-review",
+            json={
+                "reviewer_id": "reviewer-01",
+                "files": [],
+                "normalized_lab_items": [],
+                "manual_indicators": [
+                    {
+                        "indicator_name": "脂肪肝",
+                        "result_text": "总检提示",
+                        "status": "positive",
+                        "evidence_text": "总检汇总分析第3项",
+                    }
+                ],
+                "missing_fields": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["case"]["manual_indicators"][0]["indicator_name"], "脂肪肝")
+        self.assertEqual(payload["display_indicators"][0]["indicator_name"], "脂肪肝")
+        self.assertEqual(payload["display_indicators"][0]["source_span"]["snippet"], "总检汇总分析第3项")
+
 
 if __name__ == "__main__":
     unittest.main()

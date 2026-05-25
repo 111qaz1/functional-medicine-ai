@@ -6,6 +6,7 @@ from app.domain.models import AbnormalFlag, CaseIndicator, IndicatorStatus, Sour
 
 
 def _normalize_snippet(value: str) -> str:
+    value = value.replace("—", "-").replace("–", "-").replace("~", "-").replace("～", "-")
     return re.sub(r"\s+", "", value).strip().lower()
 
 
@@ -30,6 +31,7 @@ class CaseIndicatorService:
 
     def build(self, case) -> list[CaseIndicator]:
         indicators: list[CaseIndicator] = []
+        indicators.extend(getattr(case, "manual_indicators", []))
         indicators.extend(self._from_lab_items(case.extracted_lab_items))
         indicators.extend(self._from_case_text(case))
         return self._sort_indicators(self._dedupe(indicators))
@@ -49,6 +51,10 @@ class CaseIndicatorService:
             if source_span and source_span.snippet:
                 if self._is_admin_metadata_line(source_span.snippet):
                     continue
+                if item.marker_code == "uric_acid" and "尿酸碱度" in source_span.snippet:
+                    continue
+                if "↑" in source_span.snippet or "↓" in source_span.snippet:
+                    status = IndicatorStatus.attention
                 sanitized_snippet = self._sanitize_lab_snippet(source_span.snippet)
                 if sanitized_snippet != source_span.snippet:
                     source_span = self._clone_span(source_span, sanitized_snippet)
@@ -79,6 +85,7 @@ class CaseIndicatorService:
             indicators.extend(self._extract_chief_complaint(lines))
             indicators.extend(self._extract_vitals(lines))
             indicators.extend(self._extract_positive_findings(lines))
+            indicators.extend(self._extract_summary_findings(lines))
             indicators.extend(self._extract_exam_conclusions(lines))
             indicators.extend(self._extract_generic_lab_rows(lines, known_lab_snippets))
             indicators.extend(self._extract_stacked_lab_rows(lines, known_lab_snippets))
@@ -153,6 +160,7 @@ class CaseIndicatorService:
                 ("血压", re.search(r"(?:^|[ ,;，])BP[:：]?\s*([0-9]{2,3}/[0-9]{2,3})\s*mmHg", line, re.IGNORECASE)),
                 ("体重", re.search(r"体重[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*kg", line, re.IGNORECASE)),
                 ("身高", re.search(r"身高[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*cm", line, re.IGNORECASE)),
+                ("体质指数", re.search(r"(?:BMI值|BMI|体质指数)[:：]?\s*([0-9]+(?:\.[0-9]+)?)", line, re.IGNORECASE)),
             ]
             for indicator_name, match in matches:
                 if not match:
@@ -168,6 +176,36 @@ class CaseIndicatorService:
                         source_span=self._clone_span(span, snippet),
                     )
                 )
+        return indicators
+
+    def _extract_summary_findings(self, lines: list[tuple[str, SourceSpan]]) -> list[CaseIndicator]:
+        indicators: list[CaseIndicator] = []
+        in_summary = False
+        finding_labels = {
+            "脂肪肝": IndicatorStatus.positive,
+            "超重": IndicatorStatus.attention,
+        }
+        for line, span in lines:
+            if "总检汇总分析" in line:
+                in_summary = True
+                continue
+            if in_summary and any(line.startswith(prefix) for prefix in ("初审医生", "终审医生", "身高体重检查")):
+                break
+            if not in_summary:
+                continue
+            match = re.match(r"^\s*\d+[、.．]\s*(脂肪肝|超重)\s*$", line)
+            if not match:
+                continue
+            name = match.group(1)
+            indicators.append(
+                CaseIndicator(
+                    indicator_name=name,
+                    result_text="总检提示",
+                    status=finding_labels[name],
+                    category="clinical_finding",
+                    source_span=self._clone_span(span, line),
+                )
+            )
         return indicators
 
     def _extract_positive_findings(self, lines: list[tuple[str, SourceSpan]]) -> list[CaseIndicator]:
@@ -363,7 +401,16 @@ class CaseIndicatorService:
         return blocks
 
     def _parse_generic_lab_row(self, line: str) -> list[dict]:
-        cleaned = line.replace("—", "-").replace("–", "-").replace("~", "-").replace("至", "-").strip()
+        cleaned = (
+            line.replace("—", "-")
+            .replace("–", "-")
+            .replace("~", "-")
+            .replace("～", "-")
+            .replace("至", "-")
+            .replace("＞", ">")
+            .replace("＜", "<")
+            .strip()
+        )
         cleaned = re.sub(r"\s*[|｜]\s*", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if not re.search(r"\d", cleaned):
@@ -381,7 +428,12 @@ class CaseIndicatorService:
                 break
 
             prefix = cleaned[cursor:range_match.start()]
-            value_match = re.search(r"(?P<name>.*?)(?P<value>-?\d+(?:\.\d+)?)\s*(?P<flag>[↑↓]?)\s*$", prefix)
+            value_match = re.search(
+                r"(?P<name>.*?)(?P<value>-?\d+(?:\.\d+)?)\s*(?P<flag>[↑↓]?)\s*"
+                r"(?P<prefix_unit>(?:\*?10\^\d+/[A-Za-zμu%^0-9]+|[A-Za-zμu/%][A-Za-zμu/%^0-9]*(?:/[A-Za-zμu%^0-9]+)?))?\s*$",
+                prefix,
+                re.IGNORECASE,
+            )
             if not value_match:
                 cursor = range_match.end()
                 continue
@@ -399,7 +451,12 @@ class CaseIndicatorService:
                 upper = abs(upper)
 
             after_range = cleaned[range_match.end():]
-            unit_token, unit_end = self._extract_unit_token(after_range)
+            unit_token = value_match.group("prefix_unit") or ""
+            after_range_unit, unit_end = self._extract_unit_token(after_range)
+            if not unit_token:
+                unit_token = after_range_unit
+            else:
+                unit_end = 0
             status_token, status_end = self._extract_status_token(after_range[unit_end:])
             if not unit_token and not status_token and self._looks_like_next_marker_fragment(after_range):
                 cursor = range_match.end()
@@ -465,7 +522,7 @@ class CaseIndicatorService:
         return "", leading_space
 
     def _is_supported_unit_token(self, token: str) -> bool:
-        normalized = token.replace("μ", "u").replace("µ", "u").lower().strip()
+        normalized = token.replace("μ", "u").replace("µ", "u").lower().strip().lstrip("*")
         if normalized in {
             "%",
             "ratio",
@@ -734,6 +791,7 @@ class CaseIndicatorService:
             "血压": "mmHg",
             "体重": "kg",
             "身高": "cm",
+            "体质指数": "",
         }
         return f"{raw_value}{suffix_map.get(indicator_name, '')}"
 
@@ -751,6 +809,7 @@ class CaseIndicatorService:
             "呼吸": (12, 20),
             "体重": (0, 1000),
             "身高": (0, 300),
+            "体质指数": (18.5, 23.9),
         }
         lower, upper = ranges.get(indicator_name, (float("-inf"), float("inf")))
         return IndicatorStatus.normal if lower <= numeric <= upper else IndicatorStatus.attention
@@ -881,8 +940,9 @@ class CaseIndicatorService:
         seen: set[tuple[str, str, str]] = set()
         deduped: list[CaseIndicator] = []
         for indicator in indicators:
+            category = "measurement" if indicator.category in {"lab", "manual"} else indicator.category
             signature = (
-                indicator.category,
+                category,
                 self._canonical_indicator_name(indicator.indicator_name),
                 indicator.result_text.strip(),
             )
@@ -904,6 +964,7 @@ class CaseIndicatorService:
         }
         category_priority = {
             "lab": 0,
+            "manual": 0,
             "clinical_finding": 1,
             "exam_conclusion": 2,
             "vital_sign": 3,

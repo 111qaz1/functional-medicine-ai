@@ -136,6 +136,22 @@
     "default_range": {"lower": 39, "upper": 52}
   },
   {
+    "code": "platelet_distribution_width",
+    "display_name": "血小板分布宽度",
+    "synonyms": ["血小板分布宽度", "PDW"],
+    "normalized_unit": "fL",
+    "unit_factors": {"fL": 1, "fl": 1},
+    "default_range": {"lower": 9.9, "upper": 17}
+  },
+  {
+    "code": "eosinophil_percentage",
+    "display_name": "嗜酸性粒细胞比率",
+    "synonyms": ["嗜酸性粒细胞比率", "嗜酸性粒细胞百分比", "EOS%", "EO%"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 0.5, "upper": 5}
+  },
+  {
     "code": "magnesium",
     "display_name": "血清镁",
     "synonyms": ["镁", "血清镁", "Magnesium", "Mg"],
@@ -338,7 +354,7 @@
   {
     "code": "triglycerides",
     "display_name": "甘油三酯",
-    "synonyms": ["甘油三酯", "TG", "Triglycerides"],
+    "synonyms": ["甘油三酯", "甘油三脂", "TG", "Triglycerides"],
     "normalized_unit": "mmol/L",
     "unit_factors": {"mmol/L": 1, "mg/dL": 0.0113},
     "default_range": {"lower": 0.56, "upper": 1.71}

@@ -120,6 +120,30 @@ class ParsingServiceTests(unittest.TestCase):
         self.assertEqual(by_code["folate"].abnormal_flag, AbnormalFlag.normal)
         self.assertEqual(by_code["calcium"].abnormal_flag, AbnormalFlag.normal)
 
+    def test_parses_hospital_abnormal_rows_with_unit_before_range_and_trailing_arrow(self) -> None:
+        spans = [
+            SourceSpan(file_name="checkup.pdf", page=9, line_number=1, snippet="血小板分布宽度 8.6 fL 9.9～17.0 ↓"),
+            SourceSpan(file_name="checkup.pdf", page=9, line_number=2, snippet="嗜酸性粒细胞比率 7.3 % 0.5～5.0 ↑"),
+            SourceSpan(file_name="checkup.pdf", page=9, line_number=3, snippet="甘油三脂 1.97 mmol/L 0.00～1.70 ↑"),
+            SourceSpan(file_name="checkup.pdf", page=9, line_number=4, snippet="高密度脂蛋白胆固醇 1.16 mmol/L ＞1.16 ↓"),
+            SourceSpan(file_name="checkup.pdf", page=10, line_number=5, snippet="尿酸碱度 6.50 4.80～7.50"),
+            SourceSpan(
+                file_name="checkup.pdf",
+                page=4,
+                line_number=6,
+                snippet="若嗜酸性粒细胞比率在10～20%，需检查有无寄生虫感染，必要时驱虫治疗。",
+            ),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        by_code = {item.marker_code: item for item in items}
+
+        self.assertEqual(set(by_code), {"platelet_distribution_width", "eosinophil_percentage", "triglycerides", "hdl_c"})
+        self.assertEqual(by_code["platelet_distribution_width"].abnormal_flag, AbnormalFlag.low)
+        self.assertEqual(by_code["eosinophil_percentage"].abnormal_flag, AbnormalFlag.high)
+        self.assertEqual(by_code["triglycerides"].abnormal_flag, AbnormalFlag.high)
+        self.assertEqual(by_code["hdl_c"].abnormal_flag, AbnormalFlag.low)
+
     def test_ignores_order_name_lines_that_only_contain_panel_counts(self) -> None:
         spans = [
             SourceSpan(file_name="report.txt", page=1, line_number=1, snippet="医嘱名: 同型半胱氨酸+肝功14项"),

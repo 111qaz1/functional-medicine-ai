@@ -27,6 +27,7 @@ import {
   ClinicianRule,
   DoctorAccount,
   ExtractedLabItem,
+  ManualIndicatorInput,
   Questionnaire,
   RuleScope
 } from "../lib/types";
@@ -430,6 +431,12 @@ const DEFAULT_FORM: Questionnaire = {
 };
 
 type FileEditState = Record<string, { correctedText: string; missingFieldsText: string }>;
+type ManualIndicatorEdit = {
+  indicatorName: string;
+  resultText: string;
+  status: CaseIndicator["status"];
+  evidenceText: string;
+};
 type AssistantChatTone = "default" | "success" | "warning";
 type QuestionnaireImportStatus = "processing" | "completed" | "failed";
 type QuestionnaireImportProgress = {
@@ -460,6 +467,15 @@ function createAssistantChatMessage(
     role,
     text,
     tone
+  };
+}
+
+function createManualIndicatorEdit(item?: CaseIndicator): ManualIndicatorEdit {
+  return {
+    indicatorName: item?.indicator_name ?? "",
+    resultText: item?.result_text ?? "",
+    status: item?.status ?? "attention",
+    evidenceText: item?.source_span.snippet === "解析校对人工补录" ? "" : item?.source_span.snippet ?? ""
   };
 }
 
@@ -506,6 +522,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [clinicalSummaryHint, setClinicalSummaryHint] = useState<string | null>(null);
   const [clinicalSummaryImageProgress, setClinicalSummaryImageProgress] = useState<ClinicalSummaryImageImportProgress[]>([]);
   const [labItemsEditor, setLabItemsEditor] = useState("[]");
+  const [manualIndicatorEdits, setManualIndicatorEdits] = useState<ManualIndicatorEdit[]>([]);
   const [parsingMissingFieldsText, setParsingMissingFieldsText] = useState("");
   const [parsingReviewNotes, setParsingReviewNotes] = useState("");
   const [fileEdits, setFileEdits] = useState<FileEditState>({});
@@ -522,6 +539,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     setQuestionnaire(nextPayload.case.questionnaire ?? DEFAULT_FORM);
     setClinicalSummaryText(nextPayload.case.clinical_summary_text ?? "");
     setLabItemsEditor(stringifyLabItems(nextPayload.case.extracted_lab_items));
+    setManualIndicatorEdits((nextPayload.case.manual_indicators ?? []).map((item) => createManualIndicatorEdit(item)));
     setParsingMissingFieldsText(nextPayload.case.parsing_missing_fields.join(", "));
     setParsingReviewNotes(nextPayload.case.parsing_review_notes ?? "");
     setFileEdits(
@@ -790,6 +808,20 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       if (!Array.isArray(parsedItems)) {
         throw new Error("指标校对内容必须是 JSON 数组。");
       }
+      const hasIncompleteManualIndicator = manualIndicatorEdits.some(
+        (item) => Boolean(item.indicatorName.trim()) !== Boolean(item.resultText.trim())
+      );
+      if (hasIncompleteManualIndicator) {
+        throw new Error("人工补录关键指标需要同时填写指标名称和结果。");
+      }
+      const manualIndicators: ManualIndicatorInput[] = manualIndicatorEdits
+        .filter((item) => item.indicatorName.trim() && item.resultText.trim())
+        .map((item) => ({
+          indicator_name: item.indicatorName.trim(),
+          result_text: item.resultText.trim(),
+          status: item.status,
+          evidence_text: item.evidenceText.trim() || null
+        }));
       await saveParsingReview(caseId, {
         reviewer_id: reviewerId,
         files: payload.case.files.map((file) => ({
@@ -798,6 +830,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           missing_fields: splitCsv(fileEdits[file.id]?.missingFieldsText ?? "")
         })),
         normalized_lab_items: parsedItems,
+        manual_indicators: manualIndicators,
         missing_fields: splitCsv(parsingMissingFieldsText),
         review_notes: parsingReviewNotes || null
       });
@@ -807,6 +840,20 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function addManualIndicator() {
+    setManualIndicatorEdits((current) => [...current, createManualIndicatorEdit()]);
+  }
+
+  function updateManualIndicator(index: number, updates: Partial<ManualIndicatorEdit>) {
+    setManualIndicatorEdits((current) =>
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...updates } : item))
+    );
+  }
+
+  function removeManualIndicator(index: number) {
+    setManualIndicatorEdits((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   async function handleGenerateDraft() {
@@ -1751,6 +1798,71 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 onChange={(event) => setLabItemsEditor(event.target.value)}
               />
             </label>
+
+            <div className="manual-indicator-panel">
+              <div className="manual-indicator-panel__head">
+                <div>
+                  <strong>关键指标（人工补录）</strong>
+                  <p className="muted">如果自动解析漏掉异常指标，可在这里录入；保存后会直接显示在下方关键指标并进入报告分析。</p>
+                </div>
+                <button type="button" className="secondary-button" disabled={busy} onClick={addManualIndicator}>
+                  新增关键指标
+                </button>
+              </div>
+              {manualIndicatorEdits.map((item, index) => (
+                <div className="manual-indicator-card" key={`manual-indicator-${index}`}>
+                  <div className="grid-two">
+                    <label className="field">
+                      <span>指标名称</span>
+                      <input
+                        value={item.indicatorName}
+                        onChange={(event) => updateManualIndicator(index, { indicatorName: event.target.value })}
+                        placeholder="例如：脂肪肝"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>结果</span>
+                      <input
+                        value={item.resultText}
+                        onChange={(event) => updateManualIndicator(index, { resultText: event.target.value })}
+                        placeholder="例如：彩超提示脂肪肝"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>状态</span>
+                      <select
+                        value={item.status}
+                        onChange={(event) =>
+                          updateManualIndicator(index, { status: event.target.value as CaseIndicator["status"] })
+                        }
+                      >
+                        <option value="attention">需关注</option>
+                        <option value="positive">阳性</option>
+                        <option value="normal">正常</option>
+                        <option value="info">信息</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>证据片段或备注</span>
+                      <input
+                        value={item.evidenceText}
+                        onChange={(event) => updateManualIndicator(index, { evidenceText: event.target.value })}
+                        placeholder="例如：总检汇总分析第 3 项"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-button secondary-button--danger"
+                    disabled={busy}
+                    onClick={() => removeManualIndicator(index)}
+                  >
+                    删除此项
+                  </button>
+                </div>
+              ))}
+              {manualIndicatorEdits.length === 0 ? <p className="muted">当前没有人工补录的关键指标。</p> : null}
+            </div>
 
             <label className="field">
               <span>病例级缺失项</span>

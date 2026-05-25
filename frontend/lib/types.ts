@@ -113,6 +113,7 @@ export interface CaseRecord {
   files: UploadedFile[];
   questionnaire?: Questionnaire | null;
   extracted_lab_items: ExtractedLabItem[];
+  manual_indicators: CaseIndicator[];
   draft_ids: string[];
   flags: string[];
   parsing_review_completed: boolean;
@@ -215,10 +216,18 @@ export interface ParsingReviewFileInput {
   missing_fields: string[];
 }
 
+export interface ManualIndicatorInput {
+  indicator_name: string;
+  result_text: string;
+  status: CaseIndicator["status"];
+  evidence_text?: string | null;
+}
+
 export interface ParsingReviewInput {
   reviewer_id: string;
   files: ParsingReviewFileInput[];
   normalized_lab_items: ExtractedLabItem[];
+  manual_indicators: ManualIndicatorInput[];
   missing_fields: string[];
   review_notes?: string | null;
 }

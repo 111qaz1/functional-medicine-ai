@@ -1,0 +1,1306 @@
+﻿[
+  {
+    "sku_id": "sku_super_anti_inflammatory",
+    "display_name": "超级抗炎",
+    "category": "inflammation",
+    "source_refs": [
+      "25款粒子配方规格.xls#01超级抗炎"
+    ],
+    "formula_summary": "以姜黄素、乳香、生姜和黑胡椒为核心的抗炎支持配方。 ?????",
+    "core_ingredients": [
+      "姜黄素",
+      "乳香提取物",
+      "生姜提取物",
+      "黑胡椒提取物"
+    ],
+    "candidate_use_cases": [
+      "抗炎支持",
+      "关节舒适",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "抗凝药物使用者需人工复核",
+      "胆道梗阻或活动性消化道出血需谨慎"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:hs_crp:high",
+      "goal:抗炎支持",
+      "goal:关节舒适",
+      "symptom:疼痛"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，随餐使用。",
+    "interaction_rule": [
+      "合并抗凝药或高剂量抗血小板药物时需人工确认。"
+    ],
+    "warning_text": [
+      "如存在胃部刺激或胆囊问题，需先人工评估。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 12
+  },
+  {
+    "sku_id": "sku_magnesium_glycinate",
+    "display_name": "甘氨酸镁",
+    "category": "mineral_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#02甘氨酸镁500",
+      "20251208 8款产品的配方规格书.xlsx#配方2-甘氨酸镁"
+    ],
+    "formula_summary": "本地保留的逻辑合并 SKU，均以甘氨酸镁为核心，规格待最终确认。",
+    "core_ingredients": [
+      "甘氨酸镁"
+    ],
+    "candidate_use_cases": [
+      "镁支持",
+      "睡眠恢复",
+      "压力管理"
+    ],
+    "contraindications": [
+      "肾功能不全或高镁血症需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": "pending_spec_decision",
+    "indications": [
+      "marker:magnesium:low",
+      "goal:睡眠恢复",
+      "goal:压力管理",
+      "lifestyle:sleep_recovery",
+      "lifestyle:stress_support"
+    ],
+    "exclusions": [
+      "condition:肾功能不全"
+    ],
+    "dosage_rule": "每日 1 粒，晚间或放松场景下使用。",
+    "interaction_rule": [
+      "与部分甲状腺素或喹诺酮类药物需错开使用。"
+    ],
+    "warning_text": [
+      "如出现腹泻或胃肠不适，需降低频次并让顾问确认。"
+    ],
+    "lifestyle_tags": [
+      "sleep_recovery",
+      "stress_support"
+    ],
+    "priority": 8
+  },
+  {
+    "sku_id": "sku_blood_sugar_complex",
+    "display_name": "血糖综合",
+    "category": "glucose_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#03血糖综合"
+    ],
+    "formula_summary": "含维生素 D、B 族、生物素等基础代谢营养素的血糖平衡支持配方。",
+    "core_ingredients": [
+      "维生素C",
+      "维生素D",
+      "维生素E",
+      "B族维生素",
+      "生物素"
+    ],
+    "candidate_use_cases": [
+      "血糖平衡",
+      "代谢支持",
+      "基础微量营养补充"
+    ],
+    "contraindications": [
+      "糖尿病药物调整期需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:fasting_glucose:high",
+      "marker:hba1c:high",
+      "goal:血糖平衡"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "正在使用降糖药或胰岛素时，需结合血糖监测人工确认。"
+    ],
+    "warning_text": [
+      "若血糖达到高风险阈值，优先转人工评估。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 6
+  },
+  {
+    "sku_id": "sku_weight_support",
+    "display_name": "减重相关",
+    "category": "weight_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#04减重相关"
+    ],
+    "formula_summary": "以绿茶、毛喉鞘蕊、班aba、西洋参和代谢微量营养素组成的体重管理支持配方。",
+    "core_ingredients": [
+      "绿茶提取物",
+      "毛喉鞘蕊提取物",
+      "西洋参提取物",
+      "班aba叶提取物",
+      "N-乙酰酪氨酸"
+    ],
+    "candidate_use_cases": [
+      "体重管理",
+      "代谢支持",
+      "血糖管理"
+    ],
+    "contraindications": [
+      "心悸、失眠明显或对咖啡因敏感者需谨慎"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:体重管理",
+      "goal:代谢支持",
+      "marker:fasting_glucose:high",
+      "lifestyle:movement"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "每日 1 粒，白天随餐使用。",
+    "interaction_rule": [
+      "与刺激性减重药并用需人工评估。"
+    ],
+    "warning_text": [
+      "对咖啡因样成分敏感者先从低频使用开始。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 18
+  },
+  {
+    "sku_id": "sku_liposomal_vitamin_c_500",
+    "display_name": "脂质体维生素C500",
+    "category": "antioxidant_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#05脂质体维生素C500"
+    ],
+    "formula_summary": "高剂量脂质体维生素 C 联合柑橘生物类黄酮的抗氧化支持配方。",
+    "core_ingredients": [
+      "脂质体维生素C",
+      "柑橘生物类黄酮"
+    ],
+    "candidate_use_cases": [
+      "免疫支持",
+      "抗氧化",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "草酸钙结石高风险人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:免疫支持",
+      "goal:抗氧化",
+      "marker:hs_crp:high"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与高剂量铁剂同用需结合个案评估。"
+    ],
+    "warning_text": [
+      "胃肠敏感或结石风险人群需控制总量。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 24
+  },
+  {
+    "sku_id": "sku_mitochondrial_support",
+    "display_name": "线粒体支持",
+    "category": "energy_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#06线粒体支持"
+    ],
+    "formula_summary": "以辅酶 Q10、镁、磷脂、硫辛酸和三烯生育酚为核心的线粒体营养支持配方。",
+    "core_ingredients": [
+      "辅酶Q10",
+      "苹果酸镁",
+      "大豆磷脂",
+      "磷脂酰胆碱",
+      "α-硫辛酸",
+      "α-酮戊二酸"
+    ],
+    "candidate_use_cases": [
+      "能量支持",
+      "疲劳恢复",
+      "线粒体支持"
+    ],
+    "contraindications": [
+      "对大豆成分敏感者需谨慎"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:能量支持",
+      "symptom:疲劳",
+      "lifestyle:stress_support"
+    ],
+    "exclusions": [
+      "allergy:大豆"
+    ],
+    "dosage_rule": "每日 1 粒，早餐或午餐后使用。",
+    "interaction_rule": [
+      "合并降压药或抗凝药时建议人工复核。"
+    ],
+    "warning_text": [
+      "如存在明显失眠，建议避免夜间使用。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 14
+  },
+  {
+    "sku_id": "sku_ashwagandha_stress_balance",
+    "display_name": "南非醉茄平衡压力",
+    "category": "stress_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#07南非醉茄平衡压力"
+    ],
+    "formula_summary": "以南非醉茄、茶氨酸、磷脂酰丝氨酸、藏红花和厚朴提取物构成的压力平衡配方。",
+    "core_ingredients": [
+      "南非醉茄提取物",
+      "L-茶氨酸",
+      "磷脂酰丝氨酸",
+      "藏红花提取物",
+      "木兰树皮提取物"
+    ],
+    "candidate_use_cases": [
+      "压力管理",
+      "睡眠恢复",
+      "情绪平衡"
+    ],
+    "contraindications": [
+      "孕期、甲状腺亢进或镇静药联合使用时需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:压力管理",
+      "lifestyle:stress_support",
+      "lifestyle:sleep_recovery",
+      "symptom:焦虑"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "每日 1 粒，傍晚或晚间使用。",
+    "interaction_rule": [
+      "与镇静安眠药并用需人工确认。"
+    ],
+    "warning_text": [
+      "甲状腺功能亢进或嗜睡明显者需谨慎。"
+    ],
+    "lifestyle_tags": [
+      "stress_support",
+      "sleep_recovery"
+    ],
+    "priority": 10
+  },
+  {
+    "sku_id": "sku_cardiac_support",
+    "display_name": "心肌功能健康支持",
+    "category": "cardiometabolic_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#08心肌功能健康支持"
+    ],
+    "formula_summary": "以钙镁钾、硒、牛磺酸和山楂等成分为核心的心肌营养支持配方。",
+    "core_ingredients": [
+      "柠檬酸钙",
+      "柠檬酸镁",
+      "硒代蛋氨酸",
+      "柠檬酸钾",
+      "牛磺酸",
+      "山楂提取物"
+    ],
+    "candidate_use_cases": [
+      "心血管支持",
+      "电解质支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "肾功能异常或高钾风险人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:心血管支持",
+      "marker:ldl_c:high",
+      "pattern:lipid_disorder",
+      "symptom:心悸"
+    ],
+    "exclusions": [
+      "condition:肾功能不全"
+    ],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与洋地黄类、利尿剂或抗凝药合用时需人工确认。"
+    ],
+    "warning_text": [
+      "若存在明显心律失常，需先转人工评估。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 22
+  },
+  {
+    "sku_id": "sku_sleep_support",
+    "display_name": "睡眠支持",
+    "category": "sleep_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#09睡眠支持"
+    ],
+    "formula_summary": "由缬草、西番莲、香蜂草、洋甘菊、GABA、茶氨酸、5-HTP 和褪黑素构成的睡眠支持配方。",
+    "core_ingredients": [
+      "缬草提取物",
+      "西番莲提取物",
+      "香蜂草提取物",
+      "洋甘菊提取物",
+      "GABA",
+      "L-茶氨酸",
+      "5-HTP",
+      "褪黑素"
+    ],
+    "candidate_use_cases": [
+      "睡眠恢复",
+      "入睡困难",
+      "夜间觉醒"
+    ],
+    "contraindications": [
+      "孕期、驾驶岗位或正在使用镇静药物者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:睡眠恢复",
+      "symptom:失眠",
+      "lifestyle:sleep_recovery"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "睡前 1 粒。",
+    "interaction_rule": [
+      "与镇静安眠药、抗抑郁药合用时需人工确认。"
+    ],
+    "warning_text": [
+      "服用后不建议驾驶或操作机械。"
+    ],
+    "lifestyle_tags": [
+      "sleep_recovery"
+    ],
+    "priority": 9
+  },
+  {
+    "sku_id": "sku_thyroid_support",
+    "display_name": "甲状腺支持",
+    "category": "thyroid_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#10甲状腺支持"
+    ],
+    "formula_summary": "以维生素 A、D、E、碘、镁、锌、硒和肌醇为核心的甲状腺营养支持配方。",
+    "core_ingredients": [
+      "维生素A",
+      "维生素D",
+      "维生素E",
+      "碘化钾",
+      "镁",
+      "锌",
+      "硒",
+      "肌醇"
+    ],
+    "candidate_use_cases": [
+      "甲状腺支持",
+      "基础代谢支持"
+    ],
+    "contraindications": [
+      "甲状腺亢进、碘限制人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:tsh:high",
+      "marker:thyroglobulin_antibody:high",
+      "marker:thyroid_peroxidase_antibody:high",
+      "goal:甲状腺支持",
+      "symptom:怕冷"
+    ],
+    "exclusions": [
+      "condition:甲亢"
+    ],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "与甲状腺素类药物需错开使用。"
+    ],
+    "warning_text": [
+      "涉及碘补充，建议结合甲状腺检查结果人工确认。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 11
+  },
+  {
+    "sku_id": "sku_fish_oil_rtg",
+    "display_name": "rTG鱼油90%",
+    "category": "omega3_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#11rTG鱼油90%"
+    ],
+    "formula_summary": "保留的鱼油版本为 rTG 鱼油 90%，同时提供 EPA 与 DHA 支持。",
+    "core_ingredients": [
+      "rTG鱼油",
+      "EPA",
+      "DHA"
+    ],
+    "candidate_use_cases": [
+      "抗炎支持",
+      "心血管支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "鱼类过敏或抗凝药物使用者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:hs_crp:high",
+      "marker:ldl_c:high",
+      "pattern:lipid_disorder",
+      "goal:抗炎支持",
+      "goal:心血管支持"
+    ],
+    "exclusions": [
+      "allergy:鱼",
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，随含脂肪餐食用。",
+    "interaction_rule": [
+      "合并抗凝药或出血风险较高时需人工确认。"
+    ],
+    "warning_text": [
+      "若近期手术或有出血风险，请先人工评估。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 7
+  },
+  {
+    "sku_id": "sku_vitamin_d3_k",
+    "display_name": "VD3+K",
+    "category": "fat_soluble_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#12VD3+K"
+    ],
+    "formula_summary": "以维生素 D3、K1 和 K2 组成的脂溶性营养支持配方。",
+    "core_ingredients": [
+      "维生素D3",
+      "维生素K1",
+      "维生素K2"
+    ],
+    "candidate_use_cases": [
+      "维生素D支持",
+      "骨骼支持",
+      "免疫支持"
+    ],
+    "contraindications": [
+      "华法林等维生素 K 拮抗剂使用者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:vitamin_d:low",
+      "goal:骨骼支持",
+      "goal:免疫支持"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，随餐使用。",
+    "interaction_rule": [
+      "与维生素 K 拮抗剂并用时需人工确认。"
+    ],
+    "warning_text": [
+      "高钙血症或结节病等情况需先人工评估。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 5
+  },
+  {
+    "sku_id": "sku_selenium_vitamin_e",
+    "display_name": "富硒维生素E",
+    "category": "antioxidant_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#13富硒维生素E"
+    ],
+    "formula_summary": "维生素 E 联合硒代蛋氨酸的抗氧化支持配方。",
+    "core_ingredients": [
+      "维生素E",
+      "硒代蛋氨酸"
+    ],
+    "candidate_use_cases": [
+      "抗氧化",
+      "甲状腺支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "抗凝药物使用者需谨慎"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:抗氧化",
+      "goal:甲状腺支持",
+      "marker:thyroglobulin_antibody:high",
+      "marker:thyroid_peroxidase_antibody:high"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，随餐使用。",
+    "interaction_rule": [
+      "合并抗凝药物时需人工确认。"
+    ],
+    "warning_text": [
+      "长期高硒补充需控制总摄入量。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 28
+  },
+  {
+    "sku_id": "sku_neuro_cognitive",
+    "display_name": "神经健康和认知功能",
+    "category": "cognitive_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#14神经健康和认知功能"
+    ],
+    "formula_summary": "含狮鬃菇、奶蓟草、黑米花青素、婆罗米、南非醉茄、CDP-胆碱和磷脂酰丝氨酸的认知支持配方。",
+    "core_ingredients": [
+      "狮鬃菇",
+      "水飞蓟提取物",
+      "黑米种子提取物",
+      "假马齿苋草提取物",
+      "南非醉茄",
+      "CDP-胆碱",
+      "磷脂酰丝氨酸"
+    ],
+    "candidate_use_cases": [
+      "认知支持",
+      "脑雾",
+      "神经营养支持"
+    ],
+    "contraindications": [
+      "正在使用精神类药物者建议人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:认知支持",
+      "symptom:脑雾",
+      "symptom:记忆力下降",
+      "lifestyle:stress_support"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，白天使用。",
+    "interaction_rule": [
+      "与镇静或精神类药物并用时建议人工确认。"
+    ],
+    "warning_text": [
+      "若症状明显影响工作生活，需结合医学评估。"
+    ],
+    "lifestyle_tags": [
+      "stress_support"
+    ],
+    "priority": 19
+  },
+  {
+    "sku_id": "sku_zinc_complex",
+    "display_name": "锌（现货）",
+    "category": "mineral_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#15锌（现货）"
+    ],
+    "formula_summary": "由锌精氨酸和锌甘氨酸构成的锌支持配方。",
+    "core_ingredients": [
+      "锌精氨酸",
+      "锌甘氨酸"
+    ],
+    "candidate_use_cases": [
+      "免疫支持",
+      "皮肤支持",
+      "微量营养补充"
+    ],
+    "contraindications": [
+      "长期高剂量补锌需关注铜平衡"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:免疫支持",
+      "symptom:反复感冒",
+      "symptom:皮肤问题"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与铁剂、部分抗生素需错开使用。"
+    ],
+    "warning_text": [
+      "长期连续使用需关注铜和胃部反应。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 20
+  },
+  {
+    "sku_id": "sku_coq10",
+    "display_name": "辅酶Q10",
+    "category": "energy_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#16辅酶Q10"
+    ],
+    "formula_summary": "辅酶 Q10 联合维生素 E 的能量与氧化还原支持配方。",
+    "core_ingredients": [
+      "辅酶Q10",
+      "维生素E"
+    ],
+    "candidate_use_cases": [
+      "能量支持",
+      "心血管支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "抗凝药使用者建议人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:能量支持",
+      "goal:心血管支持",
+      "symptom:疲劳"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，随餐使用。",
+    "interaction_rule": [
+      "与抗凝药物并用时需人工确认。"
+    ],
+    "warning_text": [
+      "晚间使用可能影响少数个体入睡。"
+    ],
+    "lifestyle_tags": [
+      "movement"
+    ],
+    "priority": 23
+  },
+  {
+    "sku_id": "sku_plant_multi_mineral",
+    "display_name": "植物多维矿",
+    "category": "foundational_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#17植物多维矿"
+    ],
+    "formula_summary": "含脂溶性维生素、B 族、维生素 C 及多种矿物质的基础型多维矿支持配方。",
+    "core_ingredients": [
+      "维生素A",
+      "β-胡萝卜素",
+      "维生素C",
+      "维生素D",
+      "维生素E",
+      "维生素K",
+      "B族维生素"
+    ],
+    "candidate_use_cases": [
+      "基础营养",
+      "微量营养补充",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "与其他高剂量多维矿叠加时需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:基础营养",
+      "goal:免疫支持",
+      "symptom:疲劳"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "与甲状腺素、部分抗生素需错开。"
+    ],
+    "warning_text": [
+      "已在使用其他复合维生素时需核对总摄入量。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 30
+  },
+  {
+    "sku_id": "sku_stomach_acid_support",
+    "display_name": "胃酸替代",
+    "category": "digestive_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#18胃酸替代"
+    ],
+    "formula_summary": "以三甲基甘氨酸和酸性蛋白酶为核心的胃酸替代支持配方。",
+    "core_ingredients": [
+      "三甲基甘氨酸",
+      "酸性蛋白酶"
+    ],
+    "candidate_use_cases": [
+      "消化支持",
+      "胃酸支持",
+      "餐后胀满"
+    ],
+    "contraindications": [
+      "活动性胃溃疡、胃炎明显或反流严重者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:消化支持",
+      "symptom:腹胀",
+      "symptom:消化不良"
+    ],
+    "exclusions": [
+      "condition:胃溃疡"
+    ],
+    "dosage_rule": "随正餐使用，每次 1 粒。",
+    "interaction_rule": [
+      "与抑酸药并用时需先人工评估。"
+    ],
+    "warning_text": [
+      "若有烧心、胃痛或反流加重，应暂停并人工复核。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 13
+  },
+  {
+    "sku_id": "sku_dhea",
+    "display_name": "脱氢表雄酮",
+    "category": "hormone_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#19脱氢表雄酮"
+    ],
+    "formula_summary": "以 DHEA 为核心的激素支持型单方配方。",
+    "core_ingredients": [
+      "DHEA"
+    ],
+    "candidate_use_cases": [
+      "激素支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "孕期、哺乳期、激素相关肿瘤或未完成激素评估者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:激素支持",
+      "symptom:疲劳"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "仅在人工确认后使用，默认每日 1 粒。",
+    "interaction_rule": [
+      "与激素治疗相关药物并用必须人工确认。"
+    ],
+    "warning_text": [
+      "此类产品必须结合实验室激素结果人工审核。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 40
+  },
+  {
+    "sku_id": "sku_polaprezinc",
+    "display_name": "肌肽锌",
+    "category": "gut_mucosal_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#20肌肽锌"
+    ],
+    "formula_summary": "以肌肽锌为核心的胃黏膜支持配方。",
+    "core_ingredients": [
+      "肌肽锌"
+    ],
+    "candidate_use_cases": [
+      "胃黏膜支持",
+      "胃部不适",
+      "消化道屏障支持"
+    ],
+    "contraindications": [
+      "已同时使用高剂量锌制剂时需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:胃黏膜支持",
+      "symptom:胃部不适",
+      "symptom:腹痛"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与其他锌制剂并用需核对总锌摄入。"
+    ],
+    "warning_text": [
+      "胃部症状明显或有黑便、呕血史时先转人工评估。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 17
+  },
+  {
+    "sku_id": "sku_hcy_methylation",
+    "display_name": "HCY代谢及甲基化支持",
+    "category": "methylation_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#21HCY代谢及甲基化支持"
+    ],
+    "formula_summary": "以叶酸、B12、B6、TMG、半胱氨酸等为核心的同型半胱氨酸代谢支持配方。",
+    "core_ingredients": [
+      "维生素B2",
+      "维生素B6",
+      "叶酸",
+      "维生素B12",
+      "TMG",
+      "L-半胱氨酸"
+    ],
+    "candidate_use_cases": [
+      "甲基化支持",
+      "HCY管理",
+      "心血管支持"
+    ],
+    "contraindications": [
+      "与甲氨蝶呤等叶酸相关药物并用需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "marker:homocysteine:high",
+      "goal:甲基化支持",
+      "goal:心血管支持"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "叶酸与 B12 相关特殊用药时需人工确认。"
+    ],
+    "warning_text": [
+      "若伴重度心血管风险因素，需结合医疗评估。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 9
+  },
+  {
+    "sku_id": "sku_immune_support",
+    "display_name": "免疫支持（现货）",
+    "category": "immune_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#22免疫支持（现货）"
+    ],
+    "formula_summary": "含维生素 C、锌、半胱氨酸、去咖啡因绿茶和槲皮素的免疫支持配方。",
+    "core_ingredients": [
+      "维生素C",
+      "甘氨酸锌",
+      "L-半胱氨酸盐酸盐",
+      "去咖啡因绿茶提取物",
+      "槲皮素"
+    ],
+    "candidate_use_cases": [
+      "免疫支持",
+      "抗氧化",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "肾功能异常或结石高风险人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:免疫支持",
+      "symptom:反复感冒",
+      "marker:hs_crp:high"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与免疫抑制剂并用建议人工确认。"
+    ],
+    "warning_text": [
+      "免疫异常或自身免疫波动期需个案评估。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 15
+  },
+  {
+    "sku_id": "sku_herbal_antimicrobial",
+    "display_name": "草本杀菌胶囊",
+    "category": "gut_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#23草本杀菌胶囊"
+    ],
+    "formula_summary": "由牛至油、茶树油、大蒜、紫锥菊、黑胡桃和黄连素来源植物组成的草本抗菌支持配方。",
+    "core_ingredients": [
+      "牛至油",
+      "茶树油",
+      "大蒜提取物",
+      "紫锥菊提取物",
+      "黑胡桃",
+      "金印草提取物"
+    ],
+    "candidate_use_cases": [
+      "肠道支持",
+      "菌群干预",
+      "腹胀管理"
+    ],
+    "contraindications": [
+      "孕期、哺乳期及胃肠黏膜敏感人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:肠道支持",
+      "symptom:腹胀",
+      "symptom:便秘",
+      "lifestyle:gut_support"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "每日 1 粒，随餐或按顾问建议使用。",
+    "interaction_rule": [
+      "与抗凝药、抗菌药并用建议人工确认。"
+    ],
+    "warning_text": [
+      "胃肠道刺激明显者需从低频开始或先人工确认。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 27
+  },
+  {
+    "sku_id": "sku_bile_flow_support",
+    "display_name": "支持胆汁分泌",
+    "category": "digestive_support",
+    "source_refs": [
+      "25款粒子配方规格.xls#25支持胆汁分泌"
+    ],
+    "formula_summary": "以胆碱、肌醇、牛磺酸、蛋氨酸、TMG 和基础 B 族为核心的肝胆支持配方。",
+    "core_ingredients": [
+      "维生素C",
+      "维生素B6",
+      "叶酸",
+      "维生素B12",
+      "镁",
+      "胆碱",
+      "肌醇",
+      "牛磺酸",
+      "L-蛋氨酸",
+      "TMG"
+    ],
+    "candidate_use_cases": [
+      "肝胆支持",
+      "胆汁分泌支持",
+      "油腻不耐受"
+    ],
+    "contraindications": [
+      "胆道梗阻、胆石急性发作时需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:肝胆支持",
+      "symptom:油腻不耐受",
+      "symptom:便秘",
+      "lifestyle:gut_support"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，随主餐使用。",
+    "interaction_rule": [
+      "与利胆药并用需结合个案人工确认。"
+    ],
+    "warning_text": [
+      "胆囊绞痛或急性腹痛时先就医评估。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 21
+  },
+  {
+    "sku_id": "sku_liver_detox_support",
+    "display_name": "肝脏排毒支持补充剂",
+    "category": "detox_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方1-肝脏排毒支持补充剂"
+    ],
+    "formula_summary": "由维生素 A、C、D、E 及锌、硒、铜、锰、钼等代谢微量营养素组成的肝脏代谢支持配方。",
+    "core_ingredients": [
+      "维生素A",
+      "维生素C",
+      "维生素D",
+      "维生素E",
+      "锌",
+      "硒",
+      "铜",
+      "锰",
+      "钼"
+    ],
+    "candidate_use_cases": [
+      "解毒支持",
+      "肝脏支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "急性肝损伤或重度肝功能异常需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:解毒支持",
+      "goal:肝脏支持",
+      "symptom:疲劳"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "如正在使用肝病相关处方药，需人工确认。"
+    ],
+    "warning_text": [
+      "ALT 明显升高时优先进入人工审核，不直接自动推荐。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 26
+  },
+  {
+    "sku_id": "sku_b_complex",
+    "display_name": "B族维生素",
+    "category": "foundational_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方3-B族维生素"
+    ],
+    "formula_summary": "含 B1、B2、B6、B12、泛酸、生物素、胆碱和叶酸的高强度 B 族支持配方。",
+    "core_ingredients": [
+      "维生素B1",
+      "维生素B2",
+      "维生素B6",
+      "维生素B12",
+      "生物素",
+      "泛酸",
+      "胆碱",
+      "叶酸"
+    ],
+    "candidate_use_cases": [
+      "能量支持",
+      "甲基化支持",
+      "基础维生素补充"
+    ],
+    "contraindications": [
+      "对高剂量 B 族敏感者需从低频开始"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:能量支持",
+      "goal:甲基化支持",
+      "symptom:疲劳",
+      "marker:homocysteine:high"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，早餐后使用。",
+    "interaction_rule": [
+      "与部分神经科、风湿免疫相关药物并用建议人工确认。"
+    ],
+    "warning_text": [
+      "高剂量 B6 长期使用需关注神经系统耐受。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 16
+  },
+  {
+    "sku_id": "sku_trans_resveratrol",
+    "display_name": "反式白藜芦醇",
+    "category": "antioxidant_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方5-反式白藜芦醇"
+    ],
+    "formula_summary": "由脂质体白藜芦醇、槲皮素和黑胡椒提取物构成的抗氧化支持配方。",
+    "core_ingredients": [
+      "脂质体白藜芦醇",
+      "槲皮素",
+      "黑胡椒提取物"
+    ],
+    "candidate_use_cases": [
+      "抗氧化",
+      "抗衰老支持",
+      "恢复支持"
+    ],
+    "contraindications": [
+      "抗凝药物使用者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:抗氧化",
+      "goal:抗衰老",
+      "marker:hs_crp:high"
+    ],
+    "exclusions": [
+      "med:warfarin"
+    ],
+    "dosage_rule": "每日 1 粒，白天随餐使用。",
+    "interaction_rule": [
+      "与抗凝药并用或近期手术前需人工确认。"
+    ],
+    "warning_text": [
+      "低血压或出血风险偏高者需谨慎。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 29
+  },
+  {
+    "sku_id": "sku_female_hormone_balance",
+    "display_name": "女性激素平衡支持",
+    "category": "hormone_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方6-女性激素平衡支持"
+    ],
+    "formula_summary": "由白杨素、牡荆提取物、DIM、黑升麻和钙组成的女性激素平衡支持配方。",
+    "core_ingredients": [
+      "D-葡萄糖酸钙",
+      "白杨素",
+      "牡荆提取物",
+      "DIM",
+      "黑升麻提取物"
+    ],
+    "candidate_use_cases": [
+      "女性激素平衡",
+      "经前不适",
+      "围绝经支持"
+    ],
+    "contraindications": [
+      "孕期、哺乳期、激素相关肿瘤或正在使用激素药物者需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:女性激素平衡",
+      "symptom:潮热",
+      "symptom:经前不适"
+    ],
+    "exclusions": [
+      "pregnancy"
+    ],
+    "dosage_rule": "仅在顾问确认后使用，通常每日 1 粒。",
+    "interaction_rule": [
+      "与雌孕激素相关药物并用必须人工确认。"
+    ],
+    "warning_text": [
+      "涉及激素支持，必须结合病史和实验室结果人工审核。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 31
+  },
+  {
+    "sku_id": "sku_amino_acid_detox",
+    "display_name": "氨基酸解毒支持",
+    "category": "detox_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方7-氨基酸解毒支持"
+    ],
+    "formula_summary": "由谷氨酰胺、甘氨酸、MSM、牛磺酸、半胱氨酸、谷胱甘肽和多种氨基酸组成的解毒支持配方。",
+    "core_ingredients": [
+      "L-谷氨酰胺",
+      "甘氨酸",
+      "MSM",
+      "牛磺酸",
+      "L-半胱氨酸",
+      "谷胱甘肽",
+      "α-酮戊二酸",
+      "L-蛋氨酸",
+      "L-鸟氨酸"
+    ],
+    "candidate_use_cases": [
+      "解毒支持",
+      "恢复支持",
+      "肠道与肝脏支持"
+    ],
+    "contraindications": [
+      "严重肝肾异常或特殊氨基酸代谢问题需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:解毒支持",
+      "goal:恢复支持",
+      "symptom:疲劳"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与肝病、肾病相关治疗并行时建议人工确认。"
+    ],
+    "warning_text": [
+      "若有严重肝肾疾病史，不应直接自动推荐。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 25
+  },
+  {
+    "sku_id": "sku_liposomal_vitamin_c_300",
+    "display_name": "脂质体维生素C",
+    "category": "antioxidant_support",
+    "source_refs": [
+      "20251208 8款产品的配方规格书.xlsx#配方8-脂质体维生素C"
+    ],
+    "formula_summary": "中剂量脂质体维生素 C 配合柑橘生物类黄酮的基础抗氧化支持配方。",
+    "core_ingredients": [
+      "脂质体维生素C",
+      "柑橘生物类黄酮"
+    ],
+    "candidate_use_cases": [
+      "基础抗氧化",
+      "恢复支持",
+      "维生素C补充"
+    ],
+    "contraindications": [
+      "高草酸风险人群需人工复核"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:基础抗氧化",
+      "goal:恢复支持",
+      "marker:hs_crp:high"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，餐后使用。",
+    "interaction_rule": [
+      "与高剂量铁剂并用需结合个案评估。"
+    ],
+    "warning_text": [
+      "结石风险高的人群需控制总维生素 C 摄入。"
+    ],
+    "lifestyle_tags": [],
+    "priority": 32
+  }
+]

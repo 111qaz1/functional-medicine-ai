@@ -45,7 +45,17 @@ from app.core.settings import (
     load_settings,
     save_llm_config,
 )
-from app.domain.models import AuditLog, DoctorAccount, DoctorRole, ProductRule, RuleScope, UploadedFile, WorkspaceScope
+from app.domain.models import (
+    AuditLog,
+    CaseIndicator,
+    DoctorAccount,
+    DoctorRole,
+    ProductRule,
+    RuleScope,
+    SourceSpan,
+    UploadedFile,
+    WorkspaceScope,
+)
 
 
 router = APIRouter()
@@ -488,11 +498,25 @@ def save_parsing_review(case_id: str, payload: ParsingReviewRequest, request: Re
     container = _container(request)
     _authorized_case(container, case_id, _current_doctor(request))
     try:
+        manual_indicators = [
+            CaseIndicator(
+                indicator_name=item.indicator_name.strip(),
+                result_text=item.result_text.strip(),
+                status=item.status,
+                category="manual",
+                source_span=SourceSpan(
+                    file_name="人工录入",
+                    snippet=(item.evidence_text or "解析校对人工补录").strip(),
+                ),
+            )
+            for item in payload.manual_indicators
+        ]
         case = container.case_service.review_parsing(
             case_id,
             reviewer_id=payload.reviewer_id,
             file_updates=[item.model_dump() for item in payload.files],
             normalized_lab_items=payload.normalized_lab_items,
+            manual_indicators=manual_indicators,
             missing_fields=payload.missing_fields,
             review_notes=payload.review_notes,
         )

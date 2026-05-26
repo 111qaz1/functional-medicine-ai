@@ -200,6 +200,7 @@ class CaseRecord(StrictModel):
     files: list[UploadedFile] = Field(default_factory=list)
     questionnaire: Questionnaire | None = None
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
+    manual_indicators: list[CaseIndicator] = Field(default_factory=list)
     draft_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     parsing_review_completed: bool = False

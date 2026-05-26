@@ -49,6 +49,8 @@ class LabNormalizationService:
             marker = self._match_marker(line)
             if not marker:
                 continue
+            if marker["code"] == "uric_acid" and "尿酸碱度" in line:
+                continue
 
             parsed = self._parse_numeric_line(line, marker)
             if not parsed:
@@ -60,7 +62,7 @@ class LabNormalizationService:
                 continue
 
             normalized_value, normalized_unit, reference_range = converted
-            abnormal_flag = self._classify(normalized_value, reference_range)
+            abnormal_flag = self._explicit_abnormal_flag(line) or self._classify(normalized_value, reference_range)
             signature = (
                 marker["code"],
                 normalized_value,
@@ -255,7 +257,15 @@ class LabNormalizationService:
         if self._is_admin_metadata_line(line):
             return None
         raw_name = self._extract_raw_name(line, marker)
-        working = line.replace("—", "-").replace("–", "-").replace("~", "-").replace("至", "-")
+        working = (
+            line.replace("—", "-")
+            .replace("–", "-")
+            .replace("~", "-")
+            .replace("～", "-")
+            .replace("至", "-")
+            .replace("＞", ">")
+            .replace("＜", "<")
+        )
         working = re.sub(r"\s*[|｜]\s*", " ", working)
         working = re.sub(r"\s+", " ", working).strip()
         working = re.sub(r"([0-9])\s*--\s*([0-9])", r"\1--\2", working)
@@ -363,6 +373,8 @@ class LabNormalizationService:
         if not re.search(r"[\u4e00-\u9fffA-Za-z]", stripped):
             return False
         if "无异常" in stripped and stripped.count(" ") < 2:
+            return False
+        if re.search(r"^(?:若|当).{0,40}(?:在|达到|超过|低于)\s*\d", stripped):
             return False
         return True
 
@@ -590,6 +602,13 @@ class LabNormalizationService:
         if lower is not None or upper is not None:
             return AbnormalFlag.normal
         return AbnormalFlag.unknown
+
+    def _explicit_abnormal_flag(self, line: str) -> AbnormalFlag | None:
+        has_high = "↑" in line
+        has_low = "↓" in line
+        if has_high == has_low:
+            return None
+        return AbnormalFlag.high if has_high else AbnormalFlag.low
 
     def _marker_pattern(self, marker: dict) -> str:
         synonyms = sorted((re.escape(item) for item in marker.get("synonyms", [])), key=len, reverse=True)

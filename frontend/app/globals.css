@@ -396,6 +396,36 @@ textarea {
   gap: 10px;
 }
 
+.manual-indicator-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 18px;
+  background: rgba(15, 118, 110, 0.04);
+}
+
+.manual-indicator-panel__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.manual-indicator-panel__head strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.manual-indicator-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(36, 52, 42, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.88);
+}
+
 .auth-tabs {
   display: flex;
   gap: 8px;
@@ -898,7 +928,8 @@ td {
   .case-row__link,
   .audit-row,
   .recommendation-row,
-  .file-row {
+  .file-row,
+  .manual-indicator-panel__head {
     flex-direction: column;
     align-items: flex-start;
   }

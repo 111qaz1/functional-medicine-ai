@@ -6,7 +6,17 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from app.domain.models import AbnormalFlag, CaseRecord, ExtractedLabItem, FileParseStatus, SourceSpan, UploadedFile, utc_now
+from app.domain.models import (
+    AbnormalFlag,
+    CaseIndicator,
+    CaseRecord,
+    ExtractedLabItem,
+    FileParseStatus,
+    IndicatorStatus,
+    SourceSpan,
+    UploadedFile,
+    utc_now,
+)
 from app.services.indicator_extraction import CaseIndicatorService
 
 
@@ -49,6 +59,99 @@ class IndicatorExtractionTests(unittest.TestCase):
         self.assertEqual([item.indicator_name for item in indicators[:2]], ["空腹血糖", "肌酐"])
         self.assertEqual(indicators[0].status.value, "attention")
         self.assertEqual(indicators[1].status.value, "normal")
+
+    def test_extracts_checkup_summary_bmi_and_unit_before_range_rows(self) -> None:
+        service = CaseIndicatorService()
+        file = UploadedFile(
+            id="file_checkup",
+            case_id="case_checkup",
+            filename="checkup.pdf",
+            content_type="application/pdf",
+            size_bytes=4096,
+            parse_status=FileParseStatus.parsed,
+            corrected_text="\n".join(
+                [
+                    "总检汇总分析",
+                    "3、脂肪肝",
+                    "4、超重",
+                    "身高体重检查",
+                    "BMI值 26.96",
+                    "嗜酸性粒细胞比率 7.3 % 0.5～5.0 ↑",
+                    "甘油三脂 1.97 mmol/L 0.00～1.70 ↑",
+                    "血小板分布宽度 8.6 fL 9.9～17.0 ↓",
+                    "红细胞 4.75 *10^12/L 4.30～5.80",
+                ]
+            ),
+        )
+        case = CaseRecord(
+            id="case_checkup",
+            customer_name="体检报告",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+            files=[file],
+        )
+
+        indicators = service.build(case)
+        by_name = {item.indicator_name: item for item in indicators}
+
+        self.assertEqual(by_name["脂肪肝"].status, IndicatorStatus.positive)
+        self.assertEqual(by_name["超重"].status, IndicatorStatus.attention)
+        self.assertEqual(by_name["体质指数"].status, IndicatorStatus.attention)
+        self.assertEqual(by_name["嗜酸性粒细胞比率"].status, IndicatorStatus.attention)
+        self.assertEqual(by_name["甘油三脂"].status, IndicatorStatus.attention)
+        self.assertEqual(by_name["血小板分布宽度"].status, IndicatorStatus.attention)
+        self.assertEqual(by_name["红细胞"].status, IndicatorStatus.normal)
+
+    def test_manual_indicator_is_displayed_and_explicit_arrow_corrects_saved_status(self) -> None:
+        service = CaseIndicatorService()
+        case = CaseRecord(
+            id="case_manual",
+            customer_name="人工补录",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+            manual_indicators=[
+                CaseIndicator(
+                    indicator_name="脂肪肝",
+                    result_text="超声提示",
+                    status=IndicatorStatus.positive,
+                    category="manual",
+                    source_span=SourceSpan(file_name="人工录入", snippet="彩超结论"),
+                )
+            ],
+            extracted_lab_items=[
+                ExtractedLabItem(
+                    marker_code="hdl_c",
+                    marker_name="高密度胆固醇",
+                    value=1.16,
+                    unit="mmol/L",
+                    normalized_value=1.16,
+                    normalized_unit="mmol/L",
+                    abnormal_flag=AbnormalFlag.normal,
+                    confidence=0.95,
+                    source_span=SourceSpan(
+                        file_name="checkup.pdf",
+                        snippet="高密度脂蛋白胆固醇 1.16 mmol/L >1.16 ↓",
+                    ),
+                ),
+                ExtractedLabItem(
+                    marker_code="uric_acid",
+                    marker_name="血清尿酸",
+                    value=6.5,
+                    normalized_value=6.5,
+                    normalized_unit="umol/L",
+                    abnormal_flag=AbnormalFlag.normal,
+                    confidence=0.95,
+                    source_span=SourceSpan(file_name="checkup.pdf", snippet="尿酸碱度 6.50 4.80-7.50"),
+                ),
+            ],
+        )
+
+        indicators = service.build(case)
+        by_name = {item.indicator_name: item for item in indicators}
+
+        self.assertEqual(by_name["脂肪肝"].status, IndicatorStatus.positive)
+        self.assertEqual(by_name["高密度胆固醇"].status, IndicatorStatus.attention)
+        self.assertNotIn("血清尿酸", by_name)
 
     def test_extracts_generic_single_line_lab_rows_and_keeps_normal_items(self) -> None:
         service = CaseIndicatorService()

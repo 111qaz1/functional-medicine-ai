@@ -7,6 +7,7 @@ from pathlib import Path
 from app.domain.models import (
     AnalysisMode,
     AuditLog,
+    CaseIndicator,
     CaseRecord,
     CaseStatus,
     ConsentRecord,
@@ -176,8 +177,10 @@ class CaseService:
         normalized_lab_items: list[ExtractedLabItem],
         missing_fields: list[str],
         review_notes: str | None,
+        manual_indicators: list[CaseIndicator] | None = None,
     ) -> CaseRecord:
         case = self.get_case(case_id)
+        manual_indicators = list(manual_indicators or [])
         updates_by_file = {item["file_id"]: item for item in file_updates}
         for uploaded in case.files:
             update = updates_by_file.get(uploaded.id)
@@ -191,6 +194,7 @@ class CaseService:
             uploaded.needs_manual_review = False
 
         case.extracted_lab_items = normalized_lab_items
+        case.manual_indicators = manual_indicators
         case.parsing_review_completed = True
         case.parsing_reviewed_at = utc_now()
         case.parsing_reviewed_by = reviewer_id
@@ -206,6 +210,7 @@ class CaseService:
             {
                 "reviewed_file_count": len(file_updates),
                 "lab_item_count": len(normalized_lab_items),
+                "manual_indicator_count": len(manual_indicators),
                 "missing_fields": missing_fields,
                 "review_notes": review_notes,
             },

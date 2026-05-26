@@ -15,6 +15,7 @@ from app.domain.models import (
     DoctorAccount,
     DoctorRole,
     ExtractedLabItem,
+    IndicatorStatus,
     KnowledgeManifestEntry,
     ProductRule,
     Questionnaire,
@@ -50,10 +51,18 @@ class ParsingReviewFileRequest(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
 
 
+class ManualIndicatorRequest(BaseModel):
+    indicator_name: str = Field(min_length=1)
+    result_text: str = Field(min_length=1)
+    status: IndicatorStatus = IndicatorStatus.attention
+    evidence_text: str | None = None
+
+
 class ParsingReviewRequest(BaseModel):
     reviewer_id: str
     files: list[ParsingReviewFileRequest] = Field(default_factory=list)
     normalized_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
+    manual_indicators: list[ManualIndicatorRequest] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     review_notes: str | None = None
 

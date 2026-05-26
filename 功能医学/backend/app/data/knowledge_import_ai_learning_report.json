@@ -1,0 +1,59 @@
+{
+  "source_root": "D:\\medical\\AI学习功能医学相关资料",
+  "retained_existing_count": 15,
+  "imported_statement_count": 11885,
+  "final_statement_count": 11900,
+  "imported_file_count": 8,
+  "skipped_file_count": 0,
+  "failed_file_count": 0,
+  "imported_files": [
+    {
+      "path": "AI学习功能医学相关资料/MSQ--功能医学信息调查问卷.docx",
+      "statement_count": 10,
+      "review_status": "reference_only",
+      "source_type": "document"
+    },
+    {
+      "path": "AI学习功能医学相关资料/功能医学基础教材/Textbook Of Functional Medicine 2010 -9780977371372.pdf",
+      "statement_count": 6702,
+      "review_status": "reference_only",
+      "source_type": "pdf"
+    },
+    {
+      "path": "AI学习功能医学相关资料/功能医学基础教材/功能医学概论_14152551.pdf",
+      "statement_count": 1,
+      "review_status": "reference_only",
+      "source_type": "pdf"
+    },
+    {
+      "path": "AI学习功能医学相关资料/功能医学相关检测/236项检测指标及上下游关系.xlsx",
+      "statement_count": 254,
+      "review_status": "reviewed",
+      "source_type": "spreadsheet"
+    },
+    {
+      "path": "AI学习功能医学相关资料/功能医学相关检测/Laboratory Evaluations for Integrative and Functional -- Richard S_ Lord, J_ Alexander Bralley -- Revised 2nd ed, Duluth, Ga, 2012.pdf",
+      "statement_count": 4130,
+      "review_status": "reference_only",
+      "source_type": "pdf"
+    },
+    {
+      "path": "AI学习功能医学相关资料/泡罩单粒中文标签及产品详解.xlsx",
+      "statement_count": 227,
+      "review_status": "reviewed",
+      "source_type": "spreadsheet"
+    },
+    {
+      "path": "AI学习功能医学相关资料/症状-机制映射库/症状-机制映射库.xlsx",
+      "statement_count": 527,
+      "review_status": "reviewed",
+      "source_type": "spreadsheet"
+    },
+    {
+      "path": "AI学习功能医学相关资料/饮食干预方案/功能医学生活方式协议库_24套完整版.docx",
+      "statement_count": 34,
+      "review_status": "reviewed",
+      "source_type": "document"
+    }
+  ]
+}

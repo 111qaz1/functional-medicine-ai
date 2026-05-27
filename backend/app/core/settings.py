@@ -4,7 +4,17 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv, set_key, unset_key
+try:
+    from dotenv import load_dotenv, set_key, unset_key
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
+
+    def set_key(*_args, **_kwargs):
+        raise RuntimeError("python-dotenv is required to persist LLM configuration")
+
+    def unset_key(*_args, **_kwargs):
+        raise RuntimeError("python-dotenv is required to persist LLM configuration")
 
 
 def _project_root() -> Path:
@@ -27,6 +37,8 @@ class AppSettings:
     llm_api_style: str = "auto"
     llm_timeout_seconds: float = 45.0
     llm_temperature: float = 0.1
+    rag_enabled: bool = True
+    rag_index_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,8 @@ def load_settings() -> AppSettings:
     llm_api_style = os.getenv("LLM_API_STYLE", "auto").strip().lower() or "auto"
     llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
     llm_temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+    rag_enabled = os.getenv("FM_RAG_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    rag_index_dir = _resolve_path("FM_RAG_INDEX_DIR", data_dir / "rag_index")
 
     return AppSettings(
         project_root=project_root,
@@ -95,6 +109,8 @@ def load_settings() -> AppSettings:
         llm_api_style=llm_api_style,
         llm_timeout_seconds=llm_timeout_seconds,
         llm_temperature=llm_temperature,
+        rag_enabled=rag_enabled,
+        rag_index_dir=rag_index_dir,
     )
 
 

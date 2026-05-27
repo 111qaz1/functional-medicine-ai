@@ -234,6 +234,37 @@ def health_check():
     return {"status": "ok"}
 
 
+@router.get("/health/rag")
+def rag_health_check(request: Request):
+    container = _container(request)
+    settings = container.settings
+    index_dir = settings.rag_index_dir
+    manifest_path = index_dir / "manifest.json" if index_dir else None
+    retriever = getattr(container.recommendation_service, "rag_retriever", None)
+    payload = {
+        "enabled": settings.rag_enabled,
+        "loaded": retriever is not None,
+        "index_dir": str(index_dir) if index_dir else None,
+        "manifest_exists": bool(manifest_path and manifest_path.exists()),
+    }
+    if retriever is not None:
+        manifest = getattr(retriever, "manifest", {}) or {}
+        payload.update(
+            {
+                "document_count": manifest.get("document_count"),
+                "model_name": manifest.get("model_name"),
+                "embedding_backend": manifest.get("embedding_backend"),
+                "faiss_index_type": manifest.get("faiss_index_type"),
+            }
+        )
+        readiness = retriever.readiness_check()
+        payload.update(readiness)
+        payload["ready"] = bool(readiness.get("dense_ready")) and bool(readiness.get("faiss_loaded"))
+    else:
+        payload["ready"] = False
+    return payload
+
+
 @router.get("/auth/me", response_model=AuthMeResponse)
 def auth_me(request: Request):
     doctor = _current_doctor(request)

@@ -111,6 +111,10 @@ function cleanCustomerText(item: string) {
   return item
     .replace(/product:sku_[a-z0-9_]+/gi, "")
     .replace(/statement_[a-z0-9_]+/gi, "")
+    .replaceAll("功能医学知识库（仅供参考）：", "")
+    .replaceAll("功能医学知识库", "")
+    .replaceAll("仅供参考", "")
+    .replace(/\bRAG\b/gi, "")
     .replaceAll("当前草案", "当前方案")
     .replaceAll("候选推荐", "建议")
     .replaceAll("已审核知识命中", "本次资料提示")
@@ -122,6 +126,120 @@ function cleanCustomerText(item: string) {
 
 function customerizeItems(content?: string[] | string) {
   return uniqueItems(asReportItems(content).map(cleanCustomerText).filter(Boolean));
+}
+
+function passesCustomerRagQuality(text: string) {
+  const compact = text.replace(/\s+/g, "");
+  const cjkCount = (compact.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const latinCount = (compact.match(/[A-Za-z]/g) ?? []).length;
+  if (/^[a-z]{3,}\b/.test(text.trim()) && cjkCount < 20) {
+    return false;
+  }
+  if (/\b(potassium|chloride|bilirubin|alkaline|phosphatase|prostate specific antigen|palmitoleic|vaccenic)\b/i.test(text) && cjkCount < 20) {
+    return false;
+  }
+  if (latinCount >= 30 && cjkCount < 8) {
+    return false;
+  }
+  if (latinCount > Math.max(cjkCount * 4, 120) && cjkCount < 30) {
+    return false;
+  }
+  return true;
+}
+
+function ragSectionItems(draft: NonNullable<CaseDetailResponse["latest_draft"]> | null | undefined, section: string) {
+  if (!draft) {
+    return [];
+  }
+  return customerizeItems(draft.report_sections[section]).filter(passesCustomerRagQuality);
+}
+
+function ragClauseForPurpose(raw: string, purpose: "health" | "indicator" | "lifestyle" | "followup") {
+  const text = cleanCustomerText(raw);
+  if (!text || !passesCustomerRagQuality(text)) {
+    return "";
+  }
+  const lower = text.toLowerCase();
+  const thyroid = ["甲状腺", "桥本", "hpt", "tsh", "ft3", "ft4", "tpo", "tgab", "抗体"].some((token) =>
+    lower.includes(token)
+  );
+  const metabolic = ["血糖", "胰岛素", "代谢", "血脂", "胆固醇", "炎症", "crp"].some((token) =>
+    lower.includes(token)
+  );
+  if (purpose === "health") {
+    if (thyroid) {
+      return "这也提示后续需要把甲状腺功能、抗体变化、症状表现、微量营养状态和整体代谢恢复放在同一张图里观察。";
+    }
+    if (metabolic) {
+      return "这也提示后续需要把血糖血脂、炎症负担、睡眠压力和饮食活动放在同一张图里观察。";
+    }
+    return "这也提示后续需要把症状变化、关键指标、饮食作息和恢复状态放在同一张图里观察。";
+  }
+  if (purpose === "indicator") {
+    if (thyroid) {
+      return "从功能医学思路看，甲状腺相关异常不宜只看单项数值，建议结合HPT轴相关症状、抗体变化和甲状腺功能趋势一起评估。";
+    }
+    if (metabolic) {
+      return "从功能医学思路看，这类异常建议结合代谢压力、炎症水平、饮食结构和复查趋势一起解释。";
+    }
+    return "从功能医学思路看，该指标更适合结合症状、相关指标和复查趋势综合判断。";
+  }
+  if (purpose === "lifestyle") {
+    if (thyroid) {
+      return "生活方式执行时可以把睡眠节律、压力恢复、抗炎饮食和规律活动作为同一组基础干预来推进。";
+    }
+    if (metabolic) {
+      return "执行时建议把抗炎餐盘、餐后活动、睡眠修复和压力管理作为一组连续习惯来推进。";
+    }
+    return "执行时建议用可持续的小步调整观察身体反应，再逐步叠加下一阶段目标。";
+  }
+  if (thyroid) {
+    return "复查时建议把甲状腺功能、抗体变化、症状和睡眠压力状态放在同一趋势里观察。";
+  }
+  if (metabolic) {
+    return "复查时建议把代谢指标、炎症变化、体感精力和执行记录放在同一趋势里观察。";
+  }
+  return "复查时建议把关键指标、症状变化和执行记录放在同一趋势里观察。";
+}
+
+function firstRagClause(
+  draft: NonNullable<CaseDetailResponse["latest_draft"]> | null | undefined,
+  section: string,
+  purpose: "health" | "indicator" | "lifestyle" | "followup"
+) {
+  for (const item of ragSectionItems(draft, section)) {
+    const clause = ragClauseForPurpose(item, purpose);
+    if (clause) {
+      return clause;
+    }
+  }
+  return "";
+}
+
+function appendClause(item: string, clause: string) {
+  if (!clause || item.includes(clause)) {
+    return item;
+  }
+  return `${item.replace(/[，。；;]+$/g, "")}。${clause}`;
+}
+
+function appendClauseToBestItem(items: string[], clause: string, preferredTokens: string[] = []) {
+  if (!items.length || !clause) {
+    return items;
+  }
+  const lowerClause = clause.toLowerCase();
+  const tokens = preferredTokens.length
+    ? preferredTokens
+    : lowerClause.includes("甲状腺")
+      ? ["甲状腺", "TSH", "FT3", "FT4", "TPO", "TGAb", "抗体"]
+      : ["血糖", "胰岛素", "代谢", "炎症", "CRP", "胆固醇"];
+  const index = Math.max(
+    0,
+    items.findIndex((item) => tokens.some((token) => item.toLowerCase().includes(token.toLowerCase())))
+  );
+  const nextItems = [...items];
+  nextItems[index] = appendClause(nextItems[index], clause);
+  return nextItems;
 }
 
 function publicSafetyWarnings(warnings: string[]) {
@@ -230,6 +348,7 @@ function indicatorExplanation(indicator: CaseIndicator) {
 }
 
 function buildCustomerHealthPortrait(payload: CaseDetailResponse) {
+  const draft = payload.latest_draft;
   const indicators = abnormalIndicators(payload).slice(0, 5).map((indicator) => indicator.indicator_name);
   const questionnaire = payload.case.questionnaire;
   const symptoms = questionnaire?.symptoms?.slice(0, 4) ?? [];
@@ -246,18 +365,25 @@ function buildCustomerHealthPortrait(payload: CaseDetailResponse) {
     parts.push(`接下来的方案会围绕“${targets.join("、")}”这个目标，先从最容易执行的生活习惯开始。`);
   }
   parts.push("整体思路不是一次性做很多事，而是先把饮食结构、作息、压力和活动量这几个底盘稳定下来，再根据身体反应逐步调整营养素方案。");
+  const ragClause = firstRagClause(draft, "RAG总体健康画像", "health");
+  if (ragClause) {
+    parts.push(ragClause);
+  }
   return [parts.join("")];
 }
 
 function buildCustomerKeyIndicators(payload: CaseDetailResponse) {
+  const draft = payload.latest_draft;
   const indicators = abnormalIndicators(payload);
   if (!indicators.length) {
     return ["本次未识别到需要重点展示的异常指标，后续以复查和症状变化继续跟踪即可。"];
   }
-  return indicators.map(
+  const items = indicators.map(
     (indicator) =>
       `${indicator.indicator_name}：${indicator.result_text}（${indicatorFriendlyStatus(indicator)}）。说明：${indicatorExplanation(indicator)}`
   );
+  const ragClause = firstRagClause(draft, "RAG异常指标解释", "indicator");
+  return appendClauseToBestItem(items, ragClause);
 }
 
 function buildNutritionPlan(payload: CaseDetailResponse) {
@@ -328,7 +454,9 @@ function protocolLifestyleItems(payload: CaseDetailResponse) {
 function buildLifestyleFocus(payload: CaseDetailResponse) {
   const draft = payload.latest_draft;
   const draftItems = draft ? customerizeItems(draft.report_sections["生活方式干预重点"] ?? draft.lifestyle_actions) : [];
-  return uniqueItems([...protocolLifestyleItems(payload), ...draftItems]).slice(0, 12);
+  const items = uniqueItems([...protocolLifestyleItems(payload), ...draftItems]).slice(0, 12);
+  const ragClause = firstRagClause(draft, "RAG生活方式干预", "lifestyle");
+  return appendClauseToBestItem(items, ragClause, ["睡眠", "压力", "饮食", "甲状腺", "运动", "执行"]);
 }
 
 function buildFollowUp(payload: CaseDetailResponse) {
@@ -340,12 +468,13 @@ function buildFollowUp(payload: CaseDetailResponse) {
     ...customerizeItems(draft.report_sections["功能医学检测建议"]),
     ...customerizeItems(draft.report_sections["随访计划"])
   ].slice(0, 6);
-  return items.length
-    ? items
-    : [
-        "建议2周内回访一次，重点看睡眠、精力、胃肠反应和方案执行难点。",
-        "建议8-12周后结合本次异常指标做复查，用趋势来判断方案是否需要调整。"
-      ];
+  const fallbackItems = [
+    "建议2周内回访一次，重点看睡眠、精力、胃肠反应和方案执行难点。",
+    "建议8-12周后结合本次异常指标做复查，用趋势来判断方案是否需要调整。"
+  ];
+  const baseItems = items.length ? items : fallbackItems;
+  const ragClause = firstRagClause(draft, "RAG复查建议", "followup");
+  return appendClauseToBestItem(baseItems, ragClause, ["甲状腺", "TSH", "FT3", "FT4", "抗体", "8-12", "复查"]);
 }
 
 function appendReportSection(lines: string[], title: string, items: string[]) {

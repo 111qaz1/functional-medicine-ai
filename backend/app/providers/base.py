@@ -32,6 +32,7 @@ class DraftCompositionInput(BaseModel):
     red_flags: list[str]
     contraindications: list[str]
     missing_info: list[str]
+    rag_hits: list[dict[str, Any]] = Field(default_factory=list)
     reviewed_report_text: str | None = None
     structured_case_context: dict[str, Any] = Field(default_factory=dict)
 

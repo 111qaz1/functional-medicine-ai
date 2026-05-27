@@ -1,0 +1,65 @@
+{
+  "artifact_paths": {
+    "rag_corpus": "backend/app/data/rag_corpus.jsonl",
+    "rag_import_report": "backend/app/data/rag_import_report.json"
+  },
+  "cleanup_notes": {
+    "intermediate_staging_artifacts_retained": false,
+    "reason": "Final handoff keeps only task-required corpus, import report, index, code, tests, and documentation. Re-run scripts/build_rag_corpus.py to regenerate staging samples if needed."
+  },
+  "docx_chunk_counts_by_file": {
+    "【已校验】1-100页 功能医学概论.docx": 101,
+    "【已校验】101-200页 功能医学概论.docx": 121,
+    "【已校验】201-300页 功能医学概论.docx": 156,
+    "【已校验】301-400页 功能医学概论.docx": 142,
+    "【已校验】401-514页 功能医学概论.docx": 48
+  },
+  "filtered_by_reason": {
+    "bibliography_noise": 1567,
+    "case_report_like": 66,
+    "index_or_reference_noise": 659,
+    "publication_or_page_noise": 773,
+    "questionnaire_or_form": 10,
+    "too_short": 77
+  },
+  "generated_at": "2026-05-26T09:28:03.514811+00:00",
+  "input_counts": {
+    "docx_files": 5,
+    "knowledge_total": 11900,
+    "reference_only": 10843,
+    "reviewed": 1057
+  },
+  "intermediate_counts": {
+    "deduplicated_total": 3,
+    "docx_chunks_before_dedupe": 568,
+    "filtered_total": 3152,
+    "reference_only_after_cleaning": 7834,
+    "reviewed_after_cleaning": 1037
+  },
+  "output_counts": {
+    "cleaned_reference_only": 7832,
+    "docx_chunks": 567,
+    "rag_corpus": 9436,
+    "reviewed_knowledge": 1037
+  },
+  "safety_notes": {
+    "absolute_source_paths_written": false,
+    "raw_docx_committed": false,
+    "reviewed_knowledge_priority_on_duplicate": true,
+    "source_and_page_hidden_from_report_generation": true
+  },
+  "sensitive_scan_findings": {},
+  "topic_distribution": {
+    "代谢": 1836,
+    "免疫": 1491,
+    "未分类": 2183,
+    "激素": 1431,
+    "炎症": 1347,
+    "生活方式": 876,
+    "甲状腺": 626,
+    "睡眠/疲劳": 1621,
+    "肠道": 1396,
+    "营养": 3087,
+    "解毒": 1954
+  }
+}

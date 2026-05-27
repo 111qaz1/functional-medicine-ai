@@ -13,6 +13,8 @@
   --warm: #b96a14;
   --warm-soft: rgba(185, 106, 20, 0.12);
   --shadow: 0 24px 60px rgba(38, 45, 41, 0.12);
+  --font-body: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --font-display: "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
 }
 
 * {
@@ -28,7 +30,7 @@ body {
     radial-gradient(circle at top right, rgba(180, 64, 44, 0.12), transparent 22%),
     linear-gradient(180deg, #f8f2e9 0%, #efe4d4 100%);
   color: var(--ink);
-  font-family: var(--font-body), sans-serif;
+  font-family: var(--font-body);
 }
 
 a {
@@ -107,7 +109,7 @@ textarea {
 .workbench__hero h1,
 .section-card h2 {
   margin: 0;
-  font-family: var(--font-display), sans-serif;
+  font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: -0.04em;
 }
@@ -200,7 +202,7 @@ textarea {
   display: block;
   font-size: 1.55rem;
   line-height: 1;
-  font-family: var(--font-display), sans-serif;
+  font-family: var(--font-display);
 }
 
 .hero__stat span,

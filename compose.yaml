@@ -3,16 +3,33 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        PRELOAD_RAG_MODEL: ${PRELOAD_RAG_MODEL:-0}
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       FM_RUNTIME_DIR: ${FM_RUNTIME_DIR:-/app/.runtime}
       FM_UPLOAD_DIR: ${FM_UPLOAD_DIR:-/app/.runtime/uploads}
       FM_SQLITE_PATH: ${FM_SQLITE_PATH:-/app/.runtime/app.sqlite3}
       FM_KNOWLEDGE_ROOT: ${FM_KNOWLEDGE_ROOT:-/app/knowledge}
+      FM_RAG_ENABLED: ${FM_RAG_ENABLED:-1}
+      FM_RAG_INDEX_DIR: ${FM_RAG_INDEX_DIR:-/app/backend/app/data/rag_index}
+      FM_RAG_MODEL_PATH: ${FM_RAG_MODEL_PATH:-/models/bge-m3}
+      FM_RAG_LOCAL_FILES_ONLY: ${FM_RAG_LOCAL_FILES_ONLY:-1}
+      HF_HOME: ${HF_HOME:-/app/.cache/huggingface}
+      SENTENCE_TRANSFORMERS_HOME: ${SENTENCE_TRANSFORMERS_HOME:-/app/.cache/huggingface}
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      OMP_WAIT_POLICY: PASSIVE
+      TOKENIZERS_PARALLELISM: "false"
     volumes:
       - ./.runtime:/app/.runtime
       - ./knowledge:/app/knowledge:ro
+      - type: bind
+        source: ${FM_RAG_MODEL_HOST_DIR:-C:/RAG/models/bge-m3}
+        target: /models/bge-m3
+        read_only: true
     ports:
       - "8000:8000"
 

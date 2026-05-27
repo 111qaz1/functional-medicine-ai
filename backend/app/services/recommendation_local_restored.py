@@ -11,6 +11,7 @@ from app.providers.base import DraftCompositionInput, LLMProvider, VectorStorePr
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.indicator_extraction import CaseIndicatorService
+from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
 
 
 @dataclass
@@ -69,6 +70,7 @@ class RecommendationService:
         indicator_service: CaseIndicatorService,
         vector_store: VectorStoreProvider,
         llm_provider: LLMProvider,
+        rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v1",
         rule_version: str = "local-rules-v1",
@@ -78,6 +80,7 @@ class RecommendationService:
         self.indicator_service = indicator_service
         self.vector_store = vector_store
         self.llm_provider = llm_provider
+        self.rag_retriever = rag_retriever
         self.model_version = model_version
         self.prompt_version = prompt_version
         self.rule_version = rule_version
@@ -122,6 +125,15 @@ class RecommendationService:
                 support_profiles,
                 matched_clinician_rules,
             )
+        rag_hits, rag_audit = self._retrieve_safe_rag_hits(
+            case,
+            context=context,
+            support_profiles=support_profiles,
+            key_lab_highlights=key_lab_highlights,
+            report_guidance=report_guidance,
+            red_flags=red_flags,
+            contraindications=contraindications,
+        )
         composition = self.llm_provider.compose(
             DraftCompositionInput(
                 customer_name=case.customer_name,
@@ -134,6 +146,7 @@ class RecommendationService:
                 red_flags=red_flags,
                 contraindications=contraindications,
                 missing_info=missing_info,
+                rag_hits=[hit.to_prompt_dict() for hit in rag_hits],
                 reviewed_report_text=reviewed_report_text,
                 structured_case_context=structured_case_context,
             )
@@ -212,6 +225,7 @@ class RecommendationService:
             composition.section_overrides,
             analysis_mode=analysis_mode,
         )
+        report_sections = self._apply_rag_enhancements(report_sections, rag_hits, rag_audit)
 
         draft = RecommendationDraft(
             id=f"draft_{uuid.uuid4().hex[:12]}",
@@ -1621,6 +1635,364 @@ class RecommendationService:
         cleaned = re.sub(r"\s+", " ", cleaned)
         return cleaned.strip(" ，。；")
 
+    def _retrieve_safe_rag_hits(
+        self,
+        case,
+        *,
+        context: RecommendationContext,
+        support_profiles: list[SupportProfile],
+        key_lab_highlights: list[str],
+        report_guidance: list[str],
+        red_flags: list[str],
+        contraindications: list[str],
+    ) -> tuple[list[SafeRagHit], list[str]]:
+        if not self.rag_retriever:
+            return [], ["rag_unavailable"]
+
+        retrieval_query = " ".join(
+            part
+            for part in (
+                self._build_query(case, context, support_profiles),
+                " ".join(key_lab_highlights[:6]),
+                " ".join(report_guidance[:4]),
+            )
+            if part
+        ).strip()
+        if not retrieval_query:
+            return [], ["rag_empty_query"]
+
+        raw_hits = []
+        seen_chunk_ids: set[str] = set()
+        retrieval_failures: list[str] = []
+        for query in self._build_rag_report_queries(case, retrieval_query, key_lab_highlights, report_guidance):
+            try:
+                for hit in self.rag_retriever.hybrid_search(query, top_k=10):
+                    chunk_id = str(getattr(hit, "chunk_id", ""))
+                    if chunk_id and chunk_id in seen_chunk_ids:
+                        continue
+                    if chunk_id:
+                        seen_chunk_ids.add(chunk_id)
+                    raw_hits.append(hit)
+            except Exception as exc:
+                cause = getattr(exc, "__cause__", None)
+                cause_name = cause.__class__.__name__ if cause is not None else ""
+                cause_text = str(cause or "")[:160].replace("\n", " ").replace("\r", " ")
+                detail = f":{cause_name}" if cause_name else ""
+                if cause_text:
+                    detail = f"{detail}:{cause_text}"
+                retrieval_failures.append(f"rag_query_failed:{exc.__class__.__name__}{detail}")
+                continue
+        if not raw_hits and retrieval_failures:
+            return [], retrieval_failures[:4]
+
+        safety_filter = RagSafetyFilter(self.repository.list_products(enabled_only=True))
+        safe_hits, rejections = safety_filter.filter_hits(
+            list(raw_hits),
+            context=context,
+            red_flags=red_flags,
+            contraindications=contraindications,
+            max_hits=16,
+        )
+        audit = [f"rag_accepted:{len(safe_hits)}"]
+        audit.extend(retrieval_failures[:4])
+        audit.extend(f"rag_rejected:{item.chunk_id}:{item.reason}" for item in rejections[:12])
+        return safe_hits, audit
+
+    def _build_rag_report_queries(
+        self,
+        case,
+        base_query: str,
+        key_lab_highlights: list[str],
+        report_guidance: list[str],
+    ) -> list[str]:
+        questionnaire = getattr(case, "questionnaire", None)
+        symptoms = " ".join(getattr(questionnaire, "symptoms", []) or []) if questionnaire else ""
+        goals = " ".join(getattr(questionnaire, "goals", []) or []) if questionnaire else ""
+        conditions = " ".join(getattr(questionnaire, "known_conditions", []) or []) if questionnaire else ""
+        lifestyle_context = " ".join(part for part in (symptoms, goals, conditions) if part).strip()
+        lab_context = " ".join(key_lab_highlights[:6])
+        guidance_context = " ".join(report_guidance[:4])
+
+        queries = [base_query]
+        if lifestyle_context:
+            queries.append(
+                f"{lifestyle_context} 睡眠 压力 运动 饮食 作息 生活方式 功能医学"
+            )
+        if lab_context:
+            queries.append(f"{lab_context} 复查 趋势 随访 功能医学 指标解释")
+            queries.append(f"{lab_context} 总体健康画像 系统关联 功能医学 代谢 免疫 炎症")
+            queries.append(f"{lab_context} 甲状腺 HPT轴 抗体 TSH FT3 FT4 症状 趋势")
+            queries.append(f"{lab_context} 生活方式 睡眠 压力 运动 饮食 久坐 恢复")
+        if guidance_context and guidance_context not in base_query:
+            queries.append(f"{guidance_context} 功能医学 报告解释")
+
+        deduped = []
+        seen = set()
+        for query in queries:
+            cleaned = re.sub(r"\s+", " ", query).strip()
+            if len(cleaned) > 700:
+                cleaned = cleaned[:700].rstrip(" ，。；")
+            if not cleaned or cleaned in seen:
+                continue
+            deduped.append(cleaned)
+            seen.add(cleaned)
+        return deduped[:8]
+
+    def _apply_rag_enhancements(
+        self,
+        report_sections: dict[str, list[str] | str],
+        rag_hits: list[SafeRagHit],
+        rag_audit: list[str],
+    ) -> dict[str, list[str] | str]:
+        merged = dict(report_sections)
+        merged["RAG内部审查"] = rag_audit
+
+        if not rag_hits:
+            return merged
+
+        used_chunk_ids: set[str] = set()
+        used_signatures: list[str] = []
+
+        def add_unique_rag_items(section: str, predicate, formatter, *, limit: int = 3) -> int:
+            added = 0
+            for hit in rag_hits:
+                if added >= limit:
+                    break
+                if not predicate(hit):
+                    continue
+                line = formatter(hit.excerpt)
+                if not line:
+                    continue
+                if self._rag_hit_already_used(hit, line, used_chunk_ids, used_signatures):
+                    continue
+                self._remember_rag_hit(hit, line, used_chunk_ids, used_signatures)
+                self._append_report_items(merged, section, [line])
+                added += 1
+            return added
+
+        # First reserve at least one suitable item for each report target. This avoids
+        # a broad section such as health portrait consuming a lifestyle-specific hit.
+        add_unique_rag_items(
+            "RAG异常指标解释",
+            self._rag_hit_supports_indicator_explanation,
+            self._format_rag_public_line,
+            limit=1,
+        )
+        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=1)
+        add_unique_rag_items(
+            "RAG复查建议",
+            self._rag_hit_supports_follow_up,
+            self._format_rag_followup_line,
+            limit=1,
+        )
+        add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=1)
+
+        add_unique_rag_items(
+            "RAG异常指标解释",
+            self._rag_hit_supports_indicator_explanation,
+            self._format_rag_public_line,
+            limit=2,
+        )
+        add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=2)
+        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=2)
+        add_unique_rag_items(
+            "RAG复查建议",
+            self._rag_hit_supports_follow_up,
+            self._format_rag_followup_line,
+            limit=2,
+        )
+        return merged
+
+    def _rag_hit_already_used(
+        self,
+        hit: SafeRagHit,
+        line: str,
+        used_chunk_ids: set[str],
+        used_signatures: list[str],
+    ) -> bool:
+        if hit.chunk_id in used_chunk_ids:
+            return True
+        candidate = self._rag_text_signature(line)
+        return self._rag_signature_seen(candidate, used_signatures)
+
+    def _remember_rag_hit(
+        self,
+        hit: SafeRagHit,
+        line: str,
+        used_chunk_ids: set[str],
+        used_signatures: list[str],
+    ) -> None:
+        used_chunk_ids.add(hit.chunk_id)
+        signature = self._rag_text_signature(line)
+        if signature:
+            used_signatures.append(signature)
+
+    def _rag_text_signature(self, text: str) -> str:
+        cleaned = self._sanitize_report_line(text).replace(CUSTOMER_RAG_PREFIX, "")
+        cleaned = re.sub(r"；这部分仅作为营养支持背景说明.*$", "", cleaned)
+        cleaned = re.sub(r"具体补充剂、禁忌和复查安排仍以医生审核与产品规则为准.*$", "", cleaned)
+        cleaned = re.sub(r"[\s，。；、：:（）()“”\"'`]+", "", cleaned)
+        return cleaned.lower()
+
+    def _rag_signature_seen(self, candidate: str, used_signatures: list[str]) -> bool:
+        if not candidate:
+            return True
+        for existing in used_signatures:
+            if candidate == existing:
+                return True
+            shorter, longer = sorted((candidate, existing), key=len)
+            if len(shorter) >= 24 and shorter in longer:
+                return True
+            if self._char_bigram_jaccard(candidate, existing) >= 0.82:
+                return True
+        return False
+
+    def _char_bigram_jaccard(self, left: str, right: str) -> float:
+        if len(left) < 12 or len(right) < 12:
+            return 0.0
+        left_pairs = {left[index : index + 2] for index in range(len(left) - 1)}
+        right_pairs = {right[index : index + 2] for index in range(len(right) - 1)}
+        if not left_pairs or not right_pairs:
+            return 0.0
+        return len(left_pairs & right_pairs) / len(left_pairs | right_pairs)
+
+    def _format_rag_public_line(self, excerpt: str) -> str:
+        cleaned = self._sanitize_report_line(excerpt)
+        cleaned = re.sub(r"\b(docx|pdf|page|chunk|source)\b", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ，。；")
+        if not cleaned:
+            return ""
+        return f"{CUSTOMER_RAG_PREFIX}{cleaned}。"
+
+    def _format_rag_nutrition_context_line(self, excerpt: str) -> str:
+        cleaned = self._sanitize_report_line(excerpt)
+        if not cleaned:
+            return ""
+        return (
+            f"{CUSTOMER_RAG_PREFIX}{cleaned}；这部分仅作为营养支持背景说明，"
+            "不改变当前产品目录、剂量或禁忌审核结论。"
+        )
+
+    def _format_rag_followup_line(self, excerpt: str) -> str:
+        normalized = self._normalize(excerpt)
+        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
+            return (
+                f"{CUSTOMER_RAG_PREFIX}复查时建议把甲状腺功能、抗体变化、症状和睡眠压力状态放在同一趋势里观察。"
+            )
+        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢", "甘油三酯", "hdl", "ldl")):
+            return (
+                f"{CUSTOMER_RAG_PREFIX}复查时建议结合血糖、胰岛素或血脂趋势，而不是只看单次结果。"
+            )
+        if any(term in normalized for term in ("维生素d", "免疫", "炎症", "crp")):
+            return (
+                f"{CUSTOMER_RAG_PREFIX}复查时建议结合维生素D、炎症指标和症状变化，评估恢复方向是否稳定。"
+            )
+        if any(term in normalized for term in ("睡眠", "压力", "皮质醇", "hpa", "疲劳")):
+            return (
+                f"{CUSTOMER_RAG_PREFIX}复查时建议同步记录睡眠时长、晨起精力和压力恢复情况。"
+            )
+        return ""
+
+    def _rag_hit_supports_indicator_explanation(self, hit: SafeRagHit) -> bool:
+        excerpt = self._normalize(hit.excerpt)
+        return any(
+            term in excerpt
+            for term in (
+                "指标",
+                "抗体",
+                "tsh",
+                "tpo",
+                "tgab",
+                "血糖",
+                "胰岛素",
+                "甘油三酯",
+                "crp",
+                "维生素d",
+                "hdl",
+                "ldl",
+            )
+        )
+
+    def _rag_hit_supports_health_portrait(self, hit: SafeRagHit) -> bool:
+        excerpt = self._normalize(hit.excerpt)
+        if any(
+            term in excerpt
+            for term in (
+                "tpoab",
+                "tgab",
+                "甲状腺过氧化物酶抗体",
+                "甲状腺球蛋白抗体",
+            )
+        ):
+            return False
+        broad_context_terms = (
+            "代谢",
+            "胰岛素",
+            "血糖",
+            "甲状腺",
+            "维生素d",
+            "免疫",
+            "炎症",
+            "肠道",
+            "hpa",
+            "皮质醇",
+        )
+        return any(term in excerpt for term in broad_context_terms)
+
+    def _rag_hit_supports_nutrition_context(self, hit: SafeRagHit) -> bool:
+        tags = {self._normalize(item) for item in hit.topic_tags}
+        excerpt = self._normalize(hit.excerpt)
+        nutrition_tags = {self._normalize(item) for item in ("营养", "甲状腺", "代谢", "炎症", "肠道", "免疫")}
+        return bool(tags & nutrition_tags) or any(
+            term in excerpt
+            for term in (
+                "营养",
+                "维生素",
+                "矿物质",
+                "抗氧化",
+                "蛋白",
+                "饮食",
+                "甲状腺",
+                "代谢",
+                "肠道",
+            )
+        )
+
+    def _rag_hit_supports_lifestyle(self, hit: SafeRagHit) -> bool:
+        excerpt = self._normalize(hit.excerpt)
+        return any(
+            term in excerpt
+            for term in (
+                "睡眠",
+                "压力",
+                "运动",
+                "饮食",
+                "生活方式",
+                "作息",
+                "久坐",
+                "活动",
+            )
+        )
+
+    def _rag_hit_supports_follow_up(self, hit: SafeRagHit) -> bool:
+        return bool(self._format_rag_followup_line(hit.excerpt))
+
+    def _append_report_items(
+        self,
+        report_sections: dict[str, list[str] | str],
+        section: str,
+        items: list[str],
+    ) -> None:
+        cleaned_items = [self._sanitize_report_line(item) for item in items if item and self._sanitize_report_line(item)]
+        if not cleaned_items:
+            return
+        existing = report_sections.get(section, [])
+        if isinstance(existing, str):
+            existing_items = [existing] if existing.strip() else []
+        else:
+            existing_items = [str(item) for item in existing if str(item).strip()]
+        report_sections[section] = list(dict.fromkeys(existing_items + cleaned_items))
+
     def _apply_report_section_overrides(
         self,
         report_sections: dict[str, list[str] | str],
@@ -1964,4 +2336,3 @@ class RecommendationService:
 
     def _contains_cjk(self, value: str) -> bool:
         return any("\u4e00" <= char <= "\u9fff" for char in value)
-

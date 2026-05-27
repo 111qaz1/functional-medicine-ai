@@ -185,6 +185,57 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。", draft.missing_info)
         self.assertTrue({"sku_thyroid_support", "sku_selenium_vitamin_e"} & recommended_ids)
 
+    def test_keeps_internal_candidate_products_before_manual_parse_review(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="待校对甲状腺案例",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        report_text = "促甲状腺激素 TSH 7.57 uIU/mL 0.3-4.5\n甲状腺过氧化物酶抗体 anti-TPO 854 IU/mL 0-30"
+        uploaded_file = UploadedFile(
+            id="file_unreviewed_thyroid",
+            case_id=case.id,
+            filename="unreviewed-thyroid.txt",
+            content_type="text/plain",
+            size_bytes=len(report_text.encode("utf-8")),
+            storage_uri="memory://unreviewed-thyroid.txt",
+        )
+        self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+        extraction, lab_items = self.container.parsing_service.parse(
+            filename="unreviewed-thyroid.txt",
+            content_type="text/plain",
+            content=report_text.encode("utf-8"),
+        )
+        self.container.case_service.attach_parse_results(
+            case.id,
+            uploaded_file.id,
+            extracted_text=extraction.text,
+            parse_confidence=extraction.confidence,
+            source_spans=extraction.spans,
+            lab_items=lab_items,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(
+                age=33,
+                sex="female",
+                symptoms=["疲劳"],
+                known_conditions=["甲状腺功能异常"],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertFalse(draft.abstain_reason)
+        self.assertIn("尚未完成人工解析校对。", draft.missing_info)
+        self.assertTrue(draft.manual_review_required)
+        self.assertTrue(draft.recommended_skus)
+        self.assertNotIn("当前暂无明确可发布的营养素组合", " ".join(draft.report_sections["个性化营养素方案"]))
+
     def test_thyroid_condition_in_questionnaire_does_not_break_profile_matching(self) -> None:
         case = self._prepare_case(
             "空腹血糖 5.1 mmol/L 3.9-6.1",
@@ -878,6 +929,40 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertIn(recommended.display_name, review.publishable_report)
+
+    def test_approval_rejects_question_mark_corrupted_publishable_summary(self) -> None:
+        case = self._prepare_case(
+            "25-OH维生素D 18 ng/mL 30-100\nhs-CRP 4.2 mg/L 0-3",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["疲劳"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        corrupted_report = (
+            "# ?????????????\n\n"
+            "## ??????\n"
+            "- ??????????????????????????????????????????????????????\n\n"
+            "## ????????\n"
+            "- ???????? 1 ???????????????????????RAG???\n"
+        )
+
+        review = self.container.review_service.approve(
+            draft.id,
+            reviewer_id="reviewer-01",
+            publishable_summary=corrupted_report,
+            edits={},
+        )
+
+        self.assertNotIn("????", review.publishable_report)
+        self.assertNotIn("RAG", review.publishable_report)
+        self.assertIn("# 功能医学营养与生活方式建议", review.publishable_report)
+        self.assertIn("## 总体健康画像", review.publishable_report)
 
     def test_delete_case_cleans_associated_files_and_records(self) -> None:
         case = self.container.case_service.create_case(

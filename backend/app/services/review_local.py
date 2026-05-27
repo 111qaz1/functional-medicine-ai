@@ -9,6 +9,7 @@ from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.pdf_export import PdfReportExporter
+from app.services.rag_safety import CUSTOMER_RAG_PREFIX
 
 
 class ReviewService:
@@ -100,8 +101,10 @@ class ReviewService:
 
     def _select_publishable_report(self, draft, case, publishable_summary: str | None) -> str:
         if publishable_summary and publishable_summary.strip():
-            if not self._looks_like_internal_generated_report(publishable_summary):
-                return self._ensure_report_nutrition_safety(publishable_summary.strip(), draft)
+            if not self._looks_like_internal_generated_report(publishable_summary) and not self._looks_like_corrupted_publishable_report(publishable_summary):
+                report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
+                report = self._ensure_report_nutrition_safety(report, draft)
+                return self._ensure_report_rag_enhancement(report, draft, case)
         return self._render_report(draft, case)
 
     def _looks_like_internal_generated_report(self, report_text: str | None) -> bool:
@@ -116,6 +119,38 @@ class ReviewService:
             "模型版本:",
         )
         return any(marker in report_text for marker in internal_markers)
+
+    def _looks_like_corrupted_publishable_report(self, report_text: str | None) -> bool:
+        if not report_text:
+            return False
+        stripped = report_text.strip()
+        question_count = stripped.count("?")
+        replacement_count = stripped.count("\ufffd")
+        cjk_count = sum("\u4e00" <= char <= "\u9fff" for char in stripped)
+        if replacement_count >= 3:
+            return True
+        if "????" in stripped and question_count >= 8:
+            return True
+        if question_count >= 20 and cjk_count < 20:
+            return True
+        if question_count / max(len(stripped), 1) > 0.12 and cjk_count < 50:
+            return True
+        return False
+
+    def _remove_customer_hidden_rag_labels(self, report_text: str) -> str:
+        cleaned = report_text
+        hidden_markers = (
+            CUSTOMER_RAG_PREFIX,
+            "功能医学知识库（仅供参考）：",
+            "功能医学知识库（仅供参考）",
+            "功能医学知识库：",
+            "功能医学知识库",
+            "仅供参考",
+            "RAG",
+        )
+        for marker in hidden_markers:
+            cleaned = cleaned.replace(marker, "")
+        return cleaned
 
     def _ensure_report_nutrition_safety(self, report_text: str, draft) -> str:
         lines = []
@@ -133,6 +168,156 @@ class ReviewService:
 
         return "\n".join(lines).strip()
 
+    def _ensure_report_rag_enhancement(self, report_text: str, draft, case) -> str:
+        sections = draft.report_sections or {}
+        if not any(
+            sections.get(key)
+            for key in ("RAG总体健康画像", "RAG异常指标解释", "RAG生活方式干预", "RAG复查建议")
+        ):
+            return report_text
+
+        result = report_text
+        abnormal_indicators = self._abnormal_indicators(case)
+
+        for rag_item in self._customerize_items(sections.get("RAG总体健康画像", []))[:4]:
+            clause = self._rag_customer_clause(rag_item, max_len=140, purpose="health")
+            updated = self._append_clause_to_report_section_item(result, "总体健康画像", clause, item_index=0)
+            if updated != result:
+                result = updated
+                break
+
+        used_indicator_rows: set[int] = set()
+        for rag_item in self._customerize_items(sections.get("RAG异常指标解释", []))[:6]:
+            row_index = self._best_indicator_rag_match(rag_item, abnormal_indicators)
+            if row_index is None:
+                row_index = self._fallback_indicator_row_for_rag(rag_item, abnormal_indicators)
+            if row_index is None or row_index in used_indicator_rows:
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=120, purpose="indicator")
+            updated = self._append_clause_to_report_section_item(result, "关键指标", clause, item_index=row_index)
+            if updated != result:
+                used_indicator_rows.add(row_index)
+                result = updated
+
+        lifestyle_items = self._extract_report_section_items(result, "生活方式干预重点")
+        used_lifestyle_rows: set[int] = set()
+        for rag_item in self._customerize_items(sections.get("RAG生活方式干预", []))[:5]:
+            if not self._is_lifestyle_rag_item(rag_item):
+                continue
+            row_index = self._best_lifestyle_row(rag_item, lifestyle_items)
+            if row_index is None and lifestyle_items:
+                row_index = 0
+            if row_index is None or row_index in used_lifestyle_rows:
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=115, purpose="lifestyle")
+            updated = self._append_clause_to_report_section_item(result, "生活方式干预重点", clause, item_index=row_index)
+            if updated != result:
+                used_lifestyle_rows.add(row_index)
+                result = updated
+
+        follow_items = self._extract_report_section_items(result, "复查与跟进建议")
+        used_follow_rows: set[int] = set()
+        for rag_item in self._customerize_items(sections.get("RAG复查建议", []))[:5]:
+            row_index = self._best_follow_up_row(rag_item, follow_items)
+            if row_index is None:
+                row_index = self._fallback_follow_up_row_for_rag(rag_item, follow_items)
+            if row_index is None or row_index in used_follow_rows:
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=105, purpose="follow_up")
+            updated = self._append_clause_to_report_section_item(result, "复查与跟进建议", clause, item_index=row_index)
+            if updated != result:
+                used_follow_rows.add(row_index)
+                result = updated
+
+        return result
+
+    def _extract_report_section_items(self, report_text: str, title: str) -> list[str]:
+        lines = report_text.splitlines()
+        indices = self._report_section_item_line_indices(lines, title)
+        return [lines[index].lstrip()[2:].strip() for index in indices]
+
+    def _append_clause_to_report_section_item(
+        self,
+        report_text: str,
+        title: str,
+        clause: str,
+        *,
+        item_index: int,
+    ) -> str:
+        clause = (clause or "").strip()
+        if not clause:
+            return report_text
+        if self._normalize_text(clause) in self._normalize_text(report_text):
+            return report_text
+
+        lines = report_text.splitlines()
+        indices = self._report_section_item_line_indices(lines, title)
+        if item_index < 0 or item_index >= len(indices):
+            return report_text
+
+        line_index = indices[item_index]
+        base = lines[line_index].rstrip()
+        separator = "" if base.endswith(("。", "！", "？", "；")) else "。"
+        lines[line_index] = f"{base}{separator}{clause}"
+        return "\n".join(lines).strip()
+
+    def _report_section_item_line_indices(self, lines: list[str], title: str) -> list[int]:
+        header = f"## {title}"
+        start_index = next((index for index, line in enumerate(lines) if line.strip() == header), None)
+        if start_index is None:
+            return []
+        end_index = len(lines)
+        for index in range(start_index + 1, len(lines)):
+            if lines[index].startswith("## "):
+                end_index = index
+                break
+        return [
+            index
+            for index in range(start_index + 1, end_index)
+            if lines[index].lstrip().startswith("- ")
+        ]
+
+    def _fallback_indicator_row_for_rag(self, rag_item: str, abnormal_indicators: list) -> int | None:
+        if not abnormal_indicators:
+            return None
+        normalized = self._normalize_text(rag_item)
+        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "hpt", "桥本")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("甲状腺", "促甲状腺", "tsh", "ft3", "ft4", "抗体")):
+                    return index
+        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("血糖", "葡萄糖", "糖化", "胰岛素")):
+                    return index
+        if any(term in normalized for term in ("炎症", "crp", "免疫")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("crp", "反应蛋白", "白细胞", "炎症")):
+                    return index
+        return 0
+
+    def _fallback_follow_up_row_for_rag(self, rag_item: str, follow_items: list[str]) -> int | None:
+        if not follow_items:
+            return None
+        normalized = self._normalize_text(rag_item)
+        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
+            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体")) or 0
+        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
+            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查")) or 0
+        if any(term in normalized for term in ("睡眠", "压力", "hpa", "皮质醇")):
+            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访")) or 0
+        return 0
+
+    def _first_matching_row(self, items: list[str], terms: tuple[str, ...]) -> int | None:
+        normalized_terms = [self._normalize_text(term) for term in terms]
+        for index, item in enumerate(items):
+            normalized_item = self._normalize_text(item)
+            if any(term and term in normalized_item for term in normalized_terms):
+                return index
+        return None
+
     def _render_report(self, draft, case) -> str:
         lines = ["# 功能医学营养与生活方式建议", ""]
         sections = draft.report_sections or {}
@@ -141,12 +326,22 @@ class ReviewService:
             draft,
             sections.get("个性化营养素方案") or sections.get("营养素推荐"),
         )
+        nutrition_plan = list(dict.fromkeys(nutrition_plan))
         follow_up = self._customer_follow_up(sections)
         missing_info = self._customerize_items(sections.get("待确认项", draft.missing_info))
+        health_portrait = self._fuse_rag_into_health_portrait(
+            self._customer_health_portrait(case, abnormal_indicators),
+            self._customerize_items(sections.get("RAG总体健康画像", [])),
+        )
+        key_indicators = self._fuse_rag_into_key_indicators(
+            self._customer_key_indicators(abnormal_indicators),
+            abnormal_indicators,
+            self._customerize_items(sections.get("RAG异常指标解释", [])),
+        )
 
         ordered_sections = [
-            ("总体健康画像", self._customer_health_portrait(case, abnormal_indicators)),
-            ("关键指标", self._customer_key_indicators(abnormal_indicators)),
+            ("总体健康画像", health_portrait),
+            ("关键指标", key_indicators),
             ("风险提示", self._customerize_items(sections.get("风险提示", draft.red_flags))),
             ("个性化营养素方案", self._customerize_items(nutrition_plan)),
             ("生活方式干预重点", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
@@ -222,6 +417,71 @@ class ReviewService:
             explanation = self._indicator_explanation(indicator)
             items.append(f"{name}：{result}（{status_label}）。说明：{explanation}")
         return items
+
+    def _fuse_rag_into_health_portrait(self, portrait_items: list[str], rag_items: list[str]) -> list[str]:
+        items = list(portrait_items)
+        if not items:
+            return items
+        for rag_item in rag_items[:4]:
+            clause = self._rag_customer_clause(rag_item, max_len=140, purpose="health")
+            if clause:
+                items[0] = f"{items[0].rstrip('。')}。{clause}"
+                break
+        return list(dict.fromkeys(items))
+
+    def _fuse_rag_into_key_indicators(
+        self,
+        indicator_items: list[str],
+        abnormal_indicators: list,
+        rag_items: list[str],
+    ) -> list[str]:
+        items = list(indicator_items)
+        if not items or not rag_items:
+            return items
+
+        used_rows: set[int] = set()
+        for rag_item in rag_items[:6]:
+            best_index = self._best_indicator_rag_match(rag_item, abnormal_indicators)
+            if best_index is None:
+                best_index = self._fallback_indicator_row_for_rag(rag_item, abnormal_indicators)
+            if best_index is None or best_index in used_rows or best_index >= len(items):
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=120, purpose="indicator")
+            if clause:
+                items[best_index] = f"{items[best_index].rstrip('。')}。{clause}"
+                used_rows.add(best_index)
+        return list(dict.fromkeys(items))
+
+    def _best_indicator_rag_match(self, rag_item: str, abnormal_indicators: list) -> int | None:
+        normalized_rag = self._normalize_text(rag_item)
+        best_index: int | None = None
+        best_score = 0
+        for index, indicator in enumerate(abnormal_indicators):
+            name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+            aliases = self._indicator_aliases(name)
+            score = sum(1 for alias in aliases if len(alias) >= 3 and alias in normalized_rag)
+            if score > best_score:
+                best_index = index
+                best_score = score
+        return best_index if best_score > 0 else None
+
+    def _indicator_aliases(self, normalized_name: str) -> set[str]:
+        aliases = {normalized_name}
+        mapping = {
+            "甲状腺过氧化物酶抗体": {"甲状腺过氧化物酶抗体", "tpoab", "tpo", "桥本"},
+            "甲状腺球蛋白抗体": {"甲状腺球蛋白抗体", "tgab", "桥本"},
+            "促甲状腺激素": {"促甲状腺激素", "甲状腺", "tsh", "hpt", "桥本"},
+            "空腹血糖": {"空腹血糖", "血糖", "glucose", "胰岛素", "hba1c", "糖化"},
+            "超敏c反应蛋白": {"超敏c反应蛋白", "hscrp", "crp", "炎症"},
+            "25羟维生素d": {"25羟维生素d", "维生素d", "25ohd", "免疫"},
+            "甘油三酯": {"甘油三酯", "血脂", "代谢"},
+        }
+        for key, values in mapping.items():
+            if key in normalized_name:
+                aliases.update(self._normalize_text(value) for value in values)
+        if "甲状腺" in normalized_name or normalized_name in {"tsh", "ft3", "ft4"}:
+            aliases.update(self._normalize_text(value) for value in {"甲状腺", "tsh", "ft3", "ft4", "tpoab", "tgab", "hpt", "桥本"})
+        return {alias for alias in aliases if alias}
 
     def _friendly_indicator_status(self, indicator) -> str:
         text = f"{indicator.indicator_name} {indicator.result_text} {getattr(indicator.source_span, 'snippet', '')}"
@@ -308,7 +568,63 @@ class ReviewService:
         sections = draft.report_sections or {}
         protocol_items = self._protocol_lifestyle_items(case, abnormal_indicators)
         draft_items = self._customerize_items(sections.get("生活方式干预重点", draft.lifestyle_actions))
-        return list(dict.fromkeys(protocol_items + draft_items))[:12]
+        rag_items = self._customerize_items(sections.get("RAG生活方式干预", []))
+        combined = list(dict.fromkeys(protocol_items[:10] + draft_items + protocol_items[10:]))
+        combined = self._fuse_rag_into_lifestyle(combined, rag_items)
+        return combined[:14]
+
+    def _fuse_rag_into_lifestyle(self, lifestyle_items: list[str], rag_items: list[str]) -> list[str]:
+        items = list(lifestyle_items)
+        used_rows: set[int] = set()
+        for rag_item in rag_items[:5]:
+            if not self._is_lifestyle_rag_item(rag_item):
+                continue
+            row_index = self._best_lifestyle_row(rag_item, items)
+            if row_index is None and items:
+                row_index = 0
+            if row_index is None or row_index in used_rows:
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=115, purpose="lifestyle")
+            if clause:
+                items[row_index] = f"{items[row_index].rstrip('。')}。{clause}"
+                used_rows.add(row_index)
+        return list(dict.fromkeys(items))
+
+    def _is_lifestyle_rag_item(self, rag_item: str) -> bool:
+        normalized = self._normalize_text(rag_item)
+        lifestyle_terms = (
+            "睡眠",
+            "压力",
+            "运动",
+            "活动",
+            "久坐",
+            "饮食",
+            "作息",
+            "咖啡因",
+            "光照",
+            "呼吸",
+            "散步",
+        )
+        return any(term in normalized for term in lifestyle_terms)
+
+    def _best_lifestyle_row(self, rag_item: str, lifestyle_items: list[str]) -> int | None:
+        normalized = self._normalize_text(rag_item)
+        row_preferences = []
+        if any(term in normalized for term in ("睡眠", "咖啡因", "光照", "作息")):
+            row_preferences.extend(("睡眠", "作息"))
+        if any(term in normalized for term in ("压力", "呼吸", "冥想", "迷走")):
+            row_preferences.extend(("压力", "放松"))
+        if any(term in normalized for term in ("运动", "活动", "久坐", "散步", "抗阻")):
+            row_preferences.extend(("运动", "活动", "血糖"))
+        if any(term in normalized for term in ("饮食", "餐", "碳水", "蛋白", "蔬菜")):
+            row_preferences.extend(("饮食", "餐盘", "血糖"))
+
+        for preferred in row_preferences:
+            preferred_normalized = self._normalize_text(preferred)
+            for index, item in enumerate(lifestyle_items):
+                if preferred_normalized in self._normalize_text(item):
+                    return index
+        return None
 
     def _protocol_lifestyle_items(self, case, abnormal_indicators: list) -> list[str]:
         questionnaire = case.questionnaire
@@ -365,7 +681,14 @@ class ReviewService:
     def _customer_follow_up(self, sections: dict) -> list[str]:
         test_items = self._customerize_items(sections.get("功能医学检测建议", []))
         follow_items = self._customerize_items(sections.get("随访计划", []))
-        items = (test_items + follow_items)[:6]
+        rag_items = self._customerize_items(sections.get("RAG复查建议", []))
+        items = test_items[:4] + follow_items[:3]
+        for item in test_items[4:] + follow_items[3:]:
+            if len(items) >= 8:
+                break
+            items.append(item)
+        items = self._fuse_rag_into_follow_up(items, rag_items)
+        items = list(dict.fromkeys(items))[:8]
         if not items:
             items = [
                 "建议2周内回访一次，重点看睡眠、精力、胃肠反应和方案执行难点。",
@@ -373,11 +696,105 @@ class ReviewService:
             ]
         return items
 
+    def _fuse_rag_into_follow_up(self, follow_items: list[str], rag_items: list[str]) -> list[str]:
+        items = list(follow_items)
+        used_rows: set[int] = set()
+        for rag_item in rag_items[:5]:
+            row_index = self._best_follow_up_row(rag_item, items)
+            if row_index is None:
+                row_index = self._fallback_follow_up_row_for_rag(rag_item, items)
+            if row_index is None or row_index in used_rows:
+                continue
+            clause = self._rag_customer_clause(rag_item, max_len=105, purpose="follow_up")
+            if clause:
+                items[row_index] = f"{items[row_index].rstrip('。')}。{clause}"
+                used_rows.add(row_index)
+        return items
+
+    def _best_follow_up_row(self, rag_item: str, follow_items: list[str]) -> int | None:
+        normalized = self._normalize_text(rag_item)
+        row_preferences = []
+        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
+            row_preferences.extend(("甲状腺", "tsh"))
+        if any(term in normalized for term in ("维生素d", "25ohd", "免疫")):
+            row_preferences.extend(("25", "维生素d"))
+        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
+            row_preferences.extend(("血糖", "胰岛素", "hba1c"))
+        if any(term in normalized for term in ("压力", "皮质醇", "睡眠", "hpa")):
+            row_preferences.extend(("压力", "睡眠", "皮质醇"))
+
+        for preferred in row_preferences:
+            preferred_normalized = self._normalize_text(preferred)
+            for index, item in enumerate(follow_items):
+                if preferred_normalized in self._normalize_text(item):
+                    return index
+        return None
+
     def _customer_notice(self) -> list[str]:
         return [
             "本报告用于健康管理和营养生活方式指导，不能替代医学诊断或治疗。",
             "如果出现胸痛、持续高热、黑便/便血、明显水肿、严重头晕或其他急性不适，请及时就医。",
         ]
+
+    def _rag_customer_clause(self, rag_item: str, *, max_len: int, purpose: str) -> str:
+        cleaned = self._strip_customer_rag_prefix(rag_item)
+        cleaned = re.sub(r"；这部分仅作为营养支持背景说明.*$", "", cleaned)
+        cleaned = re.sub(r"具体补充剂、禁忌和复查安排仍以医生审核与产品规则为准.*$", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ，。；")
+        if not cleaned:
+            return ""
+        naturalized = self._naturalize_rag_clause(cleaned, purpose=purpose)
+        if naturalized:
+            return naturalized
+        if len(cleaned) > max_len:
+            cleaned = cleaned[:max_len].rstrip(" ，。；")
+        return cleaned.rstrip("。") + "。"
+
+    def _naturalize_rag_clause(self, cleaned: str, *, purpose: str) -> str:
+        cleaned = cleaned.strip(" ，。；")
+        if not cleaned:
+            return ""
+        if purpose == "health":
+            if any(term in cleaned for term in ("甲状腺激素合成", "临床甲减", "甲状腺功能减退", "低甲状腺激素", "HPT", "HPT 轴")):
+                return (
+                    "这也提示后续需要把甲状腺功能、抗体变化、症状表现、微量营养状态和整体代谢恢复放在同一张图里观察。"
+                )
+            if "维生素D" in cleaned or "维生素 D" in cleaned:
+                return "这也提示免疫调节、甲状腺状态和整体恢复能力需要一起跟踪。"
+            return ""
+        if purpose == "indicator":
+            if "TPOAb" in cleaned or "甲状腺过氧化物酶抗体" in cleaned:
+                return "从功能医学思路看，该抗体更适合结合肠道通透性、麸质反应、碘摄入、硒状态和甲状腺功能趋势一起解释。"
+            if "TgAb" in cleaned or "甲状腺球蛋白抗体" in cleaned:
+                return "解读时可与TPOAb、TSH、FT3、FT4和症状变化一起判断自身免疫活跃度。"
+            if any(term in cleaned for term in ("HPT", "HPT 轴", "甲状腺", "甲减", "甲状腺功能减退")):
+                return "从功能医学思路看，甲状腺相关异常不宜只看单项数值，建议结合HPT轴相关症状、抗体变化和甲状腺功能趋势一起评估。"
+            if "胰岛素" in cleaned or "血糖" in cleaned:
+                return "解读时可同时关注胰岛素抵抗、餐后波动、睡眠和炎症负担。"
+            return ""
+        if purpose == "lifestyle":
+            if ("睡眠" in cleaned or "压力" in cleaned) and ("久坐" in cleaned or "运动" in cleaned or "活动" in cleaned):
+                return "因此，睡眠节律和压力恢复应与减少久坐一起纳入生活方式干预，帮助改善炎症负担和代谢恢复。"
+            if "久坐" in cleaned or "运动" in cleaned:
+                return "因此，减少久坐、增加可持续的低到中等强度活动，可作为改善炎症负担和代谢恢复的基础策略。"
+            if "睡眠" in cleaned or "压力" in cleaned:
+                return "因此，睡眠节律和压力恢复应作为生活方式干预的核心观察点。"
+            return ""
+        if purpose == "follow_up":
+            if cleaned.startswith("复查时"):
+                return cleaned.rstrip("。") + "。"
+            return ""
+        return cleaned.rstrip("。") + "。"
+
+    def _strip_customer_rag_prefix(self, text: str) -> str:
+        cleaned = str(text).strip()
+        for prefix in (CUSTOMER_RAG_PREFIX,):
+            if cleaned.startswith(prefix):
+                return cleaned[len(prefix) :].strip()
+        return cleaned
+
+    def _normalize_text(self, text: str) -> str:
+        return re.sub(r"[\s，。；、：:（）()“”\"'`+\\/.-]+", "", str(text).lower())
 
     def _customerize_items(self, content) -> list[str]:
         items = []

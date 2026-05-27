@@ -76,6 +76,19 @@ def build_llm_provider(settings: AppSettings):
     return remote_provider, f"remote:{settings.llm_model}", "grounded-remote-report-v1"
 
 
+def build_rag_retriever(settings: AppSettings):
+    if not settings.rag_enabled or not settings.rag_index_dir:
+        return None
+    if not (settings.rag_index_dir / "manifest.json").exists():
+        return None
+    try:
+        from app.services.rag_retriever import RagRetriever
+
+        return RagRetriever(settings.rag_index_dir)
+    except Exception:
+        return None
+
+
 @dataclass
 class ApplicationContainer:
     settings: AppSettings
@@ -104,6 +117,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     vector_store = InMemoryVectorStore()
     vector_store.index(repository.list_knowledge(reviewed_only=True))
     llm_provider, model_version, prompt_version = build_llm_provider(settings)
+    rag_retriever = build_rag_retriever(settings)
 
     auth_service = AuthService(repository)
     case_service = CaseService(repository)
@@ -125,6 +139,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service=indicator_service,
         vector_store=vector_store,
         llm_provider=llm_provider,
+        rag_retriever=rag_retriever,
         model_version=model_version,
         prompt_version=prompt_version,
     )

@@ -712,15 +712,6 @@ class GroundedDraftComposer:
                 abstain_reason="触发红旗风险，系统已切换为严格拒答并等待人工审核。",
             )
 
-        blocking_missing = [item for item in draft_input.missing_info if "人工解析校对" in item]
-        if blocking_missing:
-            return DraftCompositionResult(
-                rationale=["病例资料尚不完整，需要先补齐人工校对后再生成草案。"],
-                lifestyle_actions=["先完成人工解析校对，再根据已确认的报告信息重新生成草案。"],
-                confidence=0.08,
-                abstain_reason="病例资料尚未达到可推荐条件，已转人工补全。",
-            )
-
         if not draft_input.candidate_products:
             return DraftCompositionResult(
                 rationale=["本地知识和产品规则未形成足够证据，暂不输出营养素推荐。"],
@@ -746,6 +737,8 @@ class GroundedDraftComposer:
                 "围绕睡眠、压力、运动和饮食一致性做基础生活方式干预。",
                 "若存在用药或过敏不明确，先补齐信息后再升级方案。",
             ]
+        if any("人工解析校对" in item for item in draft_input.missing_info):
+            lifestyle_actions.append("当前候选营养素方案仅供内部草案审核，需完成人工解析校对后再对外发布。")
 
         confidence = min(
             0.92,

@@ -10,6 +10,9 @@ dist/
 build/
 coverage/
 .runtime/
+_test_deps/
+_test_deps_min/
+backend/app/data/rag_staging/
 backend/.runtime/
 frontend/.next/
 frontend/.next-dev/

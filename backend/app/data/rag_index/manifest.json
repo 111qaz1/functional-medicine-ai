@@ -1,0 +1,13 @@
+{
+  "built_at": "2026-05-26T10:26:46.964782+00:00",
+  "corpus_path": "backend/app/data/rag_corpus.jsonl",
+  "corpus_sha1": "95214af454193504823262ae5f5e6bd8a5fd2d50",
+  "dimension": 1024,
+  "document_count": 9436,
+  "elapsed_seconds": 2593.282,
+  "embedding_backend": "sentence_transformers",
+  "embedding_warning": null,
+  "faiss_index_type": "IndexFlatIP",
+  "model_name": "BAAI/bge-m3",
+  "normalized_embeddings": true
+}

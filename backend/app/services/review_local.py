@@ -162,7 +162,7 @@ class ReviewService:
         text = str(report_text or "").replace("\r\n", "\n").replace("\r", "\n")
         normalized_lines: list[str] = []
         for raw_line in text.split("\n"):
-            line = self._normalize_report_line(raw_line.strip())
+            line = self._normalize_report_inline_spacing(raw_line.strip())
             if not line:
                 if normalized_lines and normalized_lines[-1] != "":
                     normalized_lines.append("")
@@ -176,7 +176,10 @@ class ReviewService:
                 )
                 continue
             normalized_lines.append(line)
-        return "\n".join(normalized_lines).strip()
+        finalized_lines = [
+            self._normalize_report_line(line) if line else "" for line in normalized_lines
+        ]
+        return "\n".join(finalized_lines).strip()
 
     def _collapse_inline_soft_breaks(self, text: str) -> str:
         collapsed = str(text or "").replace("\r\n", "\n").replace("\r", "\n")

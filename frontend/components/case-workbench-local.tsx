@@ -107,8 +107,95 @@ function uniqueItems(items: string[]) {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
 }
 
+function normalizeInlineSpacing(text: string) {
+  return text
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\s*([，、。；：！？])\s*/g, "$1")
+    .replace(/(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, "")
+    .replace(
+      /(?<=[\u4e00-\u9fff])\s+(?=\d+(?:\.\d+)?(?:\s*[-~～]\s*\d+(?:\.\d+)?)?\s*(?:%|％|‰|℃|°|次|个|颗|粒|片|周|天|小时|分钟|秒))/g,
+      ""
+    )
+    .replace(
+      /(\d+(?:\.\d+)?(?:\s*[-~～]\s*\d+(?:\.\d+)?)?)\s+(%|％|‰|℃|°|次|个|颗|粒|片|周|天|小时|分钟|秒)/g,
+      (_match, value, unit) => `${String(value).replace(/\s+/g, "")}${unit}`
+    )
+    .replace(/。+；/g, "；")
+    .replace(/；+。/g, "；")
+    .replace(/([，。；：！？、])\1+/g, "$1")
+    .trim();
+}
+
+function normalizeNutritionItemPunctuation(text: string) {
+  return `${text
+    .trim()
+    .replace(/[ ，。；]+$/g, "")
+    .replace(/[。；]+(?=(?:目的|适用说明|注意\/禁忌)：)/g, "；")
+    .replace(/[。；]+(?=与[\u4e00-\u9fffA-Za-z0-9])/g, "；")
+    .replace(/。+；/g, "；")
+    .replace(/；+。/g, "；")
+    .replace(/([，。；：！？、])\1+/g, "$1")
+    .replace(/[ ，。；]+$/g, "")}。`;
+}
+
+function normalizeReportLine(text: string) {
+  const normalized = normalizeInlineSpacing(text);
+  if (!normalized || normalized.startsWith("# ") || normalized.startsWith("## ")) {
+    return normalized;
+  }
+  const prefix = normalized.startsWith("- ") ? "- " : "";
+  let content = prefix ? normalized.slice(2).trim() : normalized;
+  if (content.includes("目的：") || content.includes("适用说明：") || content.includes("注意/禁忌：")) {
+    content = normalizeNutritionItemPunctuation(content);
+  } else if (prefix && content && !/[。！？；）)]$/.test(content)) {
+    content = `${content}。`;
+  }
+  return `${prefix}${content}`;
+}
+
+function collapseInlineSoftBreaks(text: string) {
+  return normalizeInlineSpacing(
+    text
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(
+        /(?<=[\u4e00-\u9fffA-Za-z0-9）)%％])\s*\n+\s*(?=[\u4e00-\u9fffA-Za-z0-9（(%％‰℃°])/g,
+        ""
+      )
+      .replace(/\s*\n+\s*/g, " ")
+  );
+}
+
+function normalizeCustomerVisibleReportText(reportText?: string | null) {
+  const normalizedLines: string[] = [];
+  for (const rawLine of String(reportText ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")) {
+    const line = normalizeReportLine(rawLine.trim());
+    if (!line) {
+      if (normalizedLines.length && normalizedLines[normalizedLines.length - 1] !== "") {
+        normalizedLines.push("");
+      }
+      continue;
+    }
+    if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("- ")) {
+      normalizedLines.push(line);
+      continue;
+    }
+    if (normalizedLines.length && normalizedLines[normalizedLines.length - 1].startsWith("- ")) {
+      normalizedLines[normalizedLines.length - 1] = normalizeReportLine(
+        collapseInlineSoftBreaks(`${normalizedLines[normalizedLines.length - 1]}\n${line}`)
+      );
+      continue;
+    }
+    normalizedLines.push(line);
+  }
+  return normalizedLines.join("\n").trim();
+}
+
 function cleanCustomerText(item: string) {
-  return item
+  return collapseInlineSoftBreaks(item)
     .replace(/product:sku_[a-z0-9_]+/gi, "")
     .replace(/statement_[a-z0-9_]+/gi, "")
     .replaceAll("功能医学知识库（仅供参考）：", "")
@@ -119,7 +206,6 @@ function cleanCustomerText(item: string) {
     .replaceAll("候选推荐", "建议")
     .replaceAll("已审核知识命中", "本次资料提示")
     .replaceAll("人工复核", "顾问确认")
-    .replace(/\s+/g, " ")
     .replace(/[ ，。；]+$/g, "")
     .trim();
 }
@@ -262,7 +348,7 @@ function appendNutritionSafety(item: string, draft: NonNullable<CaseDetailRespon
   if (safety.length === 0) {
     return item;
   }
-  return `${item.replace(/[ 。；]+$/g, "")}。注意/禁忌：${safety.join("；")}`;
+  return `${item.replace(/[ 。；]+$/g, "")}；注意/禁忌：${safety.join("；")}`;
 }
 
 function hasAny(text: string, tokens: string[]) {
@@ -397,7 +483,7 @@ function buildNutritionPlan(payload: CaseDetailResponse) {
   }
   return draft.recommended_skus.map((sku) => {
     const safety = publicSafetyWarnings(sku.warnings);
-    const safetySuffix = safety.length ? `。注意/禁忌：${safety.join("；")}` : "";
+    const safetySuffix = safety.length ? `；注意/禁忌：${safety.join("；")}` : "";
     return `${sku.display_name}：${sku.dosage}。目的：${cleanCustomerText(sku.reason)}${safetySuffix}`;
   });
 }
@@ -516,13 +602,13 @@ function buildDraftReport(payload: CaseDetailResponse) {
     "如果出现胸痛、持续高热、黑便/便血、明显水肿、严重头晕或其他急性不适，请及时就医。"
   ]);
 
-  return lines.join("\n");
+  return normalizeCustomerVisibleReportText(lines.join("\n"));
 }
 
 function buildPublishableReport(payload: CaseDetailResponse) {
   const storedReport = payload.review_decision?.publishable_report;
   if (storedReport && !looksLikeInternalGeneratedReport(storedReport)) {
-    return storedReport;
+    return normalizeCustomerVisibleReportText(storedReport);
   }
   return buildDraftReport(payload);
 }
@@ -1018,7 +1104,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     }
     try {
       setBusy(true);
-      const review = await approveDraft(payload.latest_draft.id, reviewerId, publishableSummary || undefined);
+      const normalizedSummary = normalizeCustomerVisibleReportText(publishableSummary);
+      setPublishableSummary(normalizedSummary);
+      const review = await approveDraft(payload.latest_draft.id, reviewerId, normalizedSummary || undefined);
       window.open(getPdfReportUrl(review.draft_id), "_blank", "noopener,noreferrer");
       await refresh();
     } catch (err) {

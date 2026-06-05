@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
 from app.domain.models import AnalysisMode, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
+from app.providers.local import GroundedDraftComposer
 from app.providers.base import DraftCompositionResult
 
 
@@ -138,6 +139,30 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertTrue(
             any("注意/禁忌：" in item for item in draft.report_sections.get("个性化营养素方案", []))
         )
+
+    def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
+        root = Path(self.temp_dir.name)
+        settings = AppSettings(
+            project_root=root,
+            data_dir=Path(__file__).resolve().parents[1] / "app" / "data",
+            runtime_dir=root / ".runtime",
+            upload_dir=root / ".runtime" / "uploads",
+            report_export_dir=root / ".runtime" / "reports",
+            sqlite_path=root / ".runtime" / "llm-disabled.sqlite3",
+            knowledge_root=root / "功能医学相关资料",
+            report_reference_path=root / "0316测试报告1.pdf",
+            llm_base_url="https://ark.cn-beijing.volces.com/api/v3",
+            llm_api_key="test-key",
+            llm_model="doubao-seed-2-0-lite-260215",
+            llm_api_style="responses",
+            rag_llm_fusion_enabled=True,
+        )
+
+        container = build_container(settings)
+
+        self.assertIsInstance(container.recommendation_service.llm_provider, GroundedDraftComposer)
+        self.assertEqual(container.recommendation_service.model_version, "local-structured-v1")
+        self.assertIsNotNone(container.review_service.rag_fusion_provider)
 
     def test_generates_recommendations_without_questionnaire_when_report_is_reviewed(self) -> None:
         case = self.container.case_service.create_case(
@@ -897,6 +922,14 @@ class RecommendationServiceTests(unittest.TestCase):
         )
         self.assertTrue(formatted_indicator.startswith("- "))
         self.assertNotIn("•", formatted_indicator)
+        formatted_lifestyle = self.container.review_service.pdf_exporter._format_item(
+            "生活方式干预重点",
+            "压力管理：每天安排2次5分钟呼吸练习或冥想。",
+        )
+        self.assertIn("2次", formatted_lifestyle)
+        self.assertIn("5分钟", formatted_lifestyle)
+        self.assertNotIn("2 次", formatted_lifestyle)
+        self.assertNotIn("5 分钟", formatted_lifestyle)
 
     def test_approval_adds_safety_to_manual_publishable_nutrition_lines(self) -> None:
         case = self._prepare_case(

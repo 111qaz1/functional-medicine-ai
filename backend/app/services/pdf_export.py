@@ -244,10 +244,15 @@ class PdfReportExporter:
         for source, replacement in replacements.items():
             escaped = escaped.replace(source, replacement)
         escaped = re.sub(
-            r"(\d+(?:\.\d+)?)\s*(ng/mL|pg/mL|mmol/L|IU/mL|mIU/L|mg/L|U/L|粒|次|小时|%)",
+            r"(\d+(?:\.\d+)?)\s*(ng/mL|pg/mL|mmol/L|IU/mL|mIU/L|mg/L|U/L)",
             r"<font color='#14564a'><b>\1 \2</b></font>",
             escaped,
             flags=re.IGNORECASE,
+        )
+        escaped = re.sub(
+            r"(\d+(?:\.\d+)?)\s*(粒|次|小时|分钟|天|周|月|年|%|％)",
+            r"<font color='#14564a'><b>\1\2</b></font>",
+            escaped,
         )
         return escaped
 

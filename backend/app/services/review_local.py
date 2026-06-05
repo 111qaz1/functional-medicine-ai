@@ -49,6 +49,7 @@ class ReviewService:
             draft_id=draft_id,
             customer_name=case.customer_name,
             report_text=report,
+            recommended_skus=draft.recommended_skus,
         )
 
         audit_log = self.repository.add_audit_log(
@@ -99,6 +100,7 @@ class ReviewService:
             draft_id=draft_id,
             customer_name=case.customer_name,
             report_text=report,
+            recommended_skus=draft.recommended_skus,
         )
         review.pdf_report_path = str(pdf_path)
         review.pdf_report_filename = pdf_path.name

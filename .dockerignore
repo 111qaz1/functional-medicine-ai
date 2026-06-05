@@ -1,4 +1,6 @@
 .git
+.env
+.env.local
 .gitignore
 .runtime
 backend/.runtime

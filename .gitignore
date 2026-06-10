@@ -10,6 +10,7 @@ dist/
 build/
 coverage/
 .runtime/
+.runtime-*/
 _test_deps/
 _test_deps_min/
 backend/app/data/rag_staging/

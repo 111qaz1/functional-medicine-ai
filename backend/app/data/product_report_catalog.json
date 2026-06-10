@@ -1,0 +1,213 @@
+{
+  "version": "2026-06-05-customer-report-products",
+  "source_note": "Derived from local customer report product introduction sheet. Original workbook is not stored in Git.",
+  "ignored_products": [
+    "综合消化酶",
+    "复合益生菌"
+  ],
+  "products": {
+    "sku_super_anti_inflammatory": {
+      "sequence": "1",
+      "product_name": "超强抗炎",
+      "english_name": "Frankincense Complex",
+      "description": "超强抗炎（Frankincense Complex）支持关节与经期抗炎舒缓。该配方提供高活性姜黄素C3复合物与乳香、生姜核心抗炎组合，搭配黑胡椒与MCT油双吸收增效技术，旨在抑制全身炎症因子并缓解关节肿胀僵硬与经期痉挛疼痛，兼顾胃肠温和护养，是中老年关节养护、女性经期不适的优选天然抗炎方案。",
+      "sku_id": "sku_super_anti_inflammatory"
+    },
+    "sku_magnesium_glycinate": {
+      "sequence": "2",
+      "product_name": "甘氨酸镁500",
+      "english_name": "Magnesium Glycinate",
+      "description": "甘氨酸镁500（Magnesium Glycinate）支持神经放松与优质睡眠。该配方提供高生物利用度甘氨酸镁及协同营养支持，旨在增强镁离子吸收效率并调节神经递质释放与肌肉舒缓，温和无胃肠刺激，适合长期补镁与压力性失眠人群日常养护。",
+      "sku_id": "sku_magnesium_glycinate"
+    },
+    "sku_blood_sugar_complex": {
+      "sequence": "3",
+      "product_name": "血糖综合",
+      "english_name": "Cinnamon Extract",
+      "description": "血糖综合（Cinnamon Extract）支持血糖调节与代谢平衡。该配方提供标准化肉桂多酚与全谱维生素、有机矿物质及多种植物活性物，旨在激活AMPK代谢通路并平稳餐后血糖波动与改善胰岛素敏感性，兼顾抗氧化与能量代谢激活，适合代谢综合征与糖耐量异常人群长期调理。",
+      "sku_id": "sku_blood_sugar_complex"
+    },
+    "sku_weight_support": {
+      "sequence": "4",
+      "product_name": "减重相关",
+      "english_name": "L-Carnitine Complex",
+      "description": "减重相关（L-Carnitine Complex）支持脂肪代谢与体重管理。该配方提供乙酰左旋肉碱与毛喉鞘蕊花、绿茶提取物及多种代谢辅助因子，旨在促进脂肪酸转运氧化并提升基础代谢率与运动耐力，兼顾血糖稳定与精力支撑。",
+      "sku_id": "sku_weight_support"
+    },
+    "sku_liposomal_vitamin_c_500": {
+      "sequence": "5",
+      "product_name": "脂质体维生素C500",
+      "english_name": "Liposomal Vitamin C",
+      "description": "脂质体维生素C500（Liposomal Vitamin C）支持免疫强化与抗氧化抗衰。该配方提供425mg高活性脂质体包裹维生素C及柑橘生物类黄酮复合物，旨在提升细胞内维C浓度并增强自由基清除能力与胶原合成效率，突破传统VC吸收局限，适合免疫力低下与皮肤抗衰人群日常补充。",
+      "sku_id": "sku_liposomal_vitamin_c_500"
+    },
+    "sku_mitochondrial_support": {
+      "sequence": "6",
+      "product_name": "线粒体健康",
+      "english_name": "PQQ Complex",
+      "description": "线粒体健康（PQQ Complex）支持线粒体新生与细胞能量修复。该配方提供PQQ与辅酶Q10、生育三烯酚及多种线粒体活性成分，旨在促进线粒体生物发生并提升ATP合成效率与抗氧化保护，兼顾心血管与神经认知养护，适合慢性疲劳与精力不足人群长期调理。",
+      "sku_id": "sku_mitochondrial_support"
+    },
+    "sku_ashwagandha_stress_balance": {
+      "sequence": "7",
+      "product_name": "南非醉茄平衡压力",
+      "english_name": "Ashwagandha",
+      "description": "南非醉茄平衡压力（Ashwagandha）支持压力调节与情绪舒缓。该配方提供南非醉茄根叶提取物与L-茶氨酸、磷脂酰丝氨酸及藏红花等活性成分，旨在降低皮质醇水平并改善睡眠质量与认知保护，无依赖型舒缓，适合职场高压与情绪敏感人群日常养护。",
+      "sku_id": "sku_ashwagandha_stress_balance"
+    },
+    "sku_cardiac_support": {
+      "sequence": "8",
+      "product_name": "心肌功能健康支持",
+      "english_name": "Terminalia Arjuna Complex",
+      "description": "心肌功能健康支持（Terminalia Arjuna Complex）支持心肌保护与精力修复。该配方提供阿育王树皮提取物与山楂叶花、牛磺酸及高吸收有机矿物质，旨在增强心肌收缩力并优化全身循环供氧与缓解压力性疲劳，兼顾心脏能量代谢与运动耐力提升，适合心肌负荷大与循环不佳人群精准养护。",
+      "sku_id": "sku_cardiac_support"
+    },
+    "sku_sleep_support": {
+      "sequence": "9",
+      "product_name": "睡眠支持",
+      "english_name": "GABA Complex",
+      "description": "睡眠支持（GABA Complex）支持睡眠管理与情绪舒缓。该配方提供GABA、5-HTP、低剂量褪黑素与四种经典舒缓草本，旨在调节生物钟并缩短入睡时间与延长深睡时长，无依赖、无晨起困倦，适合入睡困难与压力性失眠人群周期调理。",
+      "sku_id": "sku_sleep_support"
+    },
+    "sku_thyroid_support": {
+      "sequence": "10",
+      "product_name": "甲状腺支持",
+      "english_name": "Rhodiola Rosea Complex",
+      "description": "甲状腺支持（Rhodiola Rosea Complex）支持甲状腺养护与代谢修复。该配方提供碘、硒、锌等甲状腺必需营养素与红景天适应原及肌醇，旨在保障激素合成活化并减轻自身免疫攻击与改善甲减疲劳，兼顾应激调节与能量代谢，适合甲状腺功能波动与桥本倾向人群长期支持。",
+      "sku_id": "sku_thyroid_support"
+    },
+    "sku_fish_oil_rtg": {
+      "sequence": "11",
+      "product_name": "鱼油（大规格）",
+      "english_name": "rTG Fish Oil",
+      "description": "鱼油（大规格）（rTG Fish Oil）支持心脑健康与全身抗炎。该配方提供再酯化甘油三酯型高浓度EPA与DHA黄金配比，旨在提升吸收效率并增强血管通畅度与神经细胞活性，兼顾血脂调节与脑眼保护，适合慢性炎症与心血管关注人群日常养护。",
+      "sku_id": "sku_fish_oil_rtg"
+    },
+    "sku_vitamin_d3_k": {
+      "sequence": "12",
+      "product_name": "VD3+K 软胶囊",
+      "english_name": "Vitamin D3 & K",
+      "description": "VD3+K 软胶囊（Vitamin D3 & K）支持骨骼矿化与血管钙化预防。该配方提供5000IU高活性D3与叶绿醌K1及MK-7型K2，旨在高效促进钙磷吸收并引导钙离子精准沉积骨骼，MK-7长效性可维持稳定钙调节效果，适合维生素D缺乏与骨骼心血管养护人群。",
+      "sku_id": "sku_vitamin_d3_k"
+    },
+    "sku_selenium_vitamin_e": {
+      "sequence": "13",
+      "product_name": "维生素E",
+      "english_name": "Vitamin E with Selenium",
+      "description": "维生素E（Vitamin E with Selenium）支持抗氧化网络与生殖健康。该配方提供天然维生素E与生物活性硒代蛋氨酸，旨在形成脂相与酶促双重抗氧化屏障并保护生殖细胞膜完整性，兼顾免疫强化与甲状腺功能调节。",
+      "sku_id": "sku_selenium_vitamin_e"
+    },
+    "sku_neuro_cognitive": {
+      "sequence": "14",
+      "product_name": "神经健康和认知功能",
+      "english_name": "Citicoline",
+      "description": "神经健康和认知功能（Citicoline）支持神经认知修复与脑疲劳缓解。该配方提供CDP-胆碱与磷脂酰丝氨酸双核心及假马齿苋、猴头菇等神经滋养草本，旨在促进乙酰胆碱合成并强化突触信号传递与神经元修复，兼顾压力应激保护与记忆力提升，适合高压用脑与认知衰退人群。",
+      "sku_id": "sku_neuro_cognitive"
+    },
+    "sku_coq10": {
+      "sequence": "15",
+      "product_name": "辅酶Q10",
+      "english_name": "Coenzyme Q10",
+      "description": "辅酶Q10（Coenzyme Q10）支持心肌能量与细胞抗氧化。该配方提供100mg高活性辅酶Q10与天然维生素E，旨在增强线粒体ATP合成并保护心肌细胞膜与形成抗氧化循环，兼顾精力修复与生殖细胞活力。",
+      "sku_id": "sku_coq10"
+    },
+    "sku_plant_multi_mineral": {
+      "sequence": "16",
+      "product_name": "植物抗氧化-不含铁",
+      "english_name": "Multivitamin Mineral",
+      "description": "植物抗氧化-不含铁（Multivitamin Mineral）支持全维度营养补充与代谢激活。该配方提供13种维生素、10种有机矿物质及7种植物活性提取物，旨在填补日常饮食缺口并激活能量代谢与强化免疫防护，兼顾抗氧化抗衰与肝肾养护，适合饮食不均衡与高压亚健康人群。",
+      "sku_id": "sku_plant_multi_mineral"
+    },
+    "sku_stomach_acid_support": {
+      "sequence": "17",
+      "product_name": "胃酸替代物",
+      "english_name": "Acid Protease",
+      "description": "胃酸替代物（Acid Protease）支持蛋白质消化。该配方提供25000 FCC Units高活性酸性蛋白酶，旨在精准分解大分子蛋白缓解由于高蛋白饮食带来的不适，兼顾胃肠减负与代谢保护。",
+      "sku_id": "sku_stomach_acid_support"
+    },
+    "sku_dhea": {
+      "sequence": "18",
+      "product_name": "DHEA",
+      "english_name": "DHEA",
+      "description": "DHEA（DHEA）支持内分泌平衡与生殖功能。该配方提供25mg生理性激素前体DHEA，旨在根据机体需求转化为活性性激素并改善卵巢储备与提升免疫抗衰能力，需在专业医师指导下使用。",
+      "sku_id": "sku_dhea"
+    },
+    "sku_polaprezinc": {
+      "sequence": "19",
+      "product_name": "肌肽锌",
+      "english_name": "Zinc Carnosine",
+      "description": "肌肽锌（Zinc Carnosine）支持胃肠黏膜修复与锌营养补充。该配方提供锌肌肽螯合物，旨在形成胃黏膜物理保护膜并促进上皮细胞增殖与抑制胃酸过度分泌，兼顾抗炎抗氧化与溃疡面愈合，适合慢性胃炎与黏膜损伤人群。",
+      "sku_id": "sku_polaprezinc"
+    },
+    "sku_hcy_methylation": {
+      "sequence": "20",
+      "product_name": "HCY代谢及甲基化支持",
+      "english_name": "Betaine Complex",
+      "description": "HCY代谢及甲基化支持（Betaine Complex）支持同型半胱氨酸调节与肝脏代谢解毒。该配方提供三甲基甘氨酸（甜菜碱）与L-半胱氨酸及全谱B族维生素，旨在快速降低血中同型半胱氨酸并促进肝脂分解与胃肠黏膜修护，兼顾微量元素营养供给，适合高同型半胱氨酸与肝脂代谢异常人群。",
+      "sku_id": "sku_hcy_methylation"
+    },
+    "sku_bile_flow_support": {
+      "sequence": "21",
+      "product_name": "支持胆汁分泌",
+      "english_name": "Artichoke & Choline",
+      "description": "支持胆汁分泌（Artichoke & Choline）支持肝胆代谢与脂肪消化。该配方提供朝鲜蓟叶提取物与胆碱、肌醇、蛋氨酸及全谱B族维生素，旨在促进胆汁分泌与肝内脂肪转运并改善油腻饮食后的消化不适，兼顾同型半胱氨酸调节与能量代谢，适合脂肪肝早期与胆囊功能减弱人群。",
+      "sku_id": "sku_bile_flow_support"
+    },
+    "sku_zinc_complex": {
+      "sequence": "22",
+      "product_name": "锌",
+      "english_name": "Zinc Chelate",
+      "description": "锌（Zinc Chelate）支持高效补锌与免疫生殖健康。该配方提供甘氨酸锌与精氨酸锌双螯合有机锌，旨在实现氨基酸载体直接转运并提升吸收率与避免胃肠刺激，兼顾男性精子活力与女性卵泡发育支持，适合锌缺乏与备孕人群。",
+      "sku_id": "sku_zinc_complex"
+    },
+    "sku_immune_support": {
+      "sequence": "23",
+      "product_name": "槲皮素复合物",
+      "english_name": "Quercetin Complex",
+      "description": "槲皮素复合物（Quercetin Complex）支持免疫强化与炎症平衡。该配方提供天然槲皮素与去咖啡因绿茶提取物及L-半胱氨酸、甘氨酸锌，旨在加固黏膜屏障并激活免疫细胞与调节过敏炎症反应，兼顾毒素清除与抗氧化保护，适合反复感染与过敏体质人群。",
+      "sku_id": "sku_immune_support"
+    },
+    "sku_herbal_antimicrobial": {
+      "sequence": "24",
+      "product_name": "草本杀菌胶囊",
+      "english_name": "Olibanum oil Complex",
+      "description": "草本杀菌胶囊（Olibanum oil Complex）支持肠道菌群平衡与广谱抗菌。该配方提供包埋型牛至油、茶树油、大蒜提取物与紫锥菊、黄芪等免疫草本，旨在抑制有害病原体并修复肠道黏膜与激活免疫应答，兼顾抗氧化抗炎与黏膜收敛，适合肠道菌群失衡与换季易感人群。",
+      "sku_id": "sku_herbal_antimicrobial"
+    },
+    "sku_liver_detox_support": {
+      "sequence": "27",
+      "product_name": "肝脏代谢支持",
+      "english_name": "Milk Thistle Extract",
+      "description": "奶蓟草提取物（Milk Thistle Extract）支持肝脏I/II阶段解毒。该配方提供高活性水飞蓟素与朝鲜蓟、绿茶多酚及有机矿物质，旨在激活P450酶系促进毒素氧化转化，强化谷胱甘肽中和活性氧，协同牛磺酸加速II阶段结合排泄，兼顾肝细胞修复与肝脂代谢。",
+      "sku_id": "sku_liver_detox_support"
+    },
+    "sku_b_complex": {
+      "sequence": "28",
+      "product_name": "维生素B族",
+      "english_name": "Vitamin B Complex",
+      "description": "维生素B族（Vitamin B Complex）支持能量代谢与同型半胱氨酸调节。该配方提供10种活性B族核心成分含活性叶酸与甜菜碱、胆碱，旨在激活线粒体ATP生成并高效降低同型半胱氨酸与修护神经皮肤黏膜，兼顾肝脂代谢与备孕支持，适合高压疲劳与B族缺乏人群。",
+      "sku_id": "sku_b_complex"
+    },
+    "sku_trans_resveratrol": {
+      "sequence": "29",
+      "product_name": "反式白藜芦醇",
+      "english_name": "Trans-Resveratrol",
+      "description": "反式白藜芦醇（Trans-Resveratrol）支持强效抗氧化与血管养护。该配方提供200mg脂质体反式白藜芦醇与95%槲皮素及黑胡椒提取物，旨在提升生物利用度并清除线粒体自由基与强化血管内皮弹性，兼顾抗炎抗衰与脂代谢支持。",
+      "sku_id": "sku_trans_resveratrol"
+    },
+    "sku_female_hormone_balance": {
+      "sequence": "30",
+      "product_name": "Harmicelsus-F 女性激素平衡",
+      "english_name": "Harmicelsus-F Female Hormone Balance",
+      "description": "Harmicelsus-F 女性激素平衡（Harmicelsus-F Female Hormone Balance）支持女性全周期激素平衡与经期舒缓。该配方提供黑升麻、穗花牡荆、白杨素与二吲哚甲烷四大植物调节成分，旨在调节HPO内分泌轴并促进雌激素健康代谢与缓解更年期潮热盗汗，兼顾骨骼保护与PMS不适缓解，适合育龄期至围绝经期女性全周期养护。",
+      "sku_id": "sku_female_hormone_balance"
+    },
+    "sku_amino_acid_detox": {
+      "sequence": "31",
+      "product_name": "肝脏氨基酸解毒支持",
+      "english_name": "Glutathione",
+      "description": "肝脏氨基酸解毒支持（Glutathione）支持肝脏II期氨基酸结合解毒。该配方提供还原性谷胱甘肽与L-半胱氨酸、甘氨酸、谷氨酰胺等合成前体，旨在促进脂溶性毒素与谷胱甘肽氨基酸结合转化为水溶性代谢物，加速经胆汁尿液排泄，兼顾内源性谷胱甘肽合成与肝细胞保护，适合酒精、药物及环境毒素暴露人群。",
+      "sku_id": "sku_amino_acid_detox"
+    }
+  }
+}

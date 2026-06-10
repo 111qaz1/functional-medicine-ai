@@ -19,6 +19,21 @@ class _RemoteCompositionPayload(BaseModel):
     abstain_reason: str | None = None
 
 
+class _RemoteRagFusionPayload(BaseModel):
+    sections: dict[str, list[str]] = Field(default_factory=dict)
+    section_patches: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    used_rag_refs: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class RemoteLLMHTTPStatusError(RuntimeError):
+    """HTTP failure from a remote model, reduced to audit-safe metadata."""
+
+    def __init__(self, status_code: int, error_code: str | None = None) -> None:
+        self.status_code = status_code
+        self.error_code = (error_code or "HTTPError")[:80]
+        super().__init__(f"Remote LLM HTTP {self.status_code}: {self.error_code}")
+
+
 class OpenAICompatibleCaseAssistant:
     """Remote case assistant that answers with grounded case context only."""
 
@@ -676,3 +691,246 @@ class OpenAICompatibleGroundedComposer:
             "转人工",
         )
         return not any(pattern in normalized for pattern in blocking_patterns)
+
+
+class OpenAICompatibleRagReportFusion:
+    """Optional remote helper for naturalizing already-filtered RAG snippets into report sections."""
+
+    allowed_sections = ("总体健康画像", "关键指标", "生活方式干预重点", "复查与跟进建议")
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        api_style: str = "auto",
+        timeout_seconds: float = 45.0,
+        temperature: float = 0.1,
+        max_output_tokens: int = 1800,
+        http_client: httpx.Client | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.api_style = api_style.strip().lower()
+        self.timeout_seconds = timeout_seconds
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+        self.http_client = http_client
+
+    def fuse_report_sections(
+        self,
+        *,
+        report_text: str,
+        target_sections: dict[str, list[str]],
+        rag_context: dict[str, list[dict[str, str]]],
+        case_context: dict[str, Any],
+    ) -> _RemoteRagFusionPayload:
+        payload = {
+            "target_sections": {
+                title: target_sections.get(title, [])
+                for title in self.allowed_sections
+            },
+            "rag_context": {
+                title: self._compact_rag_items(rag_context.get(title, []))
+                for title in self.allowed_sections
+            },
+            "case_context": case_context,
+            "output_language": "zh-CN",
+        }
+        raw_response = self._call_remote_model(payload)
+        return self._parse_response(raw_response)
+
+    def _call_remote_model(self, payload: dict[str, Any]) -> str:
+        client = self.http_client or httpx.Client(timeout=self.timeout_seconds)
+        close_client = self.http_client is None
+        try:
+            if self.api_style in {"auto", "responses"}:
+                try:
+                    response = client.post(
+                        f"{self.base_url}/responses",
+                        headers=self._headers(),
+                        json=self._build_responses_payload(payload),
+                        timeout=self.timeout_seconds,
+                    )
+                    self._raise_for_status(response)
+                    return self._extract_response_text(response.json())
+                except (RemoteLLMHTTPStatusError, httpx.HTTPError) as exc:
+                    if self.api_style == "responses":
+                        raise
+                    if isinstance(exc, RemoteLLMHTTPStatusError) and exc.status_code in {401, 403, 429}:
+                        raise
+
+            response = client.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=self._build_chat_payload(payload),
+                timeout=self.timeout_seconds,
+            )
+            self._raise_for_status(response)
+            return self._extract_response_text(response.json())
+        finally:
+            if close_client:
+                client.close()
+
+    def _build_chat_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "thinking": {"type": "disabled"},
+            "max_completion_tokens": self.max_output_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": self._system_prompt()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+        }
+
+    def _build_responses_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "thinking": {"type": "disabled"},
+            "max_output_tokens": self.max_output_tokens,
+            "instructions": self._system_prompt(),
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}],
+                }
+            ],
+        }
+
+    def _system_prompt(self) -> str:
+        return (
+            "你是功能医学项目的内部医学编辑，只负责把已经通过本地安全过滤的 RAG 参考内容，"
+            "自然融入客户可见报告的指定区块。必须严格遵守："
+            "1. 只能改写 target_sections 中这四个区块：总体健康画像、关键指标、生活方式干预重点、复查与跟进建议。"
+            "2. 不得改动或新增产品、营养素方案、剂量、禁忌、风险提示、医生规则或人工审核要求。"
+            "3. 不得新增目录外产品、药物、处方、治疗承诺、诊断结论。"
+            "4. 不得输出教材来源、文件名、页码、chunk id、RAG 字样、功能医学知识库（仅供参考）等内部标记。"
+            "5. 关键指标区块必须保持原有条目数量和顺序，每条仍以原指标名称开头。"
+            "6. 语言要面向患者，简体中文，表达自然、克制、可执行；不要把片段生硬整句粘贴。"
+            "7. 证据不足时保持原句或只做轻微润色，不强行加入教材结论。"
+            "8. 为降低延迟，只返回真正需要改写的条目补丁，最多 8 个补丁；没有必要改写的区块返回空数组。"
+            "9. text 必须是单行正文，不得包含换行、项目符号、编号、Markdown 标题、表格或额外缩进。"
+            "10. 使用简体中文报告标点：中文逗号、顿号、冒号、分号、句号和中文括号；每条以自然完整的中文句子结束。"
+            "只返回 JSON，不要 Markdown。index 使用从 0 开始的条目下标。JSON 格式必须为："
+            "{\"section_patches\":{\"总体健康画像\":[{\"index\":0,\"text\":\"...\"}],"
+            "\"关键指标\":[{\"index\":1,\"text\":\"...\"}],\"生活方式干预重点\":[],\"复查与跟进建议\":[]},"
+            "\"used_rag_refs\":{\"总体健康画像\":[\"health_1\"],\"关键指标\":[\"indicator_1\"]}}。"
+        )
+
+    def _compact_rag_items(self, items: list[dict[str, str]]) -> list[dict[str, str]]:
+        compacted = []
+        for item in items[:4]:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if item_id and text:
+                compacted.append({"id": item_id, "text": text[:280]})
+        return compacted
+
+    def _extract_response_text(self, payload: dict[str, Any]) -> str:
+        if isinstance(payload.get("output_text"), str) and payload["output_text"].strip():
+            return payload["output_text"]
+
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message", {}).get("content")
+            if isinstance(message, str) and message.strip():
+                return message
+            if isinstance(message, list):
+                chunks = []
+                for part in message:
+                    if isinstance(part, dict):
+                        text = part.get("text") or part.get("content")
+                        if isinstance(text, str):
+                            chunks.append(text)
+                joined = "".join(chunks).strip()
+                if joined:
+                    return joined
+
+        output = payload.get("output")
+        if isinstance(output, list):
+            chunks = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            text = part.get("text")
+                            if isinstance(text, str):
+                                chunks.append(text)
+                elif isinstance(content, str):
+                    chunks.append(content)
+            joined = "".join(chunks).strip()
+            if joined:
+                return joined
+
+        raise ValueError("Remote RAG fusion returned empty content")
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise self._safe_status_error(response) from exc
+
+    def _safe_status_error(self, response: httpx.Response) -> RemoteLLMHTTPStatusError:
+        error_code: str | None = None
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                raw_code = error.get("code") or error.get("type")
+                if raw_code:
+                    error_code = str(raw_code)
+        return RemoteLLMHTTPStatusError(response.status_code, error_code)
+
+    def _parse_response(self, raw_response: str) -> _RemoteRagFusionPayload:
+        try:
+            return _RemoteRagFusionPayload.model_validate_json(raw_response)
+        except ValidationError:
+            extracted = self._extract_first_json_object(raw_response)
+            return _RemoteRagFusionPayload.model_validate(json.loads(extracted))
+
+    def _extract_first_json_object(self, raw_response: str) -> str:
+        start = raw_response.find("{")
+        if start < 0:
+            raise ValueError("Remote RAG fusion did not return JSON content")
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(raw_response)):
+            char = raw_response[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return raw_response[start : index + 1]
+        raise ValueError("Remote RAG fusion returned incomplete JSON content")

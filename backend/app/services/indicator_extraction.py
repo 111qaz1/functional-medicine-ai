@@ -5,7 +5,12 @@ import re
 from app.domain.models import AbnormalFlag, CaseIndicator, IndicatorStatus, SourceSpan
 
 
+def _canonicalize_exponent_units(value: str) -> str:
+    return value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+
+
 def _normalize_snippet(value: str) -> str:
+    value = _canonicalize_exponent_units(value)
     value = value.replace("—", "-").replace("–", "-").replace("~", "-").replace("～", "-")
     return re.sub(r"\s+", "", value).strip().lower()
 
@@ -402,7 +407,8 @@ class CaseIndicatorService:
 
     def _parse_generic_lab_row(self, line: str) -> list[dict]:
         cleaned = (
-            line.replace("—", "-")
+            _canonicalize_exponent_units(line)
+            .replace("—", "-")
             .replace("–", "-")
             .replace("~", "-")
             .replace("～", "-")
@@ -501,7 +507,7 @@ class CaseIndicatorService:
         if len(re.findall(r"[\u4e00-\u9fff]", value)) < 2:
             return value
 
-        match = re.search(r"([A-Z]{2,}[A-Z0-9]*(?:-[A-Z0-9]+)*)$", value)
+        match = re.search(r"([A-Za-z]{2,}[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*#?)$", value)
         if not match:
             return value
 
@@ -522,6 +528,7 @@ class CaseIndicatorService:
         return "", leading_space
 
     def _is_supported_unit_token(self, token: str) -> bool:
+        token = _canonicalize_exponent_units(token)
         normalized = token.replace("μ", "u").replace("µ", "u").lower().strip().lstrip("*")
         if normalized in {
             "%",
@@ -746,7 +753,7 @@ class CaseIndicatorService:
         }
 
     def _looks_like_unit_line(self, line: str) -> bool:
-        stripped = line.strip()
+        stripped = _canonicalize_exponent_units(line.strip())
         if not stripped:
             return False
         if re.search(r"[\u4e00-\u9fff]", stripped):
@@ -835,7 +842,7 @@ class CaseIndicatorService:
         return IndicatorStatus.info
 
     def _looks_like_measurement_hint(self, text: str) -> bool:
-        normalized = text.replace("μ", "u").replace("µ", "u")
+        normalized = _canonicalize_exponent_units(text).replace("μ", "u").replace("µ", "u")
         return bool(
             re.search(r"\d+\s*(?:--|[-~])\s*\d+", normalized)
             or re.search(r"[A-Za-zu/%]+(?:/[A-Za-zu%]+)?", normalized, re.IGNORECASE)
@@ -843,7 +850,7 @@ class CaseIndicatorService:
         )
 
     def _sanitize_lab_snippet(self, snippet: str) -> str:
-        cleaned = snippet.strip()
+        cleaned = _canonicalize_exponent_units(snippet.strip())
         cleaned = re.sub(
             r"((?:\d+(?:\.\d+)?\s*(?:--|[-~])\s*\d+(?:\.\d+)?)(?:\s*[A-Za-zμu/%]+(?:/[A-Za-zμu%]+)?)?)(?:\s+\d{1,3})$",
             r"\1",

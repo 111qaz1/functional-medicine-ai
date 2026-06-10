@@ -6,18 +6,22 @@ from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from pypdf import PdfReader
+
 from app.domain.models import Questionnaire
 
 
 class QuestionnaireImportService:
     _WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     _DOCX_SUFFIXES = {".docx"}
+    _PDF_SUFFIXES = {".pdf"}
     _CHECKED_MARKERS = {"☑", "√", "■"}
     _ALL_MARKERS = {"☑", "□", "√", "■"}
     _MSQ_SECTION_MAP = {
         "头/脑力方面": ["头部", "思维"],
         "眼睛": ["眼部"],
         "耳朵": ["耳部"],
+        "耳部": ["耳部"],
         "鼻子": ["鼻部"],
         "口腔": ["口腔/咽喉"],
         "心脏": ["心脏"],
@@ -27,6 +31,7 @@ class QuestionnaireImportService:
         "关节/肌肉": ["关节/肌肉", "能量/活动"],
         "头发/皮肤": ["皮肤"],
         "体能及情绪": ["能量/活动", "情绪"],
+        "排泄功能": ["消化道"],
         "荷尔蒙及性功": ["其他"],
         "慢性疲劳症": ["能量/活动", "头部"],
     }
@@ -40,7 +45,26 @@ class QuestionnaireImportService:
                 raise ValueError("未能从该 MSQ 问卷中识别出有效字段，请检查文档内容或人工填写。")
             return questionnaire
 
-        raise ValueError("当前问卷导入仅支持已填写的 DOCX 文件。")
+        if suffix in self._PDF_SUFFIXES:
+            text = self._extract_pdf_text(content)
+            questionnaire = self._build_pdf_questionnaire(text)
+            if not self._has_meaningful_content(questionnaire):
+                raise ValueError("未能从该 MSQ PDF 问卷中识别出有效字段，请检查文档内容或人工填写。")
+            return questionnaire
+
+        raise ValueError("当前问卷导入支持已填写的 DOCX 或 PDF 文件。")
+
+    def _extract_pdf_text(self, content: bytes) -> str:
+        try:
+            reader = PdfReader(BytesIO(content))
+        except Exception as exc:
+            raise ValueError("问卷 PDF 读取失败，请确认文件未损坏。") from exc
+
+        page_texts = [page.extract_text() or "" for page in reader.pages]
+        text = "\n".join(page_texts)
+        if not self._clean_text(text):
+            raise ValueError("问卷 PDF 未识别到可读取文字；如果是扫描图片版，请先转换为可复制文本 PDF 或 DOCX。")
+        return text
 
     def _extract_docx_structure(self, content: bytes) -> tuple[list[str], list[list[list[str]]]]:
         try:
@@ -74,6 +98,194 @@ class QuestionnaireImportService:
             if rows:
                 tables.append(rows)
         return paragraphs, tables
+
+    def _build_pdf_questionnaire(self, text: str) -> Questionnaire:
+        full_text = self._normalize_pdf_text(text)
+
+        age = self._extract_int(full_text, r"年龄[:：_ ]*(\d{1,3})")
+        sex = self._extract_sex(full_text)
+
+        known_conditions: list[str] = []
+        chief_concerns: list[str] = []
+        family_history: list[str] = []
+        medications: list[str] = []
+        allergies: list[str] = []
+        food_sensitivities: list[str] = []
+        symptoms: list[str] = []
+        emotional_state: list[str] = []
+        goals: list[str] = []
+        msq_system_scores: dict[str, int] = {}
+        additional_notes: list[str] = ["由已填写 MSQ PDF 问卷自动导入，建议人工核对后再生成最终报告。"]
+
+        major_problem = self._extract_between_text(full_text, "您最近一次体检查出的主要问题？", "2. 您是否被诊断出患有某种慢性疾病？")
+        major_items = self._split_pdf_terms(major_problem)
+        known_conditions.extend(major_items)
+        chief_concerns.extend(major_items[:2])
+
+        family_block = self._extract_between_text(full_text, "第二部分：家族病史", "第三部分：生活和饮食习惯")
+        self_block = self._extract_between_text(family_block, "您本人", "您的父亲")
+        known_conditions.extend(self._split_pdf_terms(self_block.split("无", 1)[0]))
+        father_block = self._extract_between_text(family_block, "您的父亲", "您的母亲")
+        mother_block = self._extract_between_text(family_block, "您的母亲", "第三部分")
+        for member, block in (("父亲", father_block), ("母亲", mother_block)):
+            items = self._split_pdf_terms(block.rsplit("无", 1)[0])
+            if items:
+                family_history.append(f"{member}：{'、'.join(self._dedupe(items))}")
+
+        sleep_block = self._extract_between_text(full_text, "您的睡眠质量如何？", "健康信息调查问卷 第一页", "第三部分：生活和饮食习惯（续）")
+        sleep_quality_line = self._extract_between_text(sleep_block, "", "原因:", "2. 您一般什么时间上床睡觉？")
+        sleep_quality_parts = self._checked_labels(sleep_quality_line)
+        bedtime_text = self._extract_between_text(sleep_block, "2. 您一般什么时间上床睡觉？", "3. 您一般早上什么时间醒来？")
+        wake_text = self._extract_between_text(sleep_block, "3. 您一般早上什么时间醒来？", "健康信息调查问卷 第一页")
+        bedtime = self._extract_time_value(bedtime_text)
+        wake_time = self._extract_time_value(wake_text)
+        sleep_hours: float | None = None
+        if bedtime is not None and wake_time is not None:
+            if wake_time < bedtime:
+                wake_time += 24
+            sleep_hours = round(wake_time - bedtime, 1)
+
+        diet_block = self._extract_between_text(full_text, "4. 您日常三餐主要食用？", "第四部分：营养品补充")
+        primary_diet_line = self._extract_between_text(diet_block, "", "5. 您能够规律地吃早餐吗？")
+        breakfast_line = self._extract_between_text(diet_block, "5. 您能够规律地吃早餐吗？", "6.常饮用：")
+        drink_line = self._extract_between_text(diet_block, "6.常饮用：", "7. 您喝酒吗？")
+        alcohol_line = self._extract_between_text(diet_block, "7. 您喝酒吗？", "10. 每周外出就餐次数？")
+        dining_line = self._extract_between_text(diet_block, "10. 每周外出就餐次数？", "11. 经常使用快餐或加工食物？")
+        processed_food_line = self._extract_between_text(diet_block, "11. 经常使用快餐或加工食物？", "12. 对食物添加物及防腐剂敏感？")
+        additive_line = self._extract_between_text(diet_block, "12. 对食物添加物及防腐剂敏感？", "第四部分")
+
+        diet_pattern_parts: list[str] = []
+        seafood_intake_ratio = self._extract_percent_after(primary_diet_line, "鱼类和海鲜")
+        red_meat_intake_ratio = self._extract_percent_after(primary_diet_line, "红肉")
+        rice_ratio = self._extract_percent_after(primary_diet_line, "米饭")
+        noodle_ratio = self._extract_percent_after(primary_diet_line, "面食")
+        vegetable_ratio = self._extract_percent_after(primary_diet_line, "蔬菜")
+        fruit_ratio = self._extract_percent_after(primary_diet_line, "水果")
+        if any([rice_ratio, noodle_ratio, vegetable_ratio, fruit_ratio, red_meat_intake_ratio, seafood_intake_ratio]):
+            summary_parts: list[str] = []
+            if rice_ratio:
+                summary_parts.append(f"米饭约{rice_ratio}")
+            if noodle_ratio:
+                summary_parts.append(f"面食约{noodle_ratio}")
+            if vegetable_ratio:
+                summary_parts.append(f"蔬菜约{vegetable_ratio}")
+            if fruit_ratio:
+                summary_parts.append(f"水果约{fruit_ratio}")
+            if red_meat_intake_ratio:
+                summary_parts.append(f"红肉约{red_meat_intake_ratio}")
+            if seafood_intake_ratio:
+                summary_parts.append(f"鱼海鲜约{seafood_intake_ratio}")
+            diet_pattern_parts.append("三餐结构：" + "，".join(summary_parts))
+
+        breakfast_choices = self._checked_labels(breakfast_line)
+        if breakfast_choices:
+            diet_pattern_parts.append(f"早餐：{'、'.join(self._dedupe(breakfast_choices))}")
+        drink_parts = self._extract_pdf_drink_parts(drink_line)
+        if drink_parts:
+            diet_pattern_parts.append("饮品：" + "，".join(drink_parts))
+        alcohol_summary = self._extract_pdf_alcohol_summary(alcohol_line)
+        if alcohol_summary:
+            diet_pattern_parts.append(alcohol_summary)
+        if self._is_no_selected(processed_food_line):
+            diet_pattern_parts.append("较少使用快餐或加工食物")
+        if self._is_yes_selected(additive_line):
+            food_sensitivities.append("食品添加剂/防腐剂")
+        dining_out_frequency = None
+        dining_match = re.search(r"(\d+次)", dining_line)
+        if dining_match:
+            dining_out_frequency = f"每周{dining_match.group(1)}"
+
+        supplement_block = self._extract_between_text(full_text, "第四部分：营养品补充", "第五部分：工作")
+        supplement_use = self._extract_pdf_supplement_use(supplement_block)
+
+        work_block = self._extract_between_text(full_text, "第五部分：工作", "第八部分：男性/女性状况")
+        work_pattern_parts: list[str] = []
+        sitting_hours_per_day: float | None = None
+        work_hours_match = re.search(r"工作小时数.*?(\d+(?:\.\d+)?)\s*[＿_\s]*小时/日", work_block)
+        computer_hours_match = re.search(r"使用电脑时间多长？\s*(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?\s*小时/日", work_block)
+        if work_hours_match:
+            work_pattern_parts.append(f"工作{work_hours_match.group(1)}小时/日")
+        if computer_hours_match:
+            if computer_hours_match.group(2):
+                start = float(computer_hours_match.group(1))
+                end = float(computer_hours_match.group(2))
+                sitting_hours_per_day = round((start + end) / 2, 1)
+                work_pattern_parts.append(f"电脑{computer_hours_match.group(1)}-{computer_hours_match.group(2)}小时/日")
+            else:
+                sitting_hours_per_day = float(computer_hours_match.group(1))
+                work_pattern_parts.append(f"电脑{computer_hours_match.group(1)}小时/日")
+
+        chemical_sensitivity = None
+        sensitivity_line = self._extract_between_text(work_block, "2. 对杀虫剂", "3. 在工作或居家环境附近")
+        if self._is_yes_selected(sensitivity_line):
+            chemical_sensitivity = "对杀虫剂、烟雾、香水等刺激明显敏感"
+        travel_line = self._extract_between_text(work_block, "5. 长途旅行后会有时差症状？", "第七部分：运动状况")
+        if self._is_yes_selected(travel_line):
+            additional_notes.append("长途旅行后有时差反应")
+
+        exercise_block = self._extract_between_text(work_block, "第七部分：运动状况", "第八部分")
+        exercise_frequency = None
+        exercise_habit_line = self._extract_between_text(exercise_block, "1. 有运动习惯？", "2. 每周运动量")
+        if self._is_yes_selected(exercise_habit_line):
+            exercise_frequency = "有运动习惯"
+        elif self._is_no_selected(exercise_habit_line):
+            exercise_frequency = "无规律运动"
+        stress_relief_line = self._extract_between_text(exercise_block, "3. 经常练习任何舒解压力的活动、瑜伽或静坐", "4. 体能较差")
+        if self._is_yes_selected(stress_relief_line):
+            additional_notes.append("有瑜伽、静坐或其他减压习惯")
+        activity_limit_line = self._extract_between_text(exercise_block, "6. 目前的体能状况限制了体能活动", "第八部分")
+        if self._is_yes_selected(activity_limit_line):
+            additional_notes.append("当前体能状况限制部分体能活动")
+
+        pdf_symptoms, pdf_emotions, bowel_markers, pdf_scores = self._extract_pdf_msq_symptoms(full_text)
+        symptoms.extend(pdf_symptoms)
+        emotional_state.extend(pdf_emotions)
+        msq_system_scores.update(pdf_scores)
+
+        goal_block = self._extract_between_text(full_text, "您希望以何种方式来促进健康呢", "第九部分：症状评估")
+        if goal_block:
+            goals.extend(self._checked_labels(goal_block))
+            priority_match = re.search(r"最希望医生帮您解决的问题是.*?A\s*([^\sB]+)", goal_block)
+            if priority_match:
+                goals.append(priority_match.group(1))
+
+        chief_concerns = self._dedupe(goals[:2] + chief_concerns + known_conditions[:2])
+        sleep_quality = "；".join(self._dedupe(sleep_quality_parts)) or None
+        diet_pattern = "；".join(self._dedupe(diet_pattern_parts)) or None
+        bowel_habits = "、".join(self._dedupe(bowel_markers)) or None
+        work_pattern = "；".join(self._dedupe(work_pattern_parts)) or None
+        if sleep_quality:
+            additional_notes.append(f"睡眠：{sleep_quality}")
+
+        return Questionnaire(
+            age=age,
+            sex=sex,
+            chief_concerns=self._dedupe(chief_concerns),
+            symptoms=self._dedupe(symptoms),
+            known_conditions=self._dedupe(known_conditions),
+            family_history=self._dedupe(family_history),
+            medications=self._dedupe(medications),
+            allergies=self._dedupe(allergies),
+            food_sensitivities=self._dedupe(food_sensitivities),
+            pregnant_or_lactating=None,
+            diet_pattern=diet_pattern,
+            work_pattern=work_pattern,
+            sitting_hours_per_day=sitting_hours_per_day,
+            dining_out_frequency=dining_out_frequency,
+            seafood_intake_ratio=seafood_intake_ratio,
+            red_meat_intake_ratio=red_meat_intake_ratio,
+            supplement_use=supplement_use,
+            chemical_sensitivity=chemical_sensitivity,
+            sleep_hours=sleep_hours,
+            sleep_quality=sleep_quality,
+            exercise_frequency=exercise_frequency,
+            bowel_habits=bowel_habits,
+            stress_level=None,
+            emotional_state=self._dedupe(emotional_state),
+            goals=self._dedupe(goals),
+            msq_system_scores=msq_system_scores,
+            additional_notes="；".join(self._dedupe(additional_notes)) or None,
+        )
 
     def _build_questionnaire(self, *, paragraphs: list[str], tables: list[list[list[str]]]) -> Questionnaire:
         full_text = "\n".join(paragraphs)
@@ -359,6 +571,183 @@ class QuestionnaireImportService:
             msq_system_scores=msq_system_scores,
             additional_notes="；".join(self._dedupe(additional_notes)) or None,
         )
+
+    def _normalize_pdf_text(self, text: str) -> str:
+        normalized = text.replace("\u2f64", "用").replace("\u2f63", "生")
+        normalized = re.sub(r"(?<![A-Za-z])Y(?![A-Za-z])", "☑", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip()
+
+    def _extract_between_text(self, text: str, start: str, *ends: str) -> str:
+        if start:
+            start_index = text.find(start)
+            if start_index < 0:
+                return ""
+            text = text[start_index + len(start) :]
+        end_positions = [text.find(end) for end in ends if end and text.find(end) >= 0]
+        if end_positions:
+            text = text[: min(end_positions)]
+        return self._clean_text(text)
+
+    def _strip_pdf_markers(self, text: str) -> str:
+        return self._clean_text(re.sub(r"[□☑√■＿_]+", " ", text))
+
+    def _split_pdf_terms(self, text: str) -> list[str]:
+        cleaned = self._strip_pdf_markers(text)
+        cleaned = re.sub(r"(?:如有|请具体说明|请说明何种药物及症状).*", "", cleaned)
+        cleaned = cleaned.replace("无", " ")
+        parts = re.split(r"[、,，;；/\n\s]+", cleaned)
+        return self._dedupe(parts)
+
+    def _extract_pdf_drink_parts(self, text: str) -> list[str]:
+        drink_parts: list[str] = []
+        for label in ("茶", "咖啡", "白开水", "碳酸饮料", "果汁"):
+            pattern = re.escape(label) + r".*?每日\s*(\d+)\s*(?:杯|毫升|cc|CC)"
+            match = re.search(pattern, text)
+            if match and self._is_option_checked_before_label(text, label):
+                unit = "杯" if "杯" in match.group(0) else "毫升"
+                drink_parts.append(f"{label}每日{match.group(1)}{unit}")
+        return self._dedupe(drink_parts)
+
+    def _is_option_checked_before_label(self, text: str, label: str) -> bool:
+        label_index = text.find(label)
+        if label_index < 0:
+            return False
+        prefix = text[max(0, label_index - 4) : label_index]
+        return self._contains_checked_marker(prefix)
+
+    def _extract_pdf_alcohol_summary(self, text: str) -> str | None:
+        if not self._is_yes_selected(self._extract_between_text(text, "", "8. 您平时饮酒常饮用哪种酒？")):
+            return None
+        years_match = re.search(r"年数[:：]?\s*(\d+)\s*年", text)
+        wine_type = self._extract_between_text(text, "8. 您平时饮酒常饮用哪种酒？", "9. 您每次喝酒的习惯？")
+        habit_line = self._extract_between_text(text, "9. 您每次喝酒的习惯？", "10. 每周外出就餐次数？")
+        habit_choices = self._checked_labels(habit_line)
+        parts = []
+        if years_match:
+            parts.append(f"{years_match.group(1)}年")
+        if wine_type:
+            parts.append(self._strip_pdf_markers(wine_type))
+        if habit_choices:
+            parts.append(f"每次{habit_choices[0]}")
+        return "饮酒：" + "，".join(part for part in parts if part) if parts else "饮酒"
+
+    def _extract_pdf_supplement_use(self, text: str) -> str | None:
+        header = self._extract_between_text(text, "您有补充营养食品吗？", "如有")
+        if self._is_no_selected(header):
+            return "无营养补充剂"
+        if not self._is_yes_selected(header):
+            return None
+
+        supplement_names = [
+            "抗氧化",
+            "辅酶Q10",
+            "蛋白粉",
+            "亚麻油",
+            "植物粉",
+            "硫辛酸",
+            "鱼油",
+            "维生素E",
+            "β胡萝卜素",
+            "维生素A",
+            "镁",
+            "维生素D",
+            "大豆异黄酮",
+            "钙",
+            "膳食纤维",
+            "单种维生素B",
+            "矿物质",
+            "复合多种维生素B",
+        ]
+        items: list[str] = []
+        for name in supplement_names:
+            match = re.search(re.escape(name) + r"\s*((?:一日|每日)\s*[一二三四五六七八九十\d]*次)", text)
+            if match:
+                items.append(self._compose_named_frequency(name, match.group(1)))
+        return "；".join(self._dedupe(items)) if items else None
+
+    def _extract_pdf_msq_symptoms(self, text: str) -> tuple[list[str], list[str], list[str], dict[str, int]]:
+        symptom_text = self._extract_between_text(text, "第九部分：症状评估")
+        if not symptom_text:
+            return [], [], [], {}
+
+        symptom_text = re.sub(r"级别\s+序号\s+症状描述\s+从来没有\s+偶尔\s+轻微\s+中等\s+严重\s+0\s+1\s+2\s+3\s+4", " ", symptom_text)
+        row_pattern = re.compile(r"(?<![\d.])(\d{1,2})\s+([^□☑]{2,50}?)\s+((?:[□☑]\s*){5})")
+        matches = list(row_pattern.finditer(symptom_text))
+
+        symptoms: list[str] = []
+        emotional_state: list[str] = []
+        bowel_markers: list[str] = []
+        msq_system_scores: dict[str, int] = {}
+        current_section = ""
+        previous_end = 0
+
+        for index, match in enumerate(matches):
+            before = symptom_text[previous_end : match.start()]
+            section_before = self._section_from_short_gap(before)
+            current_section = section_before or current_section
+            next_start = matches[index + 1].start() if index + 1 < len(matches) else len(symptom_text)
+            after = symptom_text[match.end() : next_start]
+
+            symptom_name = self._clean_text(match.group(2))
+            prefix_section = self._section_prefix(symptom_name)
+            if prefix_section:
+                current_section = prefix_section
+                symptom_name = self._clean_text(symptom_name[len(prefix_section) :])
+            section_after = self._section_from_short_gap(after)
+            row_section = prefix_section or section_before or section_after or self._section_for_pdf_symptom(symptom_name) or current_section
+
+            score = self._extract_msq_score(re.findall(r"[□☑]", match.group(3)))
+            if symptom_name and score is not None and score > 0:
+                symptoms.append(symptom_name)
+                if symptom_name in {"便秘", "腹泻"}:
+                    bowel_markers.append(symptom_name)
+                if any(keyword in symptom_name for keyword in ("忧郁", "焦虑", "烦躁", "紧张", "情绪", "暴躁")):
+                    emotional_state.append(symptom_name)
+                mapped_sections = self._MSQ_SECTION_MAP.get(row_section or "", [])
+                for mapped_section in mapped_sections:
+                    msq_system_scores[mapped_section] = max(msq_system_scores.get(mapped_section, 0), score)
+
+            if section_after:
+                current_section = section_after
+            previous_end = match.end()
+
+        return self._dedupe(symptoms), self._dedupe(emotional_state), self._dedupe(bowel_markers), msq_system_scores
+
+    def _section_from_text(self, text: str) -> str:
+        for section in self._MSQ_SECTION_MAP:
+            if section in text:
+                return section
+        return ""
+
+    def _section_from_short_gap(self, text: str) -> str:
+        cleaned = self._clean_text(text)
+        if len(cleaned) > 30:
+            return ""
+        return self._section_from_text(cleaned)
+
+    def _section_prefix(self, text: str) -> str:
+        for section in self._MSQ_SECTION_MAP:
+            if text.startswith(section):
+                return section
+        return ""
+
+    def _section_for_pdf_symptom(self, symptom: str) -> str:
+        keyword_map = {
+            "头/脑力方面": ("头昏", "头痛", "犹豫", "记忆", "注意力", "思虑"),
+            "鼻子": ("打喷嚏", "鼻塞", "流鼻", "鼻窦", "打鼾"),
+            "口腔": ("口腔", "溃疡", "蛀牙", "味嗅觉", "补牙"),
+            "肺/喉咙": ("呼吸", "气喘", "胸闷", "胸痛", "咳嗽", "喉咙", "扁桃"),
+            "消化功能": ("消化", "腹胀", "胀气", "胃", "恶心", "呕吐", "便秘", "腹泻", "胃酸"),
+            "头发/皮肤": ("头发", "皮肤", "痤疮", "肤色", "伤口", "四肢冰冷", "多汗", "盗汗", "指甲", "水肿"),
+            "体能及情绪": ("疲劳", "没精神", "昏沉", "失眠", "紧张", "焦虑", "烦闷", "情绪", "暴躁", "忧郁"),
+            "排泄功能": ("尿", "膀胱", "粪便", "血便"),
+            "慢性疲劳症": ("全身肌肉无力", "游走性", "睡眠障碍", "虚弱疲劳"),
+        }
+        for section, keywords in keyword_map.items():
+            if any(keyword in symptom for keyword in keywords):
+                return section
+        return ""
 
     def _find_table(self, tables: list[list[list[str]]], keyword: str) -> list[list[str]]:
         for table in tables:

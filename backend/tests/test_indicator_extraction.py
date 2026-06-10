@@ -102,6 +102,46 @@ class IndicatorExtractionTests(unittest.TestCase):
         self.assertEqual(by_name["血小板分布宽度"].status, IndicatorStatus.attention)
         self.assertEqual(by_name["红细胞"].status, IndicatorStatus.normal)
 
+    def test_canonicalizes_pdf_exponent_units_in_generic_lab_rows(self) -> None:
+        service = CaseIndicatorService()
+        file = UploadedFile(
+            id="file_pdf_exponent",
+            case_id="case_pdf_exponent",
+            filename="checkup.pdf",
+            content_type="application/pdf",
+            size_bytes=4096,
+            parse_status=FileParseStatus.parsed,
+            corrected_text="\n".join(
+                [
+                    "5 血小板 PLT 203 10∧9/L 125-350",
+                    "14 中性粒细胞绝对值 NEUT# 2.73 10∧9/L 1.8-6.3",
+                    "15 淋巴细胞绝对值 LYM# 2.13 10∧9/L 1.1-3.2",
+                    "16 单核细胞数绝对值 MONO# 0.29 10∧9/L 0.1-0.6",
+                    "17 嗜酸性粒细胞绝对值 EOS# 0.30 10∧9/L 0.0-0.5",
+                    "18 嗜碱性粒细胞绝对值 Bas# 0.05 10∧9/L 0.00-0.10",
+                ]
+            ),
+        )
+        case = CaseRecord(
+            id="case_pdf_exponent",
+            customer_name="PDF 指数单位",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+            files=[file],
+        )
+
+        indicators = service.build(case)
+        by_name = {item.indicator_name: item for item in indicators}
+
+        self.assertEqual(by_name["血小板"].result_text, "203 10^9/L")
+        self.assertEqual(by_name["中性粒细胞绝对值"].result_text, "2.73 10^9/L")
+        self.assertEqual(by_name["淋巴细胞绝对值"].result_text, "2.13 10^9/L")
+        self.assertEqual(by_name["单核细胞数绝对值"].result_text, "0.29 10^9/L")
+        self.assertEqual(by_name["嗜酸性粒细胞绝对值"].result_text, "0.3 10^9/L")
+        self.assertEqual(by_name["嗜碱性粒细胞绝对值"].result_text, "0.05 10^9/L")
+        self.assertTrue(all(item.status == IndicatorStatus.normal for item in by_name.values()))
+        self.assertNotIn("9 /L", " ".join(item.result_text for item in indicators))
+
     def test_manual_indicator_is_displayed_and_explicit_arrow_corrects_saved_status(self) -> None:
         service = CaseIndicatorService()
         case = CaseRecord(

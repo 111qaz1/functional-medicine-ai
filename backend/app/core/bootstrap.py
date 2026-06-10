@@ -13,7 +13,7 @@ from app.providers.local import (
     JsonKnowledgeImporter,
     LocalObjectStore,
 )
-from app.providers.remote import OpenAICompatibleGroundedComposer
+from app.providers.remote import OpenAICompatibleGroundedComposer, OpenAICompatibleRagReportFusion
 from app.repositories.in_memory import LocalRepository
 from app.services.assistant_rules import ClinicianRuleService
 from app.services.assistant_chat import CaseAssistantService
@@ -61,6 +61,8 @@ def load_knowledge(settings: AppSettings) -> list[KnowledgeStatement]:
 
 def build_llm_provider(settings: AppSettings):
     local_fallback = GroundedDraftComposer()
+    if not settings.llm_draft_composer_enabled:
+        return local_fallback, "local-structured-v1", "local-report-v1"
     if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
         return local_fallback, "local-structured-v1", "local-report-v1"
 
@@ -74,6 +76,21 @@ def build_llm_provider(settings: AppSettings):
         fallback=local_fallback,
     )
     return remote_provider, f"remote:{settings.llm_model}", "grounded-remote-report-v1"
+
+
+def build_rag_fusion_provider(settings: AppSettings):
+    if not settings.rag_llm_fusion_enabled:
+        return None
+    if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
+        return None
+    return OpenAICompatibleRagReportFusion(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        api_style=settings.llm_api_style,
+        timeout_seconds=settings.llm_timeout_seconds,
+        temperature=min(settings.llm_temperature, 0.2),
+    )
 
 
 def build_rag_retriever(settings: AppSettings):
@@ -117,6 +134,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     vector_store = InMemoryVectorStore()
     vector_store.index(repository.list_knowledge(reviewed_only=True))
     llm_provider, model_version, prompt_version = build_llm_provider(settings)
+    rag_fusion_provider = build_rag_fusion_provider(settings)
     rag_retriever = build_rag_retriever(settings)
 
     auth_service = AuthService(repository)
@@ -149,6 +167,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         case_service,
         indicator_service,
         PdfReportExporter(settings.report_export_dir),
+        rag_fusion_provider=rag_fusion_provider,
     )
     assistant_rule_service = ClinicianRuleService(
         repository=repository,

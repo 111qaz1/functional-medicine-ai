@@ -88,6 +88,7 @@ Docker Compose 相关环境变量：
 FM_RAG_MODEL_HOST_DIR=C:/RAG/models/bge-m3
 FM_RAG_MODEL_PATH=/models/bge-m3
 FM_RAG_LOCAL_FILES_ONLY=1
+FM_RAG_LLM_FUSION_ENABLED=1
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 ```
@@ -155,6 +156,42 @@ RAG 命中与既有 `knowledge_hits` 保持独立。推荐服务会构建安全 
 前端待审预览也会进行同类自然融合，避免医生在“审核后发布内容”中看到一份未增强的临时草稿。真实客户报告不显示 RAG 标记，也不单独列出“功能医学知识库（仅供参考）”。
 
 个性化营养素方案不做额外 RAG 扩写。该区块以产品目录、推荐规则、禁忌和人工审核为准；药企方后续提供的产品营养素介绍可作为独立产品文案来源。
+
+## 可选豆包融合层
+
+在配置了 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 且 `FM_RAG_LLM_FUSION_ENABLED=1` 时，审核发布路径会额外启用大模型辅助融合层。
+
+为避免豆包直接参与原有草案和基础报告生成，默认必须保持：
+
+```env
+FM_LLM_DRAFT_COMPOSER_ENABLED=0
+```
+
+该开关关闭时，即使容器中已经注入 `LLM_*`，推荐草案仍由本地规则 composer 生成；豆包只在规则报告已经生成之后，参与 RAG 片段的自然化融合。
+
+该层的定位是“医学编辑”，不是“推荐决策”。输入给模型的内容仅包括：
+
+- 已经由本地检索和 `rag_safety.py` 过滤后的 RAG 片段。
+- 当前客户报告中允许改写的四个区块条目。
+- 少量病例上下文，如症状、目标、缺失信息和红旗提示。
+
+模型只允许对以下四个区块返回“条目补丁”：
+
+- 总体健康画像
+- 关键指标
+- 生活方式干预重点
+- 复查与跟进建议
+
+后端合并前会再次校验：
+
+- 不接受新增或删除关键指标条目。
+- 不接受包含 `RAG`、教材来源、页码、chunk id、英文残片或内部标签的内容。
+- 不接受提及推荐产品名、目录外产品、药物服用、处方或治疗承诺的内容。
+- 不允许模型改写“个性化营养素方案”“风险提示”“重要提醒”等非准入区块。
+
+为降低超时概率，融合请求会禁用 Seed 模型深度思考、限制输出长度，并要求模型只返回真正需要改写的少数条目补丁，而不是返回完整报告或完整区块数组。建议 `LLM_TIMEOUT_SECONDS=90`，实际响应过慢时仍会自动回退。
+
+如果模型调用失败、返回格式不合规或安全校验失败，系统会自动回退到本地规则融合结果，并在 `RAG内部审查` 中记录 `rag_fusion:remote_unavailable:*`、`rag_fusion:remote_timeout:*`、`rag_fusion:remote_failed:*` 或 `rag_fusion:remote_rejected:*`。成功时会记录 `rag_fusion:remote_success` 和模型声明采用的片段引用，例如 `rag_fusion_used:关键指标:indicator_1`。
 
 ## 回归检查
 

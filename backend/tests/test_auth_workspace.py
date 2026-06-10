@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -19,7 +21,7 @@ from app.domain.models import (
     RuleScope,
     WorkspaceScope,
 )
-from app.main import create_app
+from app.main import allowed_cors_origins, create_app
 
 
 class AuthWorkspaceApiTests(unittest.TestCase):
@@ -49,6 +51,22 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.client_b.close()
         self.public_client.close()
         self.temp_dir.cleanup()
+
+    def test_cors_origins_follow_frontend_port_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "FRONTEND_PORT": "3100",
+                "FM_CORS_ALLOW_ORIGINS": "http://custom.local:5173/",
+            },
+        ):
+            origins = allowed_cors_origins()
+
+        self.assertIn("http://localhost:3000", origins)
+        self.assertIn("http://127.0.0.1:3000", origins)
+        self.assertIn("http://localhost:3100", origins)
+        self.assertIn("http://127.0.0.1:3100", origins)
+        self.assertIn("http://custom.local:5173", origins)
 
     def _register(self, client: TestClient, username: str):
         response = client.post(

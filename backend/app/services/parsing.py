@@ -14,6 +14,10 @@ def _clean_token(value: str | None) -> str:
     return re.sub(r"\s+", "", value).strip()
 
 
+def _canonicalize_exponent_units(value: str) -> str:
+    return value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+
+
 class LabNormalizationService:
     _ADMIN_METADATA_PREFIXES = (
         "医嘱名",
@@ -258,7 +262,8 @@ class LabNormalizationService:
             return None
         raw_name = self._extract_raw_name(line, marker)
         working = (
-            line.replace("—", "-")
+            _canonicalize_exponent_units(line)
+            .replace("—", "-")
             .replace("–", "-")
             .replace("~", "-")
             .replace("～", "-")
@@ -385,7 +390,7 @@ class LabNormalizationService:
         return any(normalized.startswith(prefix.replace(" ", "")) for prefix in self._ADMIN_METADATA_PREFIXES)
 
     def _looks_like_multiline_marker(self, line: str) -> bool:
-        stripped = line.strip()
+        stripped = _canonicalize_exponent_units(line.strip())
         if not stripped:
             return False
         if self._is_section_header(stripped):
@@ -441,7 +446,7 @@ class LabNormalizationService:
         }
 
     def _looks_like_unit_line(self, line: str) -> bool:
-        stripped = line.strip()
+        stripped = _canonicalize_exponent_units(line.strip())
         if not stripped:
             return False
         if re.search(r"[\u4e00-\u9fff]", stripped):
@@ -545,6 +550,7 @@ class LabNormalizationService:
         if not unit or not expected_units:
             return True
 
+        unit = _canonicalize_exponent_units(unit)
         comparable_unit = unit.replace("μ", "u").replace("µ", "u").lower()
         comparable_expected = {
             expected.replace("μ", "u").replace("µ", "u").lower()
@@ -565,6 +571,7 @@ class LabNormalizationService:
         factor = 1.0
 
         if unit and unit_factors:
+            unit = _canonicalize_exponent_units(unit)
             comparable_key = unit.replace("μ", "u").replace("µ", "u").lower()
             matched_factor = None
             for raw_unit, raw_factor in unit_factors.items():

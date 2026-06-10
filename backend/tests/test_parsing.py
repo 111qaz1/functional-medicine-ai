@@ -35,6 +35,22 @@ class ParsingServiceTests(unittest.TestCase):
         self.assertEqual(items[1].marker_code, "fasting_glucose")
         self.assertEqual(items[1].abnormal_flag, AbnormalFlag.high)
 
+    def test_normalizes_pdf_exponent_unit_symbols(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="1 白细胞 WBC 5.50 10∧9/L 3.5-9.5"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="2 红细胞 RBC 5.10 10∧12/L 4.3-5.8"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        by_code = {item.marker_code: item for item in items}
+
+        self.assertEqual(by_code["wbc"].value, 5.5)
+        self.assertEqual(by_code["wbc"].unit, "10^9/L")
+        self.assertEqual(by_code["wbc"].normalized_unit, "10^9/L")
+        self.assertEqual(by_code["wbc"].abnormal_flag, AbnormalFlag.normal)
+        self.assertEqual(by_code["rbc"].unit, "10^12/L")
+        self.assertEqual(by_code["rbc"].normalized_unit, "10^12/L")
+
     def test_normalizes_multiline_marker_blocks(self) -> None:
         spans = [
             SourceSpan(file_name="report.txt", page=1, line_number=1, snippet="血清丙氨酸氨基转移酶"),

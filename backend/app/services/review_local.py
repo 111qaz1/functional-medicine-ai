@@ -34,7 +34,7 @@ class ReviewService:
         *,
         reviewer_id: str,
         publishable_summary: str | None,
-        edits: dict[str, str],
+        edits: dict[str, Any],
     ) -> ReviewDecision:
         draft = self.repository.get_draft(draft_id)
         if not draft:
@@ -42,14 +42,19 @@ class ReviewService:
 
         case = self.case_service.get_case(draft.case_id)
         draft.status = DraftStatus.approved
+        effective_draft = self._draft_with_filtered_recommendations(draft, edits)
         report = self._normalize_customer_visible_report_text(
-            self._select_publishable_report(draft, case, publishable_summary)
+            self._remove_excluded_nutrition_lines(
+                self._select_publishable_report(effective_draft, case, publishable_summary),
+                draft,
+                edits,
+            )
         )
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
-            customer_name=case.customer_name,
+            customer_name=self._customer_display_name(case),
             report_text=report,
-            recommended_skus=draft.recommended_skus,
+            recommended_skus=effective_draft.recommended_skus,
         )
 
         audit_log = self.repository.add_audit_log(
@@ -92,28 +97,89 @@ class ReviewService:
 
         case = self.case_service.get_case(draft.case_id)
         report = review.publishable_report
-        if self._looks_like_internal_generated_report(report):
-            report = self._render_report(draft, case)
+        if self.is_stale_publishable_report(report):
+            report = self._render_report(self._draft_with_filtered_recommendations(draft, review.edits), case)
+        report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
         report = self._normalize_customer_visible_report_text(report)
         review.publishable_report = report
+        effective_draft = self._draft_with_filtered_recommendations(draft, review.edits)
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
-            customer_name=case.customer_name,
+            customer_name=self._customer_display_name(case),
             report_text=report,
-            recommended_skus=draft.recommended_skus,
+            recommended_skus=effective_draft.recommended_skus,
         )
         review.pdf_report_path = str(pdf_path)
         review.pdf_report_filename = pdf_path.name
         self.repository.save_review_decision(review)
         return pdf_path, pdf_path.name
 
+    def _excluded_sku_ids(self, edits: dict[str, Any] | None) -> set[str]:
+        if not isinstance(edits, dict):
+            return set()
+        raw_value = edits.get("excluded_sku_ids") or edits.get("removed_sku_ids") or []
+        if isinstance(raw_value, str):
+            raw_items = [raw_value]
+        elif isinstance(raw_value, list):
+            raw_items = raw_value
+        else:
+            return set()
+        return {str(item).strip() for item in raw_items if str(item).strip()}
+
+    def _draft_with_filtered_recommendations(self, draft, edits: dict[str, Any] | None):
+        excluded_ids = self._excluded_sku_ids(edits)
+        if not excluded_ids:
+            return draft
+        recommended_skus = [
+            sku for sku in getattr(draft, "recommended_skus", []) if getattr(sku, "sku_id", "") not in excluded_ids
+        ]
+        return draft.model_copy(update={"recommended_skus": recommended_skus})
+
+    def _remove_excluded_nutrition_lines(self, report: str, draft, edits: dict[str, Any] | None) -> str:
+        excluded_ids = self._excluded_sku_ids(edits)
+        if not report or not excluded_ids:
+            return report
+
+        excluded_names = {
+            getattr(sku, "display_name", "")
+            for sku in getattr(draft, "recommended_skus", [])
+            if getattr(sku, "sku_id", "") in excluded_ids and getattr(sku, "display_name", "")
+        }
+        if not excluded_names:
+            return report
+
+        nutrition_titles = {"营养素推荐", "个性化营养素方案", "首月营养素干预方案"}
+        lines: list[str] = []
+        in_nutrition_section = False
+        for line in report.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                in_nutrition_section = stripped[3:].strip() in nutrition_titles
+            if in_nutrition_section and any(name and name in stripped for name in excluded_names):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
     def _select_publishable_report(self, draft, case, publishable_summary: str | None) -> str:
         if publishable_summary and publishable_summary.strip():
+            if self._looks_like_legacy_customer_report(publishable_summary):
+                return self._render_report(draft, case)
             if not self._looks_like_internal_generated_report(publishable_summary) and not self._looks_like_corrupted_publishable_report(publishable_summary):
                 report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
                 report = self._ensure_report_nutrition_safety(report, draft)
                 return self._ensure_report_rag_enhancement(report, draft, case)
         return self._render_report(draft, case)
+
+    def is_stale_publishable_report(self, report_text: str | None) -> bool:
+        return (
+            self._looks_like_internal_generated_report(report_text)
+            or self._looks_like_legacy_customer_report(report_text)
+            or self._looks_like_unstructured_customer_report(report_text)
+        )
+
+    def _customer_display_name(self, case) -> str:
+        current_name = (case.customer_name or "").strip()
+        return current_name or "客户"
 
     def _looks_like_internal_generated_report(self, report_text: str | None) -> bool:
         if not report_text:
@@ -145,6 +211,41 @@ class ReviewService:
             return True
         return False
 
+    def _looks_like_legacy_customer_report(self, report_text: str | None) -> bool:
+        if not report_text:
+            return False
+        text = str(report_text)
+        legacy_markers = (
+            "# 功能医学营养与生活方式建议",
+            "## 总体健康画像",
+            "## 关键指标",
+            "## 个性化营养素方案",
+            "## 生活方式干预重点",
+            "## 复查与跟进建议",
+        )
+        new_markers = (
+            "# 功能医学综合分析与首月干预方案",
+            "## 核心结论与健康画像",
+            "## 异常指标汇总",
+            "## 功能医学系统失衡分析",
+            "## 生活方式干预处方",
+            "## 首月营养素干预方案",
+        )
+        if any(marker in text for marker in new_markers):
+            return False
+        return sum(1 for marker in legacy_markers if marker in text) >= 2
+
+    def _looks_like_unstructured_customer_report(self, report_text: str | None) -> bool:
+        if not report_text:
+            return False
+        text = str(report_text)
+        if "# 功能医学综合分析与首月干预方案" not in text:
+            return False
+        return (
+            ("## 功能医学系统失衡分析" in text and "### 1." not in text)
+            or ("## 生活方式干预处方" in text and "### A." not in text)
+        )
+
     def _remove_customer_hidden_rag_labels(self, report_text: str) -> str:
         cleaned = report_text
         hidden_markers = (
@@ -169,7 +270,7 @@ class ReviewService:
                 if normalized_lines and normalized_lines[-1] != "":
                     normalized_lines.append("")
                 continue
-            if line.startswith(("# ", "## ", "- ")):
+            if line.startswith(("# ", "## ", "### ", "- ")):
                 normalized_lines.append(line)
                 continue
             if normalized_lines and normalized_lines[-1].startswith("- "):
@@ -196,7 +297,7 @@ class ReviewService:
 
     def _normalize_report_line(self, text: str) -> str:
         normalized = self._normalize_report_inline_spacing(text)
-        if not normalized or normalized.startswith(("# ", "## ")):
+        if not normalized or normalized.startswith(("# ", "## ", "### ")):
             return normalized
         prefix = "- " if normalized.startswith("- ") else ""
         content = normalized[2:].strip() if prefix else normalized
@@ -237,7 +338,7 @@ class ReviewService:
     def _ensure_report_nutrition_safety(self, report_text: str, draft) -> str:
         lines = []
         in_nutrition_section = False
-        nutrition_titles = {"个性化营养素方案", "营养素推荐", "推荐营养素"}
+        nutrition_titles = {"首月营养素干预方案", "个性化营养素方案", "营养素推荐", "推荐营养素"}
 
         for raw_line in report_text.splitlines():
             line = raw_line
@@ -271,7 +372,9 @@ class ReviewService:
 
         for rag_item in self._customerize_items(sections.get("RAG总体健康画像", []))[:4]:
             clause = self._rag_customer_clause(rag_item, max_len=140, purpose="health")
-            updated = self._append_clause_to_report_section_item(result, "总体健康画像", clause, item_index=0)
+            updated = self._append_clause_to_report_section_item(result, "核心结论与健康画像", clause, item_index=0)
+            if updated == result:
+                updated = self._append_clause_to_report_section_item(result, "总体健康画像", clause, item_index=0)
             if updated != result:
                 result = updated
                 break
@@ -284,12 +387,16 @@ class ReviewService:
             if row_index is None or row_index in used_indicator_rows:
                 continue
             clause = self._rag_customer_clause(rag_item, max_len=120, purpose="indicator")
-            updated = self._append_clause_to_report_section_item(result, "关键指标", clause, item_index=row_index)
+            updated = self._append_clause_to_report_section_item(result, "异常指标汇总", clause, item_index=row_index)
+            if updated == result:
+                updated = self._append_clause_to_report_section_item(result, "关键指标", clause, item_index=row_index)
             if updated != result:
                 used_indicator_rows.add(row_index)
                 result = updated
 
-        lifestyle_items = self._extract_report_section_items(result, "生活方式干预重点")
+        lifestyle_items = self._extract_report_section_items(result, "生活方式干预处方")
+        if not lifestyle_items:
+            lifestyle_items = self._extract_report_section_items(result, "生活方式干预重点")
         used_lifestyle_rows: set[int] = set()
         for rag_item in self._customerize_items(sections.get("RAG生活方式干预", []))[:5]:
             if not self._is_lifestyle_rag_item(rag_item):
@@ -300,12 +407,16 @@ class ReviewService:
             if row_index is None or row_index in used_lifestyle_rows:
                 continue
             clause = self._rag_customer_clause(rag_item, max_len=115, purpose="lifestyle")
-            updated = self._append_clause_to_report_section_item(result, "生活方式干预重点", clause, item_index=row_index)
+            updated = self._append_clause_to_report_section_item(result, "生活方式干预处方", clause, item_index=row_index)
+            if updated == result:
+                updated = self._append_clause_to_report_section_item(result, "生活方式干预重点", clause, item_index=row_index)
             if updated != result:
                 used_lifestyle_rows.add(row_index)
                 result = updated
 
-        follow_items = self._extract_report_section_items(result, "复查与跟进建议")
+        follow_items = self._extract_report_section_items(result, "后续检查建议")
+        if not follow_items:
+            follow_items = self._extract_report_section_items(result, "复查与跟进建议")
         used_follow_rows: set[int] = set()
         for rag_item in self._customerize_items(sections.get("RAG复查建议", []))[:5]:
             row_index = self._best_follow_up_row(rag_item, follow_items)
@@ -314,7 +425,9 @@ class ReviewService:
             if row_index is None or row_index in used_follow_rows:
                 continue
             clause = self._rag_customer_clause(rag_item, max_len=105, purpose="follow_up")
-            updated = self._append_clause_to_report_section_item(result, "复查与跟进建议", clause, item_index=row_index)
+            updated = self._append_clause_to_report_section_item(result, "后续检查建议", clause, item_index=row_index)
+            if updated == result:
+                updated = self._append_clause_to_report_section_item(result, "复查与跟进建议", clause, item_index=row_index)
             if updated != result:
                 used_follow_rows.add(row_index)
                 result = updated
@@ -380,16 +493,16 @@ class ReviewService:
     def _llm_fusion_target_sections(self, report_text: str) -> dict[str, list[str]]:
         return {
             title: self._extract_report_section_items(report_text, title)
-            for title in ("总体健康画像", "关键指标", "生活方式干预重点", "复查与跟进建议")
+            for title in ("核心结论与健康画像", "异常指标汇总", "生活方式干预处方", "后续检查建议")
         }
 
     def _llm_fusion_rag_context(self, draft) -> dict[str, list[dict[str, str]]]:
         sections = draft.report_sections or {}
         source_map = {
-            "总体健康画像": ("health", "RAG总体健康画像"),
-            "关键指标": ("indicator", "RAG异常指标解释"),
-            "生活方式干预重点": ("lifestyle", "RAG生活方式干预"),
-            "复查与跟进建议": ("followup", "RAG复查建议"),
+            "核心结论与健康画像": ("health", "RAG总体健康画像"),
+            "异常指标汇总": ("indicator", "RAG异常指标解释"),
+            "生活方式干预处方": ("lifestyle", "RAG生活方式干预"),
+            "后续检查建议": ("followup", "RAG复查建议"),
         }
         context: dict[str, list[dict[str, str]]] = {}
         for title, (prefix, source_key) in source_map.items():
@@ -457,7 +570,7 @@ class ReviewService:
                 if self._llm_text_quality_reason(item) or self._section_item_has_forbidden_llm_content(item, product_names):
                     section_valid = False
                     break
-                if title == "关键指标":
+                if title in {"关键指标", "异常指标汇总"}:
                     original_name = original_items[raw_index].split("：", 1)[0].strip()
                     if original_name and original_name not in item:
                         section_valid = False
@@ -506,7 +619,7 @@ class ReviewService:
                 if self._llm_text_quality_reason(item) or self._section_item_has_forbidden_llm_content(item, product_names):
                     section_valid = False
                     break
-                if title == "关键指标":
+                if title in {"关键指标", "异常指标汇总"}:
                     original_name = original_items[index].split("：", 1)[0].strip()
                     if original_name and original_name not in item:
                         section_valid = False
@@ -698,18 +811,21 @@ class ReviewService:
         return None
 
     def _render_report(self, draft, case) -> str:
-        lines = ["# 功能医学营养与生活方式建议", ""]
+        lines = ["# 功能医学综合分析与首月干预方案", ""]
         sections = draft.report_sections or {}
         abnormal_indicators = self._abnormal_indicators(case)
         nutrition_plan = self._nutrition_plan_with_safety(
             draft,
-            sections.get("个性化营养素方案") or sections.get("营养素推荐"),
+            sections.get("首月营养素干预方案") or sections.get("个性化营养素方案") or sections.get("营养素推荐"),
         )
         nutrition_plan = list(dict.fromkeys(nutrition_plan))
         follow_up = self._customer_follow_up(sections)
         missing_info = self._customerize_items(sections.get("待确认项", draft.missing_info))
+        draft_health = self._customerize_items(
+            sections.get("核心结论与健康画像") or sections.get("总体健康画像")
+        )
         health_portrait = self._fuse_rag_into_health_portrait(
-            self._customer_health_portrait(case, abnormal_indicators),
+            draft_health[:4] or self._customer_health_portrait(case, abnormal_indicators),
             self._customerize_items(sections.get("RAG总体健康画像", [])),
         )
         key_indicators = self._fuse_rag_into_key_indicators(
@@ -717,14 +833,21 @@ class ReviewService:
             abnormal_indicators,
             self._customerize_items(sections.get("RAG异常指标解释", [])),
         )
+        system_analysis = self._customerize_items(
+            sections.get("功能医学系统失衡分析") or sections.get("系统功能深度分析")
+        )
+        system_analysis = self._structure_system_analysis(system_analysis)
+        supplement_adjustments = self._customerize_items(sections.get("现有补充剂调整建议", []))
 
         ordered_sections = [
-            ("总体健康画像", health_portrait),
-            ("关键指标", key_indicators),
+            ("核心结论与健康画像", health_portrait),
+            ("异常指标汇总", key_indicators),
             ("风险提示", self._customerize_items(sections.get("风险提示", draft.red_flags))),
-            ("个性化营养素方案", self._customerize_items(nutrition_plan)),
-            ("生活方式干预重点", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
-            ("复查与跟进建议", follow_up),
+            ("功能医学系统失衡分析", system_analysis),
+            ("生活方式干预处方", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
+            ("后续检查建议", follow_up),
+            ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
+            ("现有补充剂调整建议", supplement_adjustments),
             ("需要补充确认", missing_info),
             ("重要提醒", self._customer_notice()),
         ]
@@ -738,7 +861,10 @@ class ReviewService:
                 continue
             lines.append(f"## {title}")
             for item in items:
-                lines.append(f"- {item}")
+                if self._is_report_subheading(item):
+                    lines.append(item if item.startswith("### ") else f"### {item}")
+                else:
+                    lines.append(f"- {item}")
             lines.append("")
 
         report = "\n".join(lines)
@@ -750,6 +876,31 @@ class ReviewService:
         if isinstance(content, str):
             return [content.strip()] if content.strip() else []
         return [str(item).strip() for item in content if str(item).strip()]
+
+    def _is_report_subheading(self, item: str) -> bool:
+        return str(item or "").strip().startswith("### ")
+
+    def _structure_system_analysis(self, items: list[str]) -> list[str]:
+        if not items or any(self._is_report_subheading(item) for item in items):
+            return items
+        structured: list[str] = []
+        heading_index = 1
+        for raw_item in items[:8]:
+            item = str(raw_item or "").strip()
+            if not item:
+                continue
+            if "：" in item:
+                title, body = item.split("：", 1)
+                title = title.strip()
+                body = body.strip()
+                if title and len(title) <= 34:
+                    structured.append(f"### {heading_index}. {title}")
+                    heading_index += 1
+                    if body:
+                        structured.append(body)
+                    continue
+            structured.append(item)
+        return structured or items
 
     def _abnormal_indicators(self, case) -> list:
         indicators = []
@@ -947,11 +1098,20 @@ class ReviewService:
     def _customer_lifestyle_focus(self, case, draft, abnormal_indicators: list) -> list[str]:
         sections = draft.report_sections or {}
         protocol_items = self._protocol_lifestyle_items(case, abnormal_indicators)
-        draft_items = self._customerize_items(sections.get("生活方式干预重点", draft.lifestyle_actions))
+        draft_items = self._customerize_items(
+            sections.get("生活方式干预处方") or sections.get("生活方式干预重点") or draft.lifestyle_actions
+        )
         rag_items = self._customerize_items(sections.get("RAG生活方式干预", []))
-        combined = list(dict.fromkeys(protocol_items[:10] + draft_items + protocol_items[10:]))
+        if sections.get("生活方式干预处方"):
+            if any(self._is_report_subheading(item) for item in draft_items):
+                combined = list(dict.fromkeys(draft_items + ["### E. 个性化执行补充"] + protocol_items))
+            else:
+                combined = self._structure_lifestyle_items(list(dict.fromkeys(draft_items + protocol_items)))
+        else:
+            combined = list(dict.fromkeys(protocol_items[:10] + draft_items + protocol_items[10:]))
+            combined = self._structure_lifestyle_items(combined)
         combined = self._fuse_rag_into_lifestyle(combined, rag_items)
-        return combined[:14]
+        return combined[:18]
 
     def _fuse_rag_into_lifestyle(self, lifestyle_items: list[str], rag_items: list[str]) -> list[str]:
         items = list(lifestyle_items)
@@ -961,7 +1121,7 @@ class ReviewService:
                 continue
             row_index = self._best_lifestyle_row(rag_item, items)
             if row_index is None and items:
-                row_index = 0
+                row_index = self._first_non_subheading_index(items)
             if row_index is None or row_index in used_rows:
                 continue
             clause = self._rag_customer_clause(rag_item, max_len=115, purpose="lifestyle")
@@ -1002,9 +1162,56 @@ class ReviewService:
         for preferred in row_preferences:
             preferred_normalized = self._normalize_text(preferred)
             for index, item in enumerate(lifestyle_items):
+                if self._is_report_subheading(item):
+                    continue
                 if preferred_normalized in self._normalize_text(item):
                     return index
         return None
+
+    def _first_non_subheading_index(self, items: list[str]) -> int | None:
+        for index, item in enumerate(items):
+            if not self._is_report_subheading(item):
+                return index
+        return None
+
+    def _structure_lifestyle_items(self, items: list[str]) -> list[str]:
+        if not items or any(self._is_report_subheading(item) for item in items):
+            return items
+
+        buckets = {
+            "diet": [],
+            "movement": [],
+            "sleep": [],
+            "stress": [],
+            "other": [],
+        }
+        for item in items:
+            normalized = self._normalize_text(item)
+            if any(term in normalized for term in ("饮食", "餐", "碳水", "蛋白", "蔬菜", "脂肪", "肠道", "食物", "水分", "甲状腺友好", "肝胆")):
+                buckets["diet"].append(item)
+            elif any(term in normalized for term in ("运动", "活动", "步行", "走路", "抗阻", "久坐", "骑行")):
+                buckets["movement"].append(item)
+            elif any(term in normalized for term in ("睡眠", "作息", "咖啡因", "起床", "屏幕")):
+                buckets["sleep"].append(item)
+            elif any(term in normalized for term in ("压力", "呼吸", "冥想", "熬夜", "酒精", "香烟", "暴露", "安全边界", "药物")):
+                buckets["stress"].append(item)
+            else:
+                buckets["other"].append(item)
+
+        grouped = [
+            ("### A. 饮食干预：移除-替代-重建", buckets["diet"]),
+            ("### B. 运动处方：低冲击代谢激活", buckets["movement"]),
+            ("### C. 睡眠与节律重建", buckets["sleep"]),
+            ("### D. 压力与解毒负担管理", buckets["stress"]),
+            ("### E. 个性化执行补充", buckets["other"]),
+        ]
+        structured: list[str] = []
+        for heading, bucket_items in grouped:
+            if not bucket_items:
+                continue
+            structured.append(heading)
+            structured.extend(bucket_items)
+        return structured or items
 
     def _protocol_lifestyle_items(self, case, abnormal_indicators: list) -> list[str]:
         questionnaire = case.questionnaire
@@ -1059,7 +1266,7 @@ class ReviewService:
         return list(dict.fromkeys(items))
 
     def _customer_follow_up(self, sections: dict) -> list[str]:
-        test_items = self._customerize_items(sections.get("功能医学检测建议", []))
+        test_items = self._customerize_items(sections.get("后续检查建议") or sections.get("功能医学检测建议", []))
         follow_items = self._customerize_items(sections.get("随访计划", []))
         rag_items = self._customerize_items(sections.get("RAG复查建议", []))
         items = test_items[:4] + follow_items[:3]

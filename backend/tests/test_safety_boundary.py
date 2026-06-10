@@ -211,12 +211,12 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn(CUSTOMER_RAG_PREFIX, review.publishable_report)
         self.assertIn("胰岛素抵抗", review.publishable_report)
         self.assertIn("睡眠节律和压力恢复", review.publishable_report)
-        self.assertIn("## 总体健康画像", review.publishable_report)
-        self.assertIn("## 关键指标", review.publishable_report)
-        self.assertIn("## 个性化营养素方案", review.publishable_report)
-        self.assertIn("## 生活方式干预重点", review.publishable_report)
-        self.assertIn("## 复查与跟进建议", review.publishable_report)
-        nutrition_block = review.publishable_report.split("## 个性化营养素方案", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("## 核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 异常指标汇总", review.publishable_report)
+        self.assertIn("## 首月营养素干预方案", review.publishable_report)
+        self.assertIn("## 生活方式干预处方", review.publishable_report)
+        self.assertIn("## 后续检查建议", review.publishable_report)
+        nutrition_block = review.publishable_report.split("## 首月营养素干预方案", 1)[1].split("\n## ", 1)[0]
         self.assertNotIn(CUSTOMER_RAG_PREFIX, nutrition_block)
         self.assertNotIn("胰岛素抵抗", nutrition_block)
 
@@ -299,14 +299,14 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         ]
         self.container.repository.save_draft(draft)
         manual_report = (
-            "# 功能医学营养与生活方式建议\n\n"
-            "## 总体健康画像\n"
+            "# 功能医学综合分析与首月干预方案\n\n"
+            "## 核心结论与健康画像\n"
             "- 从这次报告看，当前更值得优先关注的是空腹血糖和炎症负担。\n\n"
-            "## 关键指标\n"
+            "## 异常指标汇总\n"
             "- 空腹血糖：6.2 mmol/L（需关注）。说明：提示血糖稳定性需要关注。\n\n"
-            "## 生活方式干预重点\n"
+            "## 生活方式干预处方\n"
             "- 睡眠修复：固定起床时间，并逐步减少久坐。\n\n"
-            "## 复查与跟进建议\n"
+            "## 后续检查建议\n"
             "- 8-12周后复查关键指标，并根据症状变化调整方案。\n"
         )
 
@@ -339,13 +339,13 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         fusion_provider = FakeRagFusionProvider(
             sections={
-                "总体健康画像": ["从这次报告看，当前重点是血糖和炎症负担；模型融合后把睡眠、压力和代谢恢复放在同一条主线观察。"],
-                "关键指标": ["空腹血糖：6.2 mmol/L（需关注）。说明：模型融合后提示需结合餐后波动、睡眠压力和复查趋势理解。"],
-                "生活方式干预重点": ["睡眠修复：模型融合后建议固定起床时间、减少久坐，并用饭后散步帮助血糖稳定。"],
-                "复查与跟进建议": ["8-12周后复查关键指标，模型融合后建议同步记录睡眠、压力、餐后反应和执行情况。"],
-                "个性化营养素方案": ["不允许模型改写这个区块。"],
+                "核心结论与健康画像": ["从这次报告看，当前重点是血糖和炎症负担；模型融合后把睡眠、压力和代谢恢复放在同一条主线观察。"],
+                "异常指标汇总": ["空腹血糖：6.2 mmol/L（需关注）。说明：模型融合后提示需结合餐后波动、睡眠压力和复查趋势理解。"],
+                "生活方式干预处方": ["睡眠修复：模型融合后建议固定起床时间、减少久坐，并用饭后散步帮助血糖稳定。"],
+                "后续检查建议": ["8-12周后复查关键指标，模型融合后建议同步记录睡眠、压力、餐后反应和执行情况。"],
+                "首月营养素干预方案": ["不允许模型改写这个区块。"],
             },
-            used_rag_refs={"关键指标": ["indicator_1"], "生活方式干预重点": ["lifestyle_1"]},
+            used_rag_refs={"异常指标汇总": ["indicator_1"], "生活方式干预处方": ["lifestyle_1"]},
         )
         self.container.review_service.rag_fusion_provider = fusion_provider
         case = self._prepare_case(
@@ -361,16 +361,16 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         manual_report = (
-            "# 功能医学营养与生活方式建议\n\n"
-            "## 总体健康画像\n"
+            "# 功能医学综合分析与首月干预方案\n\n"
+            "## 核心结论与健康画像\n"
             "- 从这次报告看，当前更值得优先关注的是空腹血糖和炎症负担。\n\n"
-            "## 关键指标\n"
+            "## 异常指标汇总\n"
             "- 空腹血糖：6.2 mmol/L（需关注）。说明：提示血糖稳定性需要关注。\n\n"
-            "## 个性化营养素方案\n"
+            "## 首月营养素干预方案\n"
             "- 原营养素方案必须保持不由RAG融合模型改写。\n\n"
-            "## 生活方式干预重点\n"
+            "## 生活方式干预处方\n"
             "- 睡眠修复：固定起床时间，并逐步减少久坐。\n\n"
-            "## 复查与跟进建议\n"
+            "## 后续检查建议\n"
             "- 8-12周后复查关键指标，并根据症状变化调整方案。\n"
         )
 
@@ -389,8 +389,8 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("功能医学知识库", review.publishable_report)
         saved_draft = self.container.repository.get_draft(draft.id)
         self.assertIn("rag_fusion:remote_success", saved_draft.report_sections["RAG内部审查"])
-        self.assertIn("rag_fusion_used:关键指标:indicator_1", saved_draft.report_sections["RAG内部审查"])
-        self.assertNotIn("个性化营养素方案", fusion_provider.last_payload["target_sections"])
+        self.assertIn("rag_fusion_used:异常指标汇总:indicator_1", saved_draft.report_sections["RAG内部审查"])
+        self.assertNotIn("首月营养素干预方案", fusion_provider.last_payload["target_sections"])
 
     def test_optional_remote_rag_fusion_accepts_compact_section_patches(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
@@ -404,20 +404,20 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         fusion_provider = FakeRagFusionProvider(
             section_patches={
-                "关键指标": [
+                "异常指标汇总": [
                     {
                         "index": 0,
                         "text": "空腹血糖: 6.2 mmol/L (需关注).\n- 说明: 结合知识库观点，可把空腹值、餐后反应和复查趋势放在一起理解",
                     }
                 ],
-                "生活方式干预重点": [
+                "生活方式干预处方": [
                     {
                         "index": 0,
                         "text": "1) 睡眠修复: 固定起床时间, 并把睡眠、饭后活动和压力恢复作为同一阶段的执行重点",
                     }
                 ],
             },
-            used_rag_refs={"关键指标": ["indicator_1"]},
+            used_rag_refs={"异常指标汇总": ["indicator_1"]},
         )
         self.container.review_service.rag_fusion_provider = fusion_provider
         case = self._prepare_case(
@@ -433,16 +433,16 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         manual_report = (
-            "# 功能医学营养与生活方式建议\n\n"
-            "## 总体健康画像\n"
+            "# 功能医学综合分析与首月干预方案\n\n"
+            "## 核心结论与健康画像\n"
             "- 从这次报告看，当前更值得优先关注的是空腹血糖和炎症负担。\n\n"
-            "## 关键指标\n"
+            "## 异常指标汇总\n"
             "- 空腹血糖：6.2 mmol/L（需关注）。说明：提示血糖稳定性需要关注。\n\n"
-            "## 个性化营养素方案\n"
+            "## 首月营养素干预方案\n"
             "- 原营养素方案必须保持不由RAG融合模型改写。\n\n"
-            "## 生活方式干预重点\n"
+            "## 生活方式干预处方\n"
             "- 睡眠修复：固定起床时间，并逐步减少久坐。\n\n"
-            "## 复查与跟进建议\n"
+            "## 后续检查建议\n"
             "- 8-12周后复查关键指标，并根据症状变化调整方案。\n"
         )
 
@@ -465,15 +465,15 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
     def test_customer_visible_report_collapses_soft_line_breaks(self) -> None:
         raw_report = (
-            "# 功能医学营养与生活方式建议\n\n"
-            "## 生活方式干预重点\n"
+            "# 功能医学综合分析与首月干预方案\n\n"
+            "## 生活方式干预处方\n"
             "- 压力管理：每天安排2 \n"
             "次5分钟呼吸练习或冥想，也可以用散步、哼唱、伸展来帮助身体从紧绷状态切换出来。\n\n"
-            "## 关键指标\n"
+            "## 异常指标汇总\n"
             "- 血清镁：要注意血清镁仅占体内总镁的1 \n"
             "%，即使细胞内已经存在镁缺乏，血清镁也可能显示正常。\n"
             "- 蛋白质代谢：TH 可无特异 性地加强基础蛋白质合成\n\n"
-            "## 个性化营养素方案\n"
+            "## 首月营养素干预方案\n"
             "- 甲状腺支持：每日 1粒，早餐后使用。；适用说明：结合 甲状腺支持、基础代谢支持 与本次资料提示，作 为当前阶段的建议。；注意/禁忌：涉及碘补充，建议结合甲状腺检查结果人工确认。；与甲状腺素类药物需 错开使用。；甲状腺亢进、碘限制人群需顾问确认\n"
         )
 
@@ -503,10 +503,10 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         self.container.review_service.rag_fusion_provider = FakeRagFusionProvider(
             sections={
-                "总体健康画像": ["功能医学知识库（仅供参考）：模型试图泄露内部标签。"],
-                "关键指标": ["空腹血糖：6.2 mmol/L（需关注）。说明：RAG 内部标签泄露。"],
-                "生活方式干预重点": ["睡眠修复：固定起床时间。"],
-                "复查与跟进建议": ["8-12周后复查关键指标。"],
+                "核心结论与健康画像": ["功能医学知识库（仅供参考）：模型试图泄露内部标签。"],
+                "异常指标汇总": ["空腹血糖：6.2 mmol/L（需关注）。说明：RAG 内部标签泄露。"],
+                "生活方式干预处方": ["睡眠修复：固定起床时间。"],
+                "后续检查建议": ["8-12周后复查关键指标。"],
             }
         )
         case = self._prepare_case(

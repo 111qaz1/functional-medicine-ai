@@ -160,6 +160,57 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
         self.assertEqual(questionnaire.msq_system_scores.get("能量/活动"), 1)
         self.assertIn("甲减", questionnaire.goals)
 
+    def test_imports_filled_msq_pdf_text_into_questionnaire(self) -> None:
+        service = QuestionnaireImportService()
+        pdf_text = """
+        功能医学健康问卷 姓名：_ 王堃 性别：_ 男 年龄：_ 31
+        第一部分：健康状况与维护 1. 您最近一次体检查出的主要问题？ 桥本氏甲状腺炎，甲减，窦性心律Y
+        2. 您是否被诊断出患有某种慢性疾病？ □ 是 Y 否
+        第二部分：家族病史 目前正患有何种慢性疾病？ 曾经患有何种慢性疾病？ 曾经接受过何种手术？
+        您本人 甲减 无 无 您的父亲 糖尿病、高血压Y 糖尿病、高血压、脑卒中 无 您的母亲 阑尾炎 无 无
+        第三部分：生活和饮食习惯 以下可以复选
+        1. 您的睡眠质量如何？ □ 很好 □ 多梦 Y早醒 Y 入睡困难 □ 容易入睡，但不深睡 原因:
+        2. 您一般什么时间上床睡觉？ 24点 3. 您一般早上什么时间醒来？ 7点半 健康信息调查问卷 第一页
+        第三部分：生活和饮食习惯（续）
+        4. 您日常三餐主要食用？ Y 以米饭为主食 占比10% 以面食为主食 占比10% Y 猪肉、牛肉、羊肉等（红肉）占比30% Y 鱼类和海鲜 占比5%
+        5. 您能够规律地吃早餐吗？ □ 我通常不吃早餐 Y 我有时候不吃早饭，或直接和午餐一起吃 □ 我每天在家吃早餐 Y我通常在外面买早餐吃
+        6.常饮用： Y茶 每日 2 杯 Y 咖啡 每日 2 杯
+        7. 您喝酒吗？Y 是 □ 否 年数：8 年 8. 您平时饮酒常饮用哪种酒？ 白酒 9. 您每次喝酒的习惯？ □ 少于半杯 □半杯到一杯 □ 二杯到三杯 Y 三杯到四杯 10. 每周外出就餐次数？5次
+        11. 经常使用快餐或加工食物？ □ 是Y 否 12. 对食物添加物及防腐剂敏感？ □ 是 Y否
+        第四部分：营养品补充 1.您有补充营养食品吗？Y 是 □ 否 如有，请具体说明品种和频率
+        □ 鱼油 一日一次 □ 维生素A 一日一次 □ 镁 一日一次 □ 维生素D 一日一次 □ 复合多种维生素B 一日一次
+        第五部分：工作 1. 您在工作日每天工作小时数？ ＿10＿ 小时/日 2. 您每天使用电脑时间多长？ 1小时/日
+        第六部分：环境因素 5. 长途旅行后会有时差症状？Y 是 □ 否
+        第七部分：运动状况 1. 有运动习惯？Y 是 □ 否 6. 目前的体能状况限制了体能活动 Y 是 □ 否
+        第八部分：男性/女性状况
+        第九部分：症状评估
+        级别 序号 症状描述 从来没有 偶尔 轻微 中等 严重 0 1 2 3 4
+        2 犹豫不决、难下决定 □ □ Y □ □ 头/脑力方面 3 记忆力变差 □ Y □ □ □
+        2 腹胀/胀气 □ Y □ □ □ 消化功能 5 便秘 □ Y □ □ □ 6 腹泻 □ Y □ □ □
+        6 头发/皮肤 痤疮 (青春痘) □ □ Y □ □ 1 容易疲劳虚弱，没精神 □ □ Y □ □
+        3 全身肌肉无力、肌肉酸痛 □ Y □ □ □ 4 游走性非发炎之关节痛 □ Y □ □ □ 5 睡眠障碍（失眠或嗜睡） □ Y □ □ □
+        """
+        service._extract_pdf_text = lambda content: pdf_text  # type: ignore[method-assign]
+
+        questionnaire = service.parse(filename="MSQ--test.pdf", content_type="application/pdf", content=b"%PDF")
+
+        self.assertEqual(questionnaire.age, 31)
+        self.assertEqual(questionnaire.sex, "male")
+        self.assertIn("桥本氏甲状腺炎", questionnaire.known_conditions)
+        self.assertIn("父亲：糖尿病、高血压、脑卒中", questionnaire.family_history)
+        self.assertEqual(questionnaire.sleep_hours, 7.5)
+        self.assertIn("早醒", questionnaire.sleep_quality or "")
+        self.assertEqual(questionnaire.red_meat_intake_ratio, "30%")
+        self.assertEqual(questionnaire.seafood_intake_ratio, "5%")
+        self.assertEqual(questionnaire.dining_out_frequency, "每周5次")
+        self.assertIn("鱼油（一日一次）", questionnaire.supplement_use or "")
+        self.assertEqual(questionnaire.exercise_frequency, "有运动习惯")
+        self.assertIn("便秘", questionnaire.symptoms)
+        self.assertEqual(questionnaire.bowel_habits, "便秘、腹泻")
+        self.assertEqual(questionnaire.msq_system_scores.get("头部"), 2)
+        self.assertEqual(questionnaire.msq_system_scores.get("消化道"), 1)
+        self.assertEqual(questionnaire.msq_system_scores.get("皮肤"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

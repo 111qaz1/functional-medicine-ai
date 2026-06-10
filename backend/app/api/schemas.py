@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +43,7 @@ class GenerateDraftRequest(BaseModel):
 class ApproveDraftRequest(BaseModel):
     reviewer_id: str
     publishable_summary: str | None = None
-    edits: dict[str, str] = Field(default_factory=dict)
+    edits: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParsingReviewFileRequest(BaseModel):

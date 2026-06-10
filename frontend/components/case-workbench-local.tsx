@@ -25,6 +25,7 @@ import {
   CaseDetailResponse,
   CaseIndicator,
   ClinicianRule,
+  DraftRecommendationItem,
   DoctorAccount,
   ExtractedLabItem,
   ManualIndicatorInput,
@@ -336,11 +337,11 @@ function publicSafetyWarnings(warnings: string[]) {
   ).slice(0, 3);
 }
 
-function appendNutritionSafety(item: string, draft: NonNullable<CaseDetailResponse["latest_draft"]>) {
+function appendNutritionSafety(item: string, recommendedSkus: DraftRecommendationItem[]) {
   if (item.includes("注意/禁忌")) {
     return item;
   }
-  const matchedSku = draft.recommended_skus.find((sku) => item.includes(sku.display_name));
+  const matchedSku = recommendedSkus.find((sku) => item.includes(sku.display_name));
   if (!matchedSku) {
     return item;
   }
@@ -349,6 +350,29 @@ function appendNutritionSafety(item: string, draft: NonNullable<CaseDetailRespon
     return item;
   }
   return `${item.replace(/[ 。；]+$/g, "")}；注意/禁忌：${safety.join("；")}`;
+}
+
+function visibleRecommendedSkus(draft: NonNullable<CaseDetailResponse["latest_draft"]>, excludedSkuIds: string[]) {
+  const excluded = new Set(excludedSkuIds);
+  return draft.recommended_skus.filter((sku) => !excluded.has(sku.sku_id));
+}
+
+function removedRecommendedSkuNames(
+  draft: NonNullable<CaseDetailResponse["latest_draft"]>,
+  excludedSkuIds: string[]
+) {
+  const excluded = new Set(excludedSkuIds);
+  return draft.recommended_skus
+    .filter((sku) => excluded.has(sku.sku_id))
+    .map((sku) => sku.display_name)
+    .filter(Boolean);
+}
+
+function withoutRemovedNutritionItems(items: string[], removedNames: string[]) {
+  if (removedNames.length === 0) {
+    return items;
+  }
+  return items.filter((item) => !removedNames.some((name) => name && item.includes(name)));
 }
 
 function hasAny(text: string, tokens: string[]) {
@@ -472,16 +496,25 @@ function buildCustomerKeyIndicators(payload: CaseDetailResponse) {
   return appendClauseToBestItem(items, ragClause);
 }
 
-function buildNutritionPlan(payload: CaseDetailResponse) {
+function buildNutritionPlan(payload: CaseDetailResponse, excludedSkuIds: string[] = []) {
   const draft = payload.latest_draft;
   if (!draft) {
     return [];
   }
-  const fromSections = customerizeItems(draft.report_sections["个性化营养素方案"] ?? draft.report_sections["营养素推荐"]);
+  const currentSkus = visibleRecommendedSkus(draft, excludedSkuIds);
+  const removedNames = removedRecommendedSkuNames(draft, excludedSkuIds);
+  const fromSections = withoutRemovedNutritionItems(
+    customerizeItems(
+      draft.report_sections["首月营养素干预方案"] ??
+        draft.report_sections["个性化营养素方案"] ??
+        draft.report_sections["营养素推荐"]
+    ),
+    removedNames
+  );
   if (fromSections.length) {
-    return fromSections.map((item) => appendNutritionSafety(item, draft));
+    return fromSections.map((item) => appendNutritionSafety(item, currentSkus));
   }
-  return draft.recommended_skus.map((sku) => {
+  return currentSkus.map((sku) => {
     const safety = publicSafetyWarnings(sku.warnings);
     const safetySuffix = safety.length ? `；注意/禁忌：${safety.join("；")}` : "";
     return `${sku.display_name}：${sku.dosage}。目的：${cleanCustomerText(sku.reason)}${safetySuffix}`;
@@ -583,7 +616,7 @@ function looksLikeInternalGeneratedReport(reportText?: string | null) {
   );
 }
 
-function buildDraftReport(payload: CaseDetailResponse) {
+function buildDraftReport(payload: CaseDetailResponse, excludedSkuIds: string[] = []) {
   const draft = payload.latest_draft;
   if (!draft) {
     return "";
@@ -593,7 +626,7 @@ function buildDraftReport(payload: CaseDetailResponse) {
   appendReportSection(lines, "总体健康画像", buildCustomerHealthPortrait(payload));
   appendReportSection(lines, "关键指标", buildCustomerKeyIndicators(payload));
   appendReportSection(lines, "风险提示", customerizeItems(draft.report_sections["风险提示"] ?? draft.red_flags));
-  appendReportSection(lines, "个性化营养素方案", buildNutritionPlan(payload));
+  appendReportSection(lines, "个性化营养素方案", buildNutritionPlan(payload, excludedSkuIds));
   appendReportSection(lines, "生活方式干预重点", buildLifestyleFocus(payload));
   appendReportSection(lines, "复查与跟进建议", buildFollowUp(payload));
   appendReportSection(lines, "需要补充确认", customerizeItems(draft.report_sections["待确认项"] ?? draft.missing_info));
@@ -605,12 +638,60 @@ function buildDraftReport(payload: CaseDetailResponse) {
   return normalizeCustomerVisibleReportText(lines.join("\n"));
 }
 
-function buildPublishableReport(payload: CaseDetailResponse) {
+function buildPublishableReport(
+  payload: CaseDetailResponse,
+  excludedSkuIds: string[] = [],
+  options?: { forceDraft?: boolean }
+) {
   const storedReport = payload.review_decision?.publishable_report;
-  if (storedReport && !looksLikeInternalGeneratedReport(storedReport)) {
+  if (!options?.forceDraft && storedReport && !looksLikeInternalGeneratedReport(storedReport)) {
     return normalizeCustomerVisibleReportText(storedReport);
   }
-  return buildDraftReport(payload);
+  return buildDraftReport(payload, excludedSkuIds);
+}
+
+function normalizeExcludedSkuIds(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueItems(value.map((item) => String(item).trim()).filter(Boolean));
+}
+
+function draftSkuEditStorageKey(draftId: string) {
+  return `functional-medicine:draft-excluded-skus:${draftId}`;
+}
+
+function excludedSkuIdsFromReview(payload: CaseDetailResponse) {
+  const edits = payload.review_decision?.edits;
+  if (!edits || typeof edits !== "object") {
+    return [];
+  }
+  return normalizeExcludedSkuIds((edits as Record<string, unknown>).excluded_sku_ids);
+}
+
+function loadExcludedSkuIds(payload: CaseDetailResponse) {
+  const draftId = payload.latest_draft?.id;
+  if (!draftId || typeof window === "undefined") {
+    return excludedSkuIdsFromReview(payload);
+  }
+
+  const reviewed = excludedSkuIdsFromReview(payload);
+  if (reviewed.length) {
+    return reviewed;
+  }
+
+  try {
+    return normalizeExcludedSkuIds(JSON.parse(window.localStorage.getItem(draftSkuEditStorageKey(draftId)) ?? "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function saveExcludedSkuIds(draftId: string, skuIds: string[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(draftSkuEditStorageKey(draftId), JSON.stringify(uniqueItems(skuIds)));
 }
 
 const MSQ_SECTIONS = [
@@ -730,6 +811,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [currentDoctor, setCurrentDoctor] = useState<DoctorAccount | null>(null);
   const [reviewerId, setReviewerId] = useState("reviewer-01");
   const [publishableSummary, setPublishableSummary] = useState("");
+  const [excludedSkuIds, setExcludedSkuIds] = useState<string[]>([]);
   const [questionnaire, setQuestionnaire] = useState<Questionnaire>(DEFAULT_FORM);
   const [questionnaireImportHint, setQuestionnaireImportHint] = useState<string | null>(null);
   const [questionnaireImportProgress, setQuestionnaireImportProgress] = useState<QuestionnaireImportProgress | null>(null);
@@ -750,7 +832,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [assistantBusy, setAssistantBusy] = useState(false);
 
   function applyCasePayload(nextPayload: CaseDetailResponse) {
+    const nextExcludedSkuIds = loadExcludedSkuIds(nextPayload);
     setPayload(nextPayload);
+    setExcludedSkuIds(nextExcludedSkuIds);
     setQuestionnaire(nextPayload.case.questionnaire ?? DEFAULT_FORM);
     setClinicalSummaryText(nextPayload.case.clinical_summary_text ?? "");
     setLabItemsEditor(stringifyLabItems(nextPayload.case.extracted_lab_items));
@@ -768,7 +852,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         ])
       )
     );
-    setPublishableSummary(buildPublishableReport(nextPayload));
+    setPublishableSummary(buildPublishableReport(nextPayload, nextExcludedSkuIds));
     setAssistantMessages((current) =>
       current.length > 0
         ? current
@@ -812,7 +896,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           ])
         )
       );
-      setPublishableSummary(buildPublishableReport(nextPayload));
+      const nextExcludedSkuIds = loadExcludedSkuIds(nextPayload);
+      setExcludedSkuIds(nextExcludedSkuIds);
+      setPublishableSummary(buildPublishableReport(nextPayload, nextExcludedSkuIds));
       setAssistantMessages((current) =>
         current.length > 0
           ? current
@@ -1083,6 +1169,33 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     }
   }
 
+  function updateExcludedSkuSelection(nextSkuIds: string[], options?: { rebuildReport?: boolean }) {
+    if (!payload?.latest_draft) {
+      return;
+    }
+    const normalized = uniqueItems(nextSkuIds);
+    setExcludedSkuIds(normalized);
+    saveExcludedSkuIds(payload.latest_draft.id, normalized);
+    if (options?.rebuildReport) {
+      setPublishableSummary(buildPublishableReport(payload, normalized, { forceDraft: true }));
+    }
+  }
+
+  function handleExcludeRecommendedSku(skuId: string) {
+    updateExcludedSkuSelection([...excludedSkuIds, skuId]);
+  }
+
+  function handleRestoreRecommendedSkus() {
+    updateExcludedSkuSelection([], { rebuildReport: true });
+  }
+
+  function handleRebuildPublishableSummary() {
+    if (!payload?.latest_draft) {
+      return;
+    }
+    setPublishableSummary(buildPublishableReport(payload, excludedSkuIds, { forceDraft: true }));
+  }
+
   async function handleReparseFile(fileId: string) {
     const targetFile = payload?.case.files.find((file) => file.id === fileId);
     try {
@@ -1106,7 +1219,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setBusy(true);
       const normalizedSummary = normalizeCustomerVisibleReportText(publishableSummary);
       setPublishableSummary(normalizedSummary);
-      const review = await approveDraft(payload.latest_draft.id, reviewerId, normalizedSummary || undefined);
+      const review = await approveDraft(payload.latest_draft.id, reviewerId, normalizedSummary || undefined, {
+        excluded_sku_ids: excludedSkuIds
+      });
       window.open(getPdfReportUrl(review.draft_id), "_blank", "noopener,noreferrer");
       await refresh();
     } catch (err) {
@@ -1478,6 +1593,10 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const displayIndicators = payload.display_indicators ?? [];
   const latestDraft = payload.latest_draft;
   const matchedClinicianRules = payload.matched_clinician_rules ?? [];
+  const activeRecommendedSkus = latestDraft ? visibleRecommendedSkus(latestDraft, excludedSkuIds) : [];
+  const removedRecommendedSkus = latestDraft
+    ? latestDraft.recommended_skus.filter((sku) => excludedSkuIds.includes(sku.sku_id))
+    : [];
   const hasPendingFiles = caseRecord.files.some((file) => file.parse_status === "pending");
   const uploadStatusText =
     parsingHint ??
@@ -1599,18 +1718,18 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             <label className="upload-dropzone">
               <input
                 type="file"
-                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
                 onChange={handleQuestionnaireUpload}
                 disabled={busy}
               />
               <span>上传已填写的 MSQ 问卷</span>
-              <small>支持已填写的 DOCX 问卷，识别后会自动带入当前病例分析流程。</small>
+              <small>支持已填写的 DOCX / PDF 问卷，识别后会自动带入当前病例分析流程。</small>
             </label>
             {questionnaireImportProgress ? (
               <div className="file-row" aria-live="polite">
                 <div>
                   <strong>{questionnaireImportProgress.filename}</strong>
-                  <p className="muted">MSQ DOCX · 问卷识别状态 {formatQuestionnaireImportStatus(questionnaireImportProgress.status)}</p>
+                  <p className="muted">MSQ DOCX / PDF · 问卷识别状态 {formatQuestionnaireImportStatus(questionnaireImportProgress.status)}</p>
                   <p className="muted">{questionnaireImportProgress.message}</p>
                 </div>
                 <span
@@ -2200,9 +2319,32 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                   </div>
 
                   <div>
-                    <h3>候选产品</h3>
+                    <h3>纳入报告的营养素</h3>
+                    <p className="muted">
+                      删除后该营养素和推荐理由不会进入 PDF 营养素表；如需同步下方报告正文，请点击“更新报告文本”。
+                    </p>
+                    <div className="inline-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy || !latestDraft.recommended_skus.length}
+                        onClick={handleRebuildPublishableSummary}
+                      >
+                        更新报告文本
+                      </button>
+                      {removedRecommendedSkus.length ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy}
+                          onClick={handleRestoreRecommendedSkus}
+                        >
+                          恢复已删除 {removedRecommendedSkus.length} 项
+                        </button>
+                      ) : null}
+                    </div>
                     <div className="stack">
-                      {latestDraft.recommended_skus.map((sku) => (
+                      {activeRecommendedSkus.map((sku) => (
                         <article key={sku.sku_id} className="recommendation-row">
                           <div>
                             <strong>{sku.display_name}</strong>
@@ -2214,12 +2356,29 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                               <p className="muted">注意/禁忌：{publicSafetyWarnings(sku.warnings).join("；")}</p>
                             ) : null}
                           </div>
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--danger"
+                            disabled={busy}
+                            onClick={() => handleExcludeRecommendedSku(sku.sku_id)}
+                          >
+                            删除
+                          </button>
                         </article>
                       ))}
-                      {latestDraft.recommended_skus.length === 0 ? (
-                        <p className="muted">当前草案没有给出营养素推荐。</p>
+                      {activeRecommendedSkus.length === 0 ? (
+                        <p className="muted">
+                          {latestDraft.recommended_skus.length === 0
+                            ? "当前草案没有给出营养素推荐。"
+                            : "当前营养素已全部删除，生成报告时不会展示营养素表格。"}
+                        </p>
                       ) : null}
                     </div>
+                    {removedRecommendedSkus.length ? (
+                      <p className="muted">
+                        已排除：{removedRecommendedSkus.map((sku) => sku.display_name).join("、")}。
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 

@@ -137,7 +137,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("sku_vitamin_d3_k", recommended_ids)
         self.assertTrue(all(item.warnings for item in draft.recommended_skus))
         self.assertTrue(
-            any("注意/禁忌：" in item for item in draft.report_sections.get("个性化营养素方案", []))
+            any("注意/禁忌：" in item for item in draft.report_sections.get("首月营养素干预方案", []))
         )
 
     def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
@@ -204,11 +204,59 @@ class RecommendationServiceTests(unittest.TestCase):
         )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
-        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+        first_system_heading = next(
+            item for item in draft.report_sections["功能医学系统失衡分析"] if item.startswith("### 1.")
+        )
 
         self.assertFalse(draft.abstain_reason)
         self.assertIn("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。", draft.missing_info)
-        self.assertTrue({"sku_thyroid_support", "sku_selenium_vitamin_e"} & recommended_ids)
+        self.assertTrue({"sku_thyroid_support", "sku_selenium_vitamin_e"} & set(recommended_ids))
+        self.assertEqual(recommended_ids[0], "sku_thyroid_support")
+        self.assertIn("免疫系统/甲状腺", first_system_heading)
+        self.assertNotIn("代谢/内分泌系统", first_system_heading)
+
+    def test_uses_case_customer_name_even_when_upload_contains_name_candidate(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="方",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        uploaded_file = UploadedFile(
+            id="file_named_questionnaire",
+            case_id=case.id,
+            filename="MSQ--王堃.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            size_bytes=128,
+            storage_uri="memory://MSQ--王堃.docx",
+            raw_extracted_text="姓名：王堃 性别：男 年龄：30",
+        )
+        case = self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+
+        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "方")
+        self.assertEqual(self.container.review_service._customer_display_name(case), "方")
+
+    def test_falls_back_to_case_customer_name_when_report_text_has_no_valid_name(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="王彦喆",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        uploaded_file = UploadedFile(
+            id="file_report_intro",
+            case_id=case.id,
+            filename="体检报告2024.pdf",
+            content_type="application/pdf",
+            size_bytes=256,
+            storage_uri="memory://体检报告2024.pdf",
+            raw_extracted_text="现将您的健康体检报告呈上，请您着重关注本次体检的异常情况。",
+        )
+        case = self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+
+        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "王彦喆")
+        self.assertEqual(self.container.review_service._customer_display_name(case), "王彦喆")
 
     def test_keeps_internal_candidate_products_before_manual_parse_review(self) -> None:
         case = self.container.case_service.create_case(
@@ -259,7 +307,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("尚未完成人工解析校对。", draft.missing_info)
         self.assertTrue(draft.manual_review_required)
         self.assertTrue(draft.recommended_skus)
-        self.assertNotIn("当前暂无明确可发布的营养素组合", " ".join(draft.report_sections["个性化营养素方案"]))
+        self.assertNotIn("当前暂无明确可发布的首月营养素组合", " ".join(draft.report_sections["首月营养素干预方案"]))
 
     def test_thyroid_condition_in_questionnaire_does_not_break_profile_matching(self) -> None:
         case = self._prepare_case(
@@ -404,6 +452,32 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("人工录入评估结论", guidance_text)
         self.assertIn("病例总结诊断", " ".join(draft.case_summary))
 
+    def test_manual_anti_aging_summary_is_integrated_into_clinical_sections(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="抗衰摘要案例",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.update_clinical_summary(
+            case.id,
+            clinical_summary_text=(
+                "DNA甲基化年龄 31.0 岁，免疫系统年龄 31.5 岁，"
+                "心血管系统年龄 33.1 岁，内分泌系统年龄 35.8 岁；"
+                "代表基因 KLF14、ELOVL2、TRIM59。"
+            ),
+            actor_id="unit-test",
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        portrait_text = " ".join(draft.report_sections.get("核心结论与健康画像") or [])
+        analysis_text = " ".join(draft.report_sections.get("功能医学系统失衡分析") or [])
+
+        self.assertIn("抗衰画像", portrait_text)
+        self.assertIn("DNA 甲基化年龄", portrait_text)
+        self.assertIn("抗衰系统整合", analysis_text)
+        self.assertIn("内分泌", analysis_text)
+
     def test_manual_summary_nutrient_list_influences_report_and_candidates(self) -> None:
         case = self.container.case_service.create_case(
             customer_name="营养素清单案例",
@@ -435,7 +509,7 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
         guidance_text = " ".join(draft.report_sections.get("原报告小结与建议") or [])
-        analysis_text = " ".join(draft.report_sections.get("系统功能深度分析") or [])
+        analysis_text = " ".join(draft.report_sections.get("功能医学系统失衡分析") or [])
         summary_text = " ".join(draft.case_summary)
 
         self.assertFalse(draft.abstain_reason)
@@ -445,7 +519,173 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("病例总结提示的所需营养素", guidance_text)
         self.assertIn("蛋白质", guidance_text)
         self.assertIn("所需营养素提示", summary_text)
-        self.assertIn("营养素方向", analysis_text)
+        self.assertIn("营养支持提醒", analysis_text)
+        self.assertNotIn("排序", analysis_text)
+        self.assertNotIn("候选", analysis_text)
+        self.assertNotIn("挤掉", analysis_text)
+
+    def test_customer_system_analysis_hides_internal_ranking_language(self) -> None:
+        case = self._prepare_case(
+            "25-OH维生素D 18 ng/mL 30-100\n"
+            "空腹血糖 6.2 mmol/L 3.9-5.6\n"
+            "总胆固醇 5.83 mmol/L 0-5.18",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["疲劳"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持", "代谢支持"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        analysis_text = " ".join(draft.report_sections.get("功能医学系统失衡分析") or [])
+
+        self.assertIn("免疫系统/甲状腺", analysis_text)
+        self.assertIn("维生素D", analysis_text)
+        self.assertNotIn("维生素D/骨代谢与免疫支持", analysis_text)
+        for internal_phrase in ("排序", "候选", "挤掉", "泛化", "产品优先级", "不应被"):
+            self.assertNotIn(internal_phrase, analysis_text)
+
+    def test_system_analysis_shows_each_core_system_with_any_problem_signal(self) -> None:
+        case = self._prepare_case(
+            "LDL-C 3.49 mmol/L 0.00-3.37 ↑",
+            Questionnaire(
+                age=40,
+                sex="female",
+                symptoms=[],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=[],
+                sitting_hours_per_day=7,
+                sleep_hours=7,
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        analysis_text = " ".join(draft.report_sections.get("功能医学系统失衡分析") or [])
+
+        self.assertIn("代谢/内分泌系统", analysis_text)
+        self.assertIn("心血管系统", analysis_text)
+        self.assertNotIn("免疫系统/甲状腺", analysis_text)
+        self.assertNotIn("消化系统/肠道", analysis_text)
+
+    def test_first_month_dosage_rules_override_default_product_dosage(self) -> None:
+        fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")
+        glutathione_support = self.container.repository.get_product("sku_amino_acid_detox")
+
+        self.assertIn("每日 4 粒", self.container.recommendation_service._first_month_dosage(fish_oil))
+        self.assertIn("每日 2 粒", self.container.recommendation_service._first_month_dosage(glutathione_support))
+
+    def test_product_tag_matrix_prioritizes_precise_liver_detox_products(self) -> None:
+        case = self._prepare_case(
+            "血清尿酸 458.3 umol/L 208-428\n"
+            "甘油三酯 2.3 mmol/L 0.56-1.7\n"
+            "总胆固醇 5.83 mmol/L 0-5.18\n"
+            "ALT 45 U/L 0-40",
+            Questionnaire(
+                age=45,
+                sex="male",
+                symptoms=["疲劳", "腹胀"],
+                known_conditions=["脂肪肝"],
+                medications=[],
+                allergies=[],
+                goals=["肝脏支持", "代谢支持"],
+                bowel_habits="便秘",
+                dining_out_frequency="经常",
+                stress_level="high",
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+        reason_by_id = {item.sku_id: item.reason for item in draft.recommended_skus}
+
+        self.assertFalse(draft.abstain_reason)
+        self.assertGreaterEqual(len(recommended_ids), 3)
+        self.assertEqual(recommended_ids[0], "sku_liver_detox_support")
+        self.assertIn("sku_amino_acid_detox", recommended_ids[:3])
+        self.assertIn("sku_bile_flow_support", recommended_ids)
+        self.assertIn("关联度约", reason_by_id["sku_liver_detox_support"])
+        self.assertIn("肝脏/解毒系统", reason_by_id["sku_liver_detox_support"])
+        self.assertNotIn("sku_digestive_enzymes", recommended_ids)
+        self.assertNotIn("sku_probiotic_complex", recommended_ids)
+        first_system_heading = next(
+            item for item in draft.report_sections["功能医学系统失衡分析"] if item.startswith("### 1.")
+        )
+        self.assertIn("肝脏/解毒系统", first_system_heading)
+        self.assertIn("首月原则：先围绕肝脏/解毒", draft.report_sections["首月营养素干预方案"][0])
+
+    def test_liver_report_guidance_prioritizes_liver_products_over_fish_oil(self) -> None:
+        case = self._prepare_case(
+            "总检结论 脂肪肝，尿酸偏高，建议减少饮酒和油脂摄入\n"
+            "低密度脂蛋白胆固醇 LDL-C 3.49 mmol/L 0.00-3.37 ↑\n"
+            "甘油三酯 TG 1.97 mmol/L 0.56-1.7 ↑\n"
+            "血清尿酸 458.3 umol/L 208-428 ↑",
+            Questionnaire(
+                age=42,
+                sex="male",
+                symptoms=["疲劳"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["心血管支持"],
+                dining_out_frequency="经常",
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+
+        self.assertFalse(draft.abstain_reason)
+        first_system_heading = next(
+            item for item in draft.report_sections["功能医学系统失衡分析"] if item.startswith("### 1.")
+        )
+        self.assertIn("肝脏/解毒系统", first_system_heading)
+        self.assertIn("sku_fish_oil_rtg", recommended_ids)
+        self.assertIn("sku_liver_detox_support", recommended_ids)
+        self.assertLess(recommended_ids.index("sku_liver_detox_support"), recommended_ids.index("sku_fish_oil_rtg"))
+        self.assertIn(recommended_ids[0], {"sku_liver_detox_support", "sku_amino_acid_detox"})
+
+    def test_recommendation_output_tops_up_reasonable_candidates_when_core_items_are_few(self) -> None:
+        case = self._prepare_case(
+            "总胆固醇 5.83 mmol/L 0-5.18\n"
+            "体质指数 24.5 18.5-23.9\n"
+            "空腹血糖 6.2 mmol/L 3.9-5.6\n"
+            "高密度胆固醇 1.77 mmol/L 1.03-1.55",
+            Questionnaire(
+                age=38,
+                sex="female",
+                symptoms=["精神压力大"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["代谢支持", "心血管支持"],
+                sitting_hours_per_day=7,
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+
+        self.assertFalse(draft.abstain_reason)
+        self.assertGreaterEqual(len(recommended_ids), 4)
+        self.assertIn("sku_fish_oil_rtg", recommended_ids)
+        self.assertIn("sku_blood_sugar_complex", recommended_ids)
+        self.assertTrue({"sku_cardiac_support", "sku_weight_support"} & set(recommended_ids))
+
+    def test_product_tag_matrix_has_customer_sequences_and_disabled_boundaries(self) -> None:
+        profiles = self.container.recommendation_service.product_tag_profiles
+
+        self.assertEqual(profiles["sku_liver_detox_support"].sequence, "27")
+        self.assertEqual(profiles["sku_amino_acid_detox"].sequence, "31")
+        self.assertEqual(profiles["sku_bile_flow_support"].sequence, "21")
+        self.assertEqual(profiles["sku_immune_support"].product_name, "槲皮素复合物")
+        self.assertNotIn("sku_digestive_enzymes", profiles)
+        self.assertNotIn("sku_probiotic_complex", profiles)
 
     def test_signal_scoring_still_recommends_for_lipid_case_without_explicit_pattern_rule(self) -> None:
         fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")
@@ -711,9 +951,9 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertTrue(any("VD3+K" in item for item in draft.evidence_details))
         self.assertTrue(all(any("\u4e00" <= ch <= "\u9fff" for ch in item) for item in draft.lifestyle_actions))
         self.assertEqual(draft.model_version, "remote:test-model")
-        self.assertIn("总体健康画像", draft.report_sections)
-        self.assertIn("系统功能深度分析", draft.report_sections)
-        self.assertIn("功能医学检测建议", draft.report_sections)
+        self.assertIn("核心结论与健康画像", draft.report_sections)
+        self.assertIn("功能医学系统失衡分析", draft.report_sections)
+        self.assertIn("后续检查建议", draft.report_sections)
         self.assertIn("90天健康路线图", draft.report_sections)
         self.assertNotIn("证据来源", draft.report_sections)
 
@@ -770,8 +1010,8 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("非高密度脂蛋白胆固醇", capture.last_input.reviewed_report_text)
         self.assertIn("support_profiles", capture.last_input.structured_case_context)
         self.assertGreaterEqual(len(capture.last_input.candidate_products), 1)
-        self.assertIn("模型优先判断当前应先围绕代谢与恢复能力做整体支持", draft.report_sections["总体健康画像"])
-        self.assertIn("模型结合报告和问卷信息，提示当前代谢负担与生活方式因素相互叠加", draft.report_sections["系统功能深度分析"])
+        self.assertIn("模型优先判断当前应先围绕代谢与恢复能力做整体支持", draft.report_sections["核心结论与健康画像"])
+        self.assertIn("模型结合报告和问卷信息，提示当前代谢负担与生活方式因素相互叠加", draft.report_sections["功能医学系统失衡分析"])
 
     def test_clinician_rule_from_case_biases_future_similar_cases(self) -> None:
         self.container.repository.save_product(
@@ -909,27 +1149,65 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertNotIn("## 病例摘要", review.publishable_report)
         self.assertNotIn("## 证据来源", review.publishable_report)
         self.assertNotIn("## 审计信息", review.publishable_report)
-        self.assertIn("## 总体健康画像", review.publishable_report)
-        self.assertIn("## 关键指标", review.publishable_report)
+        self.assertIn("## 核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 异常指标汇总", review.publishable_report)
         self.assertIn("说明：", review.publishable_report)
-        self.assertIn("## 生活方式干预重点", review.publishable_report)
+        self.assertIn("## 生活方式干预处方", review.publishable_report)
+        self.assertIn("### 1.", review.publishable_report)
+        self.assertIn("### A. 饮食干预", review.publishable_report)
         self.assertIn("抗炎餐盘", review.publishable_report)
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertNotIn("白细胞计数：5.5", review.publishable_report)
         formatted_indicator = self.container.review_service.pdf_exporter._format_item(
-            "关键指标",
+            "异常指标汇总",
             "25-OH维生素D：18 ng/mL（偏低）。说明：用于验证 PDF 列表符号。",
         )
         self.assertTrue(formatted_indicator.startswith("- "))
         self.assertNotIn("•", formatted_indicator)
         formatted_lifestyle = self.container.review_service.pdf_exporter._format_item(
-            "生活方式干预重点",
+            "生活方式干预处方",
             "压力管理：每天安排2次5分钟呼吸练习或冥想。",
         )
         self.assertIn("2次", formatted_lifestyle)
         self.assertIn("5分钟", formatted_lifestyle)
         self.assertNotIn("2 次", formatted_lifestyle)
         self.assertNotIn("5 分钟", formatted_lifestyle)
+
+    def test_approve_excludes_removed_recommended_skus_from_pdf_payload(self) -> None:
+        case = self._prepare_case(
+            "25-OH维生素D 18 ng/mL 30-100\nhs-CRP 4.2 mg/L 0-3\n铁蛋白 8 ng/mL 15-150",
+            Questionnaire(
+                age=30,
+                sex="female",
+                symptoms=["疲劳"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持", "恢复支持"],
+            ),
+        )
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        self.assertGreaterEqual(len(draft.recommended_skus), 2)
+        removed = draft.recommended_skus[0]
+        captured: dict[str, list[str]] = {}
+        original_export = self.container.review_service.pdf_exporter.export
+
+        def capture_export(*args, **kwargs):
+            captured["sku_ids"] = [item.sku_id for item in kwargs.get("recommended_skus", [])]
+            return original_export(*args, **kwargs)
+
+        self.container.review_service.pdf_exporter.export = capture_export
+
+        review = self.container.review_service.approve(
+            draft.id,
+            reviewer_id="reviewer-01",
+            publishable_summary=None,
+            edits={"excluded_sku_ids": [removed.sku_id]},
+        )
+
+        self.assertNotIn(removed.sku_id, captured["sku_ids"])
+        self.assertNotIn(removed.display_name, review.publishable_report)
+        self.assertTrue(Path(review.pdf_report_path).exists())
 
     def test_approval_adds_safety_to_manual_publishable_nutrition_lines(self) -> None:
         case = self._prepare_case(
@@ -949,7 +1227,7 @@ class RecommendationServiceTests(unittest.TestCase):
         recommended = draft.recommended_skus[0]
         manual_report = (
             "# 功能医学营养与生活方式建议\n\n"
-            "## 个性化营养素方案\n"
+            "## 首月营养素干预方案\n"
             f"- {recommended.display_name}：{recommended.dosage}。目的：用于测试手动报告安全提示兜底。\n"
         )
 
@@ -962,6 +1240,47 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertIn(recommended.display_name, review.publishable_report)
+
+    def test_approval_rerenders_legacy_auto_customer_report(self) -> None:
+        case = self._prepare_case(
+            "促甲状腺激素 7.57 mIU/L 0.27-4.2\n甲状腺过氧化物酶抗体 854 IU/mL 0-30",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["疲劳"],
+                known_conditions=["桥本氏甲状腺炎"],
+                medications=[],
+                allergies=[],
+                goals=["甲状腺支持"],
+            ),
+        )
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        legacy_report = (
+            "# 功能医学营养与生活方式建议\n\n"
+            "## 总体健康画像\n"
+            "- 旧版画像。\n\n"
+            "## 关键指标\n"
+            "- 旧版关键指标。\n\n"
+            "## 个性化营养素方案\n"
+            "- 旧版营养素。\n\n"
+            "## 生活方式干预重点\n"
+            "- 旧版生活方式。\n\n"
+            "## 复查与跟进建议\n"
+            "- 旧版复查。\n"
+        )
+
+        review = self.container.review_service.approve(
+            draft.id,
+            reviewer_id="reviewer-01",
+            publishable_summary=legacy_report,
+            edits={},
+        )
+
+        self.assertIn("# 功能医学综合分析与首月干预方案", review.publishable_report)
+        self.assertIn("## 核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 异常指标汇总", review.publishable_report)
+        self.assertIn("## 首月营养素干预方案", review.publishable_report)
+        self.assertNotIn("旧版画像", review.publishable_report)
 
     def test_approval_rejects_question_mark_corrupted_publishable_summary(self) -> None:
         case = self._prepare_case(
@@ -994,8 +1313,8 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertNotIn("????", review.publishable_report)
         self.assertNotIn("RAG", review.publishable_report)
-        self.assertIn("# 功能医学营养与生活方式建议", review.publishable_report)
-        self.assertIn("## 总体健康画像", review.publishable_report)
+        self.assertIn("# 功能医学综合分析与首月干预方案", review.publishable_report)
+        self.assertIn("## 核心结论与健康画像", review.publishable_report)
 
     def test_delete_case_cleans_associated_files_and_records(self) -> None:
         case = self.container.case_service.create_case(

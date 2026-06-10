@@ -212,7 +212,7 @@ def _merge_clinical_summary_text(existing_text: str | None, imported_text: str) 
 
 def _case_detail_response(container, case, *, include_audit_logs: bool = False) -> CaseDetailResponse:
     latest_draft = container.repository.get_draft(case.draft_ids[-1]) if case.draft_ids else None
-    review = container.repository.get_review_decision(case.draft_ids[-1]) if case.draft_ids else None
+    review = _current_review_decision(container, case.draft_ids[-1]) if case.draft_ids else None
     audit_logs = []
     if include_audit_logs:
         audit_logs = container.repository.list_audit_logs(case.id)
@@ -227,6 +227,19 @@ def _case_detail_response(container, case, *, include_audit_logs: bool = False) 
         audit_logs=audit_logs,
         matched_clinician_rules=container.assistant_rule_service.match_rules_for_case(case),
     )
+
+
+def _current_review_decision(container, draft_id: str):
+    review = container.repository.get_review_decision(draft_id)
+    if not review:
+        return None
+    if container.review_service.is_stale_publishable_report(review.publishable_report):
+        try:
+            container.review_service.ensure_pdf(draft_id)
+            review = container.repository.get_review_decision(draft_id)
+        except KeyError:
+            pass
+    return review
 
 
 @router.get("/health")
@@ -571,7 +584,7 @@ def generate_draft(case_id: str, payload: GenerateDraftRequest, request: Request
 def get_draft(draft_id: str, request: Request):
     container = _container(request)
     _, draft = _authorized_case_for_draft(container, draft_id, _current_doctor(request))
-    review = container.repository.get_review_decision(draft_id)
+    review = _current_review_decision(container, draft_id)
     return {"draft": draft, "review_decision": review}
 
 

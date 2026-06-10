@@ -179,12 +179,18 @@ export async function generateDraft(caseId: string, requestedBy: string) {
   });
 }
 
-export async function approveDraft(draftId: string, reviewerId: string, publishableSummary?: string) {
+export async function approveDraft(
+  draftId: string,
+  reviewerId: string,
+  publishableSummary?: string,
+  edits?: Record<string, unknown>
+) {
   return apiFetch<ReviewDecision>(`/drafts/${draftId}/approve`, {
     method: "POST",
     body: JSON.stringify({
       reviewer_id: reviewerId,
-      publishable_summary: publishableSummary
+      publishable_summary: publishableSummary,
+      edits: edits ?? {}
     })
   });
 }

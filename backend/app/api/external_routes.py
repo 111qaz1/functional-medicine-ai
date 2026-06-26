@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
+import time
 import uuid
 from typing import Literal
 
@@ -13,11 +17,17 @@ from app.domain.models import AnalysisMode, DoctorAccount, UploadedFile, Workspa
 
 router = APIRouter(prefix="/api/v1", tags=["external-api"])
 bearer_scheme = HTTPBearer(auto_error=False)
+EXTERNAL_TRUST_SECRET_ENV = "FM_EXTERNAL_TRUST_SHARED_SECRET"
+EXTERNAL_TRUST_MAX_SKEW_SECONDS = 300
 
 
 class ExternalTokenRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    issuer: str = Field(min_length=1)
+    doctor_id: str = Field(min_length=1)
+    doctor_name: str | None = None
+    timestamp: int
+    nonce: str = Field(min_length=8)
+    signature: str = Field(min_length=32)
 
 
 class ExternalTokenResponse(BaseModel):
@@ -98,6 +108,43 @@ def _require_external_doctor(
     return doctor
 
 
+def _canonical_trust_payload(payload: ExternalTokenRequest) -> str:
+    return "\n".join(
+        [
+            payload.issuer.strip(),
+            payload.doctor_id.strip(),
+            (payload.doctor_name or "").strip(),
+            str(payload.timestamp),
+            payload.nonce.strip(),
+        ]
+    )
+
+
+def _normalize_signature(value: str) -> str:
+    normalized = (value or "").strip()
+    if normalized.lower().startswith("sha256="):
+        normalized = normalized.split("=", 1)[1]
+    return normalized.lower()
+
+
+def _verify_external_trust_signature(payload: ExternalTokenRequest) -> None:
+    secret = os.getenv(EXTERNAL_TRUST_SECRET_ENV)
+    if not secret:
+        raise HTTPException(status_code=503, detail=f"{EXTERNAL_TRUST_SECRET_ENV} is not configured")
+
+    now = int(time.time())
+    if abs(now - payload.timestamp) > EXTERNAL_TRUST_MAX_SKEW_SECONDS:
+        raise HTTPException(status_code=401, detail="External trust token timestamp is outside the allowed window")
+
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        _canonical_trust_payload(payload).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, _normalize_signature(payload.signature)):
+        raise HTTPException(status_code=401, detail="Invalid external trust signature")
+
+
 def _require_owned_case(container, case_id: str, doctor: DoctorAccount):
     try:
         case = container.case_service.get_case(case_id)
@@ -146,8 +193,13 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
 @router.post("/auth/token", response_model=ExternalTokenResponse)
 def issue_external_token(payload: ExternalTokenRequest, request: Request):
     container = _container(request)
+    _verify_external_trust_signature(payload)
     try:
-        session = container.auth_service.login(username=payload.username, password=payload.password)
+        session = container.auth_service.issue_external_trust_session(
+            issuer=payload.issuer,
+            external_doctor_id=payload.doctor_id,
+            display_name=payload.doctor_name,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return ExternalTokenResponse(

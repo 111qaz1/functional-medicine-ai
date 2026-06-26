@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -19,6 +24,8 @@ from app.core.settings import AppSettings
 class ExternalApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.env_patcher = patch.dict(os.environ, {"FM_EXTERNAL_TRUST_SHARED_SECRET": "test-shared-secret"})
+        self.env_patcher.start()
         root = Path(self.temp_dir.name)
         (root / "功能医学相关资料").mkdir(parents=True, exist_ok=True)
         settings = AppSettings(
@@ -42,17 +49,37 @@ class ExternalApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.other_client.close()
+        self.env_patcher.stop()
         self.temp_dir.cleanup()
 
-    def _register_and_token(self, client: TestClient, username: str) -> str:
-        register = client.post(
-            "/auth/register",
-            json={"username": username, "password": "secret123", "display_name": username.upper()},
+    def _signed_trust_payload(self, doctor_id: str, doctor_name: str) -> dict:
+        payload = {
+            "issuer": "customer-system",
+            "doctor_id": doctor_id,
+            "doctor_name": doctor_name,
+            "timestamp": int(time.time()),
+            "nonce": f"nonce-{doctor_id}-12345",
+        }
+        canonical = "\n".join(
+            [
+                payload["issuer"],
+                payload["doctor_id"],
+                payload["doctor_name"],
+                str(payload["timestamp"]),
+                payload["nonce"],
+            ]
         )
-        self.assertEqual(register.status_code, 200, register.text)
+        payload["signature"] = hmac.new(
+            b"test-shared-secret",
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return payload
+
+    def _external_token(self, client: TestClient, doctor_id: str, doctor_name: str) -> str:
         token = client.post(
             "/api/v1/auth/token",
-            json={"username": username, "password": "secret123"},
+            json=self._signed_trust_payload(doctor_id, doctor_name),
         )
         self.assertEqual(token.status_code, 200, token.text)
         payload = token.json()
@@ -60,8 +87,8 @@ class ExternalApiTests(unittest.TestCase):
         return payload["access_token"]
 
     def test_external_bearer_token_isolates_owned_cases(self) -> None:
-        token_a = self._register_and_token(self.client, "external-a")
-        token_b = self._register_and_token(self.other_client, "external-b")
+        token_a = self._external_token(self.client, "doctor-a", "甲方医生A")
+        token_b = self._external_token(self.other_client, "doctor-b", "甲方医生B")
 
         created = self.client.post(
             "/api/v1/cases",
@@ -79,8 +106,16 @@ class ExternalApiTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 403, denied.text)
 
+    def test_external_token_rejects_invalid_signature(self) -> None:
+        payload = self._signed_trust_payload("doctor-bad", "伪造医生")
+        payload["signature"] = "0" * 64
+
+        response = self.client.post("/api/v1/auth/token", json=payload)
+
+        self.assertEqual(response.status_code, 401, response.text)
+
     def test_external_recommendation_endpoint_returns_json_contract(self) -> None:
-        token = self._register_and_token(self.client, "external-main")
+        token = self._external_token(self.client, "doctor-main", "甲方主治医生")
         created = self.client.post(
             "/api/v1/cases",
             headers={"Authorization": f"Bearer {token}"},

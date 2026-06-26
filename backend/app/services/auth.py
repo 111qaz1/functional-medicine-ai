@@ -65,6 +65,47 @@ class AuthService:
         self.repository.save_session(session)
         return AuthSession(doctor=doctor, session=session)
 
+    def issue_external_trust_session(
+        self,
+        *,
+        issuer: str,
+        external_doctor_id: str,
+        display_name: str | None = None,
+    ) -> AuthSession:
+        normalized_issuer = self._normalize_external_part(issuer)
+        normalized_external_id = self._normalize_external_part(external_doctor_id)
+        if not normalized_issuer or not normalized_external_id:
+            raise ValueError("issuer and doctor_id are required")
+
+        username = f"external:{normalized_issuer}:{normalized_external_id}"
+        doctor = self.repository.get_doctor_by_username(username)
+        display_name = (display_name or "").strip() or external_doctor_id
+        if doctor:
+            if not doctor.enabled:
+                raise ValueError("External doctor identity is disabled")
+            if doctor.display_name != display_name:
+                doctor.display_name = display_name
+                self.repository.save_doctor(doctor)
+        else:
+            digest = hashlib.sha256(username.encode("utf-8")).hexdigest()[:12]
+            doctor = DoctorAccount(
+                id=f"doctor_ext_{digest}",
+                username=username,
+                display_name=display_name,
+                password_hash="external_trust_identity",
+                role=DoctorRole.doctor,
+                enabled=True,
+            )
+            self.repository.save_doctor(doctor)
+
+        session = SessionRecord(
+            id=f"sess_{secrets.token_urlsafe(32)}",
+            doctor_id=doctor.id,
+            expires_at=utc_now() + timedelta(days=SESSION_DAYS),
+        )
+        self.repository.save_session(session)
+        return AuthSession(doctor=doctor, session=session)
+
     def get_doctor_for_session(self, session_id: str | None) -> DoctorAccount | None:
         if not session_id:
             return None
@@ -110,3 +151,6 @@ class AuthService:
 
     def _normalize_username(self, username: str) -> str:
         return (username or "").strip().lower()
+
+    def _normalize_external_part(self, value: str) -> str:
+        return (value or "").strip().lower().replace(" ", "_")

@@ -140,6 +140,76 @@ class RecommendationServiceTests(unittest.TestCase):
             any("注意/禁忌：" in item for item in draft.report_sections.get("首月营养素干预方案", []))
         )
 
+    def test_product_safety_matrix_blocks_clear_contraindications(self) -> None:
+        case = self._prepare_case(
+            "hs-CRP 5.2 mg/L 0-3",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["关节疼痛", "炎症"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["抗炎支持"],
+                pregnant_or_lactating=True,
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+        contraindication_text = " ".join(draft.contraindications)
+
+        self.assertNotIn("sku_super_anti_inflammatory", recommended_ids)
+        self.assertIn("超级抗炎 被排除", contraindication_text)
+        self.assertIn("pregnancy", contraindication_text)
+
+    def test_product_safety_matrix_keeps_caution_items_with_warning(self) -> None:
+        case = self._prepare_case(
+            "空腹血糖 6.8 mmol/L 3.9-5.6\n糖化血红蛋白 6.1 % 4-6",
+            Questionnaire(
+                age=45,
+                sex="male",
+                symptoms=["餐后困倦", "嗜甜"],
+                known_conditions=["胰岛素抵抗"],
+                medications=["二甲双胍"],
+                allergies=[],
+                goals=["血糖平衡"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        blood_sugar_item = next(
+            item for item in draft.recommended_skus if item.sku_id == "sku_blood_sugar_complex"
+        )
+        warnings_text = " ".join(blood_sugar_item.warnings)
+
+        self.assertIn("sku_blood_sugar_complex", {item.sku_id for item in draft.recommended_skus})
+        self.assertIn("降糖药物", warnings_text)
+        self.assertIn("监测血糖", warnings_text)
+
+    def test_symptom_tag_matrix_promotes_directly_relevant_nutrients(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=38,
+                sex="female",
+                symptoms=["入睡困难", "夜醒", "紧张"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["睡眠恢复"],
+                sleep_quality="差",
+                stress_level="high",
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+        evidence_details = " ".join(draft.evidence_details)
+
+        self.assertIn("sku_sleep_support", recommended_ids[:4])
+        self.assertIn("产品标签命中：症状", evidence_details)
+
     def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
         root = Path(self.temp_dir.name)
         settings = AppSettings(

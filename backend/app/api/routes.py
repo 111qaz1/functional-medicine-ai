@@ -415,6 +415,10 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         content_type=uploaded_file.content_type,
         content=content,
     )
+    parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
+        spans=extraction.spans,
+        lab_items=lab_items,
+    )
     case = container.case_service.attach_parse_results(
         case.id,
         uploaded_file.id,
@@ -422,6 +426,7 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         parse_confidence=extraction.confidence,
         source_spans=extraction.spans,
         lab_items=lab_items,
+        parse_warnings=parse_warnings,
     )
     return _case_detail_response(container, case)
 
@@ -445,6 +450,10 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         content_type=target_file.content_type,
         content=content,
     )
+    parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
+        spans=extraction.spans,
+        lab_items=lab_items,
+    )
     case = container.case_service.attach_parse_results(
         case.id,
         target_file.id,
@@ -452,6 +461,7 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         parse_confidence=extraction.confidence,
         source_spans=extraction.spans,
         lab_items=lab_items,
+        parse_warnings=parse_warnings,
     )
     return _case_detail_response(container, case)
 

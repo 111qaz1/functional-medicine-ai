@@ -51,6 +51,37 @@ class ParsingServiceTests(unittest.TestCase):
         self.assertEqual(by_code["rbc"].unit, "10^12/L")
         self.assertEqual(by_code["rbc"].normalized_unit, "10^12/L")
 
+    def test_normalizes_split_exponent_and_micro_units(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="红细胞 RBC 5.10 10*12/L 4.3-5.8"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="血清肌酐 67.6 59-104 碌mol/L"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="血清尿酸 529.7 90-420 渭mol/L ↑"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        by_code = {item.marker_code: item for item in items}
+
+        self.assertEqual(by_code["wbc"].unit, "10^9/L")
+        self.assertEqual(by_code["rbc"].unit, "10^12/L")
+        self.assertEqual(by_code["creatinine"].unit, "umol/L")
+        self.assertEqual(by_code["uric_acid"].unit, "umol/L")
+        self.assertEqual(by_code["uric_acid"].abnormal_flag, AbnormalFlag.high)
+
+    def test_surfaces_unknown_lab_candidates_for_manual_review(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="载脂蛋白E 1.82 g/L ↑ 0.20-1.20"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="报告日期 2026-06-25"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        candidates = self.service.find_unknown_lab_candidates(spans=spans, lab_items=items)
+
+        self.assertTrue(any("载脂蛋白E" in item for item in candidates))
+        self.assertFalse(any("白细胞" in item for item in candidates))
+        self.assertFalse(any("报告日期" in item for item in candidates))
+
     def test_normalizes_multiline_marker_blocks(self) -> None:
         spans = [
             SourceSpan(file_name="report.txt", page=1, line_number=1, snippet="血清丙氨酸氨基转移酶"),

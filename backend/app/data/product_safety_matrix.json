@@ -1,0 +1,592 @@
+{
+  "version": "product-safety-matrix-v1-2026-06-26",
+  "source_note": "Derived from customer-provided product contraindication summary. Original DOCX is not stored in Git.",
+  "severity_policy": {
+    "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
+    "caution": "慎用/注意/需咨询医生/需监测；不阻断推荐，但必须进入医生审核和客户可见安全提示。",
+    "interaction_warning": "涉及药物、手术或监测的相互作用提示；不默认阻断，除非 exclusion_rules 命中。"
+  },
+  "products": [
+    {
+      "sku_id": "sku_super_anti_inflammatory",
+      "source_sequence": "1",
+      "source_product_name": "超强抗炎",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "胆道梗阻、胆结石患者禁用。",
+        "对姜黄、生姜、黑胡椒过敏者禁用。"
+      ],
+      "cautions": [],
+      "interaction_warnings": [
+        "服用抗凝/抗血小板药物者慎用。",
+        "计划手术者，建议术前2周停用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "condition:胆道梗阻",
+        "condition:胆结石",
+        "allergy:姜黄",
+        "allergy:生姜",
+        "allergy:黑胡椒"
+      ]
+    },
+    {
+      "sku_id": "sku_magnesium_glycinate",
+      "source_sequence": "2",
+      "source_product_name": "甘氨酸镁",
+      "contraindications": [
+        "肾功能不全/肾衰竭患者禁用。",
+        "重症肌无力患者禁用。",
+        "心脏传导阻滞或其他严重心律失常患者禁用。"
+      ],
+      "cautions": [],
+      "interaction_warnings": [
+        "服用四环素/喹诺酮类抗生素、双膦酸盐类药物者，需间隔至少2小时。",
+        "服用保钾利尿剂者慎用。"
+      ],
+      "exclusion_rules": [
+        "condition:肾功能不全",
+        "condition:重症肌无力",
+        "condition:心脏传导阻滞",
+        "condition:严重心律失常"
+      ]
+    },
+    {
+      "sku_id": "sku_blood_sugar_complex",
+      "source_sequence": "3",
+      "source_product_name": "血糖综合支持",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "对肉桂、菊科植物过敏者禁用。"
+      ],
+      "cautions": [
+        "肝肾功能不全者慎用，在医生指导下。"
+      ],
+      "interaction_warnings": [
+        "服用降糖药物者需密切监测血糖。",
+        "服用抗凝药物者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "allergy:菊科"
+      ]
+    },
+    {
+      "sku_id": "sku_weight_support",
+      "source_sequence": "4",
+      "source_product_name": "减重代谢支持",
+      "contraindications": [],
+      "cautions": [
+        "肝肾功能不全者慎用。",
+        "哺乳期女性不建议使用。",
+        "癫痫患者慎用。"
+      ],
+      "interaction_warnings": [
+        "甲状腺功能减退或服用甲状腺激素替代药物者需咨询医生。",
+        "服用华法林等抗凝药者慎用。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_liposomal_vitamin_c_500",
+      "source_sequence": "5",
+      "source_product_name": "脂质体维生素C",
+      "contraindications": [],
+      "cautions": [
+        "肾结石病史者高剂量慎用。",
+        "血色病/铁过载患者慎用。",
+        "G6PD缺乏症患者高剂量慎用。",
+        "一般人群常规剂量安全，高剂量可能引起胃肠不适或腹泻。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_liposomal_vitamin_c_300",
+      "source_sequence": "5",
+      "source_product_name": "脂质体维生素C",
+      "contraindications": [],
+      "cautions": [
+        "肾结石病史者高剂量慎用。",
+        "血色病/铁过载患者慎用。",
+        "G6PD缺乏症患者高剂量慎用。",
+        "一般人群常规剂量安全，高剂量可能引起胃肠不适或腹泻。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_mitochondrial_support",
+      "source_sequence": "6",
+      "source_product_name": "线粒体支持",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。"
+      ],
+      "cautions": [
+        "肝肾功能异常者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药物者慎用。",
+        "手术前后两周停用。",
+        "服用化疗或免疫调节药物者需咨询医生。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_ashwagandha_stress_balance",
+      "source_sequence": "7",
+      "source_product_name": "南非醉茄平衡压力",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。"
+      ],
+      "cautions": [
+        "自身免疫性疾病患者慎用。",
+        "甲状腺功能亢进者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用镇静类药物或酒精者慎用。",
+        "手术前后两周停用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_cardiac_support",
+      "source_sequence": "8",
+      "source_product_name": "心肌功能支持",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "对其中植物成分过敏者禁用。"
+      ],
+      "cautions": [],
+      "interaction_warnings": [
+        "低血压患者或服用降压药者慎用。",
+        "服用强心苷类药物者需咨询医生。",
+        "服用抗心律失常药物者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_sleep_support",
+      "source_sequence": "9",
+      "source_product_name": "睡眠支持",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "自身免疫性疾病患者禁用。"
+      ],
+      "cautions": [],
+      "interaction_warnings": [
+        "服用抗抑郁药者禁用5-HTP。",
+        "服用镇静类药物者慎用。",
+        "手术前后两周停用；驾驶或操作重型机械前避免服用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "med:抗抑郁"
+      ]
+    },
+    {
+      "sku_id": "sku_thyroid_support",
+      "source_sequence": "10",
+      "source_product_name": "甲状腺支持",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "甲状腺功能亢进患者禁用。"
+      ],
+      "cautions": [
+        "双相情感障碍/躁郁症患者慎用。",
+        "自身免疫性甲状腺炎患者补碘需谨慎。"
+      ],
+      "interaction_warnings": [
+        "服用抗抑郁药者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "condition:甲亢"
+      ]
+    },
+    {
+      "sku_id": "sku_fish_oil_rtg",
+      "source_sequence": "11",
+      "source_product_name": "rTG鱼油",
+      "contraindications": [
+        "对鱼类/海鲜过敏者禁用。",
+        "出血性疾病患者禁用。"
+      ],
+      "cautions": [],
+      "interaction_warnings": [
+        "服用抗凝/抗血小板药物者慎用。",
+        "计划手术者，术前至少2周停用。",
+        "服用免疫抑制剂者需咨询医生。"
+      ],
+      "exclusion_rules": [
+        "allergy:鱼",
+        "condition:出血性疾病"
+      ]
+    },
+    {
+      "sku_id": "sku_vitamin_d3_k",
+      "source_sequence": "12",
+      "source_product_name": "维生素D3与维生素K复合物",
+      "contraindications": [
+        "高钙血症患者禁用。",
+        "肉芽肿性疾病患者禁用。",
+        "甲状旁腺功能亢进者禁用。"
+      ],
+      "cautions": [
+        "肾结石病史者高剂量慎用。"
+      ],
+      "interaction_warnings": [
+        "服用维生素K拮抗剂抗凝药者禁用维生素K2。"
+      ],
+      "exclusion_rules": [
+        "condition:高钙血症",
+        "condition:肉芽肿性疾病",
+        "med:抗凝",
+        "condition:甲状旁腺功能亢进"
+      ]
+    },
+    {
+      "sku_id": "sku_selenium_vitamin_e",
+      "source_sequence": "13",
+      "source_product_name": "富硒维生素E",
+      "contraindications": [
+        "对维生素E或硒过敏者禁用。"
+      ],
+      "cautions": [
+        "前列腺癌高危男性或已有前列腺癌者高剂量维生素E慎用。",
+        "甲状腺功能减退者补硒需谨慎。",
+        "硒过量可能导致指甲变形、脱发、胃肠不适及神经毒性。"
+      ],
+      "interaction_warnings": [
+        "出血性疾病/服用抗凝/抗血小板药物者慎用。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_neuro_cognitive",
+      "source_sequence": "14",
+      "source_product_name": "神经健康和认知功能",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。",
+        "对成分中植物或真菌提取物过敏者禁用。"
+      ],
+      "cautions": [
+        "低血压患者慎用。",
+        "癫痫患者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药物者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_coq10",
+      "source_sequence": "15",
+      "source_product_name": "辅酶Q10",
+      "contraindications": [],
+      "cautions": [
+        "孕妇及哺乳期女性慎用。"
+      ],
+      "interaction_warnings": [
+        "服用华法林者慎用。",
+        "服用降压药/降糖药者需监测血压、血糖。",
+        "手术前后两周停用。",
+        "甲状腺功能减退者服用甲状腺素者需注意。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_plant_multi_mineral",
+      "source_sequence": "16",
+      "source_product_name": "植物复合维生素矿物质",
+      "contraindications": [
+        "对配方中任何成分过敏者禁用。"
+      ],
+      "cautions": [
+        "虽不含铁，但含碘，甲亢患者需评估。",
+        "肾结石病史者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药者慎用。",
+        "一般健康人群按推荐剂量服用安全，避免与其他复合维生素叠加导致脂溶性维生素过量。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_stomach_acid_support",
+      "source_sequence": "17",
+      "source_product_name": "胃酸替代物",
+      "contraindications": [
+        "胃溃疡活动期、胃出血、胃穿孔患者禁用。",
+        "对甜菜碱或蛋白酶过敏者禁用。",
+        "急性胰腺炎发作期禁用。"
+      ],
+      "cautions": [
+        "反流性食管炎/食管糜烂患者慎用。"
+      ],
+      "interaction_warnings": [
+        "正在服用质子泵抑制剂或H2受体拮抗剂者，两者作用相互抵消，需评估使用必要性。"
+      ],
+      "exclusion_rules": [
+        "condition:胃溃疡",
+        "condition:胃出血",
+        "condition:胃穿孔",
+        "condition:急性胰腺炎"
+      ]
+    },
+    {
+      "sku_id": "sku_dhea",
+      "source_sequence": "18",
+      "source_product_name": "脱氢表雄酮",
+      "contraindications": [
+        "孕妇、哺乳期女性、18岁以下青少年/儿童禁用。",
+        "激素敏感性疾病患者禁用：乳腺癌、前列腺癌、卵巢癌、子宫内膜癌、睾丸癌。",
+        "职业运动员禁用。"
+      ],
+      "cautions": [
+        "多囊卵巢综合征患者慎用。",
+        "子宫内膜异位症、子宫肌瘤患者慎用。",
+        "抑郁症/躁郁症患者慎用。",
+        "糖尿病患者需监测血糖。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药、抗抑郁药、他莫昔芬/芳香酶抑制剂、皮质类固醇、CYP450酶代谢药物者需咨询医生。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "condition:激素敏感性疾病"
+      ]
+    },
+    {
+      "sku_id": "sku_polaprezinc",
+      "source_sequence": "19",
+      "source_product_name": "肌肽锌",
+      "contraindications": [],
+      "cautions": [
+        "孕妇及哺乳期女性慎用。",
+        "肾功能不全者慎用。",
+        "长期每日摄入锌超过40mg可能抑制铜、铁吸收，导致贫血或神经功能异常。"
+      ],
+      "interaction_warnings": [
+        "服用四环素类/喹诺酮类抗生素者，需间隔至少2小时。",
+        "服用铁剂/钙剂者需间隔2小时。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_hcy_methylation",
+      "source_sequence": "20",
+      "source_product_name": "HCY及甲基化支持",
+      "contraindications": [
+        "对成分过敏者禁用。"
+      ],
+      "cautions": [
+        "孕妇及哺乳期女性慎用。",
+        "肾结石病史者慎用。",
+        "一般人群按推荐剂量安全，长期高剂量甜菜碱可能引起胃肠不适或体臭。"
+      ],
+      "interaction_warnings": [
+        "服用抗抑郁药者需评估。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_bile_flow_support",
+      "source_sequence": "21",
+      "source_product_name": "胆汁分泌支持",
+      "contraindications": [
+        "胆道梗阻、胆结石、胆管炎患者禁用。"
+      ],
+      "cautions": [
+        "孕妇及哺乳期女性慎用。",
+        "对菊科植物过敏者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用他汀类降脂药者需咨询医生。",
+        "低血压或服用降压药者慎用。"
+      ],
+      "exclusion_rules": [
+        "condition:胆道梗阻",
+        "condition:胆结石"
+      ]
+    },
+    {
+      "sku_id": "sku_zinc_complex",
+      "source_sequence": "22",
+      "source_product_name": "锌",
+      "contraindications": [],
+      "cautions": [
+        "孕妇及哺乳期女性、儿童需在医生指导下使用。",
+        "肾功能不全者慎用。",
+        "长期高剂量补锌可能抑制铜吸收，导致铜缺乏性贫血及神经病变。"
+      ],
+      "interaction_warnings": [
+        "服用四环素类/喹诺酮类抗生素者需间隔至少2小时。",
+        "服用铁剂/钙剂者需间隔2小时。"
+      ],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_immune_support",
+      "source_sequence": "23",
+      "source_product_name": "免疫支持",
+      "contraindications": [
+        "孕妇及哺乳期女性、12岁以下儿童禁用。"
+      ],
+      "cautions": [
+        "肝肾功能不全者慎用。",
+        "自身免疫性疾病患者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药者慎用。",
+        "服用免疫抑制剂者慎用。",
+        "服用氟喹诺酮类抗生素者慎用。",
+        "服用降压药/降糖药者需监测血压、血糖。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_herbal_antimicrobial",
+      "source_sequence": "24",
+      "source_product_name": "草本杀菌胶囊",
+      "contraindications": [
+        "孕妇、哺乳期女性、婴幼儿禁用。",
+        "唇形科/菊科植物过敏者禁用。"
+      ],
+      "cautions": [
+        "肝肾功能不佳者慎用。"
+      ],
+      "interaction_warnings": [
+        "凝血功能障碍/服用抗凝药者禁用。",
+        "计划手术者，术前至少2周停用。",
+        "糖尿病患者/服用降糖药者慎用。",
+        "服用免疫抑制剂者禁用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "allergy:菊科",
+        "allergy:唇形科",
+        "condition:出血性疾病",
+        "med:抗凝",
+        "med:免疫抑制剂"
+      ]
+    },
+    {
+      "sku_id": "sku_liver_detox_support",
+      "source_sequence": "27",
+      "source_product_name": "肝脏排毒支持",
+      "contraindications": [
+        "孕妇、哺乳期女性、儿童禁用。"
+      ],
+      "cautions": [
+        "对菊科植物过敏者慎用。",
+        "雌激素敏感疾病患者慎用。",
+        "肝肾功能不全者需在医生指导下使用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药/降压药/免疫抑制剂者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_b_complex",
+      "source_sequence": "28",
+      "source_product_name": "维生素B族",
+      "contraindications": [],
+      "cautions": [
+        "孕妇及哺乳期女性按推荐剂量安全，但避免超量。"
+      ],
+      "interaction_warnings": [
+        "服用左旋多巴者禁用维生素B6。",
+        "服用苯妥英/苯巴比妥者慎用。",
+        "服用抗抑郁药者慎用。",
+        "服用抗凝药者注意。"
+      ],
+      "exclusion_rules": [
+        "med:左旋多巴"
+      ]
+    },
+    {
+      "sku_id": "sku_trans_resveratrol",
+      "source_sequence": "29",
+      "source_product_name": "至尊白藜芦醇",
+      "contraindications": [
+        "孕妇及哺乳期女性禁用。"
+      ],
+      "cautions": [
+        "雌激素敏感疾病患者慎用。",
+        "肝肾功能不全者慎用。"
+      ],
+      "interaction_warnings": [
+        "出血性疾病/服用抗凝/抗血小板药物者慎用。",
+        "计划手术者，术前至少2周停用。",
+        "服用降压药/降糖药者需监测血压、血糖。"
+      ],
+      "exclusion_rules": [
+        "pregnancy"
+      ]
+    },
+    {
+      "sku_id": "sku_female_hormone_balance",
+      "source_sequence": "30",
+      "source_product_name": "女性激素平衡",
+      "contraindications": [
+        "孕妇及哺乳期女性、18岁以下禁用。",
+        "激素敏感癌症患者禁用。",
+        "对成分中植物过敏者禁用。"
+      ],
+      "cautions": [
+        "肝病患者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用激素类药物者需咨询医生。",
+        "服用抗凝药者慎用。"
+      ],
+      "exclusion_rules": [
+        "pregnancy",
+        "condition:激素敏感性疾病"
+      ]
+    },
+    {
+      "sku_id": "sku_amino_acid_detox",
+      "source_sequence": "31",
+      "source_product_name": "肝脏排毒氨基酸支持",
+      "contraindications": [
+        "对谷胱甘肽、半胱氨酸、谷氨酰胺等成分过敏者禁用。"
+      ],
+      "cautions": [
+        "孕妇、哺乳期女性、儿童慎用。",
+        "哮喘患者或有哮喘发作史者慎用。"
+      ],
+      "interaction_warnings": [
+        "服用抗凝药/化疗药物/免疫抑制剂者需咨询医生。",
+        "与维生素B12不宜同时服用。"
+      ],
+      "exclusion_rules": []
+    }
+  ],
+  "skipped_products": [
+    {
+      "sequence": "25",
+      "product_name": "复合消化营养素",
+      "reason": "not_in_active_catalog"
+    },
+    {
+      "sequence": "26",
+      "product_name": "复合益生菌",
+      "reason": "not_in_active_catalog"
+    }
+  ]
+}

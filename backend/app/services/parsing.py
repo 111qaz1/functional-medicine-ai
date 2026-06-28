@@ -45,6 +45,10 @@ class LabNormalizationService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
 
     def __init__(self, marker_catalog_path: Path) -> None:
@@ -442,6 +446,8 @@ class LabNormalizationService:
         stripped = line.strip()
         if not stripped or self._is_section_header(stripped):
             return False
+        if self._is_admin_metadata_line(stripped):
+            return False
         if re.search(r"\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}", stripped):
             return False
         if re.search(r"(?:电话|手机号|身份证|病历号|条码|申请单|报告单)", stripped):
@@ -460,7 +466,30 @@ class LabNormalizationService:
             or re.search(r"\d+(?:\.\d+)?\s*(?:--|[-~])\s*\d+(?:\.\d+)?", stripped)
             or re.search(r"[↑↓鈫戔啌]", stripped)
         )
-        return measurement_evidence is not None
+        if measurement_evidence is None:
+            return False
+        return self._unknown_candidate_has_attention_signal(stripped)
+
+    def _unknown_candidate_has_attention_signal(self, line: str) -> bool:
+        if re.search(r"[\u2191\u2193鈫戔啌]|偏高|偏低|升高|降低|阳性|弱阳性", line):
+            return True
+
+        numbers = [float(match.group(0)) for match in re.finditer(r"-?\d+(?:\.\d+)?", line)]
+        range_match = re.search(
+            r"(?P<lower>-?\d+(?:\.\d+)?)\s*(?:--|[-~])\s*(?P<upper>-?\d+(?:\.\d+)?)",
+            line,
+        )
+        if not range_match or not numbers:
+            return False
+
+        value = numbers[0]
+        marker_match = re.search(r"[A-Za-z#]+\s*(?P<value>-?\d+(?:\.\d+)?)", line)
+        if marker_match:
+            value = float(marker_match.group("value"))
+
+        lower = float(range_match.group("lower"))
+        upper = float(range_match.group("upper"))
+        return value < lower or value > upper
 
     def _looks_like_multiline_marker(self, line: str) -> bool:
         stripped = _canonicalize_exponent_units(line.strip())

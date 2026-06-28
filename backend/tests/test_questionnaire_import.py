@@ -163,7 +163,7 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
     def test_imports_filled_msq_pdf_text_into_questionnaire(self) -> None:
         service = QuestionnaireImportService()
         pdf_text = """
-        功能医学健康问卷 姓名：_ 王堃 性别：_ 男 年龄：_ 31
+        功能医学健康问卷 姓名：_ 测试客户甲 性别：_ 男 年龄：_ 31
         第一部分：健康状况与维护 1. 您最近一次体检查出的主要问题？ 桥本氏甲状腺炎，甲减，窦性心律Y
         2. 您是否被诊断出患有某种慢性疾病？ □ 是 Y 否
         第二部分：家族病史 目前正患有何种慢性疾病？ 曾经患有何种慢性疾病？ 曾经接受过何种手术？

@@ -266,6 +266,8 @@ class ReviewService:
         normalized_lines: list[str] = []
         for raw_line in text.split("\n"):
             line = self._normalize_report_inline_spacing(raw_line.strip())
+            if self._is_internal_parse_warning(line):
+                continue
             if not line:
                 if normalized_lines and normalized_lines[-1] != "":
                     normalized_lines.append("")
@@ -820,7 +822,7 @@ class ReviewService:
         )
         nutrition_plan = list(dict.fromkeys(nutrition_plan))
         follow_up = self._customer_follow_up(sections)
-        missing_info = self._customerize_items(sections.get("待确认项", draft.missing_info))
+        missing_info = self._public_missing_info(sections.get("待确认项", draft.missing_info))
         draft_health = self._customerize_items(
             sections.get("核心结论与健康画像") or sections.get("总体健康画像")
         )
@@ -1396,6 +1398,12 @@ class ReviewService:
             if cleaned:
                 items.append(cleaned)
         return list(dict.fromkeys(items))
+
+    def _public_missing_info(self, content) -> list[str]:
+        return [item for item in self._customerize_items(content) if not self._is_internal_parse_warning(item)]
+
+    def _is_internal_parse_warning(self, item: str) -> bool:
+        return "疑似未识别指标" in str(item or "")
 
     def _contains_any(self, text: str, tokens: tuple[str, ...]) -> bool:
         normalized = text.lower()

@@ -193,6 +193,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service=indicator_service,
         vector_store=vector_store,
         llm_provider=llm_provider,
+        parsing_service=parsing_service,
         rag_retriever=rag_retriever,
         model_version=model_version,
         prompt_version=prompt_version,

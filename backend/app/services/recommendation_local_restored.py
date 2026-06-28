@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft
+from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft, SourceSpan
 from app.providers.base import DraftCompositionInput, LLMProvider, VectorStoreProvider
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
@@ -87,7 +87,12 @@ class RecommendationService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
+    _PARSE_WARNING_RE = re.compile(r"^\s*疑似未识别指标[:：]\s*(?P<line>.+?)\s*$")
 
     def __init__(
         self,
@@ -97,6 +102,7 @@ class RecommendationService:
         indicator_service: CaseIndicatorService,
         vector_store: VectorStoreProvider,
         llm_provider: LLMProvider,
+        parsing_service=None,
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v1",
@@ -107,6 +113,7 @@ class RecommendationService:
         self.indicator_service = indicator_service
         self.vector_store = vector_store
         self.llm_provider = llm_provider
+        self.parsing_service = parsing_service
         self.rag_retriever = rag_retriever
         self.model_version = model_version
         self.prompt_version = prompt_version
@@ -689,8 +696,79 @@ class RecommendationService:
                 missing.append("尚未补充 MSQ 系统负担评分。")
         else:
             missing.append("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。")
-        missing.extend(case.parsing_missing_fields)
+        missing.extend(self._visible_parse_warnings(case.parsing_missing_fields, case=case))
         return list(dict.fromkeys(missing))
+
+    def _visible_parse_warnings(self, warnings: list[str] | None, *, case=None) -> list[str]:
+        visible: list[str] = []
+        for warning in warnings or []:
+            if self._should_keep_parse_warning(warning, case=case):
+                visible.append(warning)
+        return visible
+
+    def _should_keep_parse_warning(self, warning: str, *, case=None) -> bool:
+        match = self._PARSE_WARNING_RE.match(str(warning or ""))
+        if not match:
+            return bool(str(warning or "").strip())
+
+        line = re.sub(r"\s+", " ", match.group("line")).strip()
+        if not line:
+            return False
+        if self._is_admin_metadata_snippet(line):
+            return False
+        if re.search(r"(?:电话|热线|手机号|身份证|病历号|条码|申请单|报告单)", line):
+            return False
+        if case is not None and self._parse_warning_already_has_indicator(line, case):
+            return False
+
+        normalization_service = getattr(getattr(self, "parsing_service", None), "normalization_service", None)
+        if normalization_service is None:
+            return True
+
+        span = SourceSpan(file_name="parse-warning", page=1, line_number=1, snippet=line)
+        try:
+            lab_items = normalization_service.normalize(spans=[span])
+            candidates = normalization_service.find_unknown_lab_candidates(spans=[span], lab_items=lab_items, limit=1)
+        except Exception:
+            return True
+
+        # If the current dictionary can normalize the row, it belongs in structured indicators,
+        # not in the "unrecognized metric" review chips. Keep only warnings that still look unknown.
+        if lab_items:
+            return False
+        return bool(candidates)
+
+    def _parse_warning_already_has_indicator(self, line: str, case) -> bool:
+        warning_norm = self._normalize_parse_warning_line(line)
+        if not warning_norm:
+            return False
+        try:
+            indicators = self.indicator_service.build(case)
+        except Exception:
+            return False
+        for indicator in indicators:
+            snippet = getattr(getattr(indicator, "source_span", None), "snippet", "") or ""
+            indicator_text = " ".join(
+                str(part or "")
+                for part in (
+                    getattr(indicator, "indicator_name", ""),
+                    getattr(indicator, "result_text", ""),
+                    snippet,
+                )
+            )
+            indicator_norm = self._normalize_parse_warning_line(indicator_text)
+            if not indicator_norm:
+                continue
+            if warning_norm in indicator_norm or indicator_norm in warning_norm:
+                return True
+        return False
+
+    def _normalize_parse_warning_line(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", str(value or "")).lower()
+        normalized = normalized.replace("μ", "u").replace("µ", "u")
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = re.sub(r"[|｜:：,，;；。()（）\[\]【】]", "", normalized)
+        return normalized
 
     def _build_reviewed_report_text(self, case) -> str:
         chunks: list[str] = []

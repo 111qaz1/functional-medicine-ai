@@ -42,6 +42,10 @@ class CaseIndicatorService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
 
     def build(self, case) -> list[CaseIndicator]:

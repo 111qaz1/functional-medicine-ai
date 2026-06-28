@@ -64,6 +64,22 @@
     "default_range": {"lower": 2.11, "upper": 2.52}
   },
   {
+    "code": "egfr",
+    "display_name": "估算肾小球滤过率",
+    "synonyms": ["估算肾小球滤过率", "肾小球滤过率", "eGFR", "EGFR", "GFR"],
+    "normalized_unit": "mL/min",
+    "unit_factors": {"mL/min": 1, "ml/min": 1},
+    "default_range": {"lower": 90, "upper": null}
+  },
+  {
+    "code": "fecal_calprotectin",
+    "display_name": "钙卫蛋白",
+    "synonyms": ["钙卫蛋白", "粪便钙卫蛋白", "粪钙卫蛋白", "Fecal Calprotectin", "Calprotectin", "Cal"],
+    "normalized_unit": "ug/g",
+    "unit_factors": {"ug/g": 1, "μg/g": 1, "ug/g stool": 1, "mcg/g": 1},
+    "default_range": {"lower": 0, "upper": 60}
+  },
+  {
     "code": "wbc",
     "display_name": "白细胞计数",
     "synonyms": ["白细胞计数", "白细胞", "WBC"],
@@ -146,7 +162,7 @@
   {
     "code": "eosinophil_percentage",
     "display_name": "嗜酸性粒细胞比率",
-    "synonyms": ["嗜酸性粒细胞比率", "嗜酸性粒细胞百分比", "EOS%", "EO%"],
+    "synonyms": ["嗜酸性粒细胞比率", "嗜酸性粒细胞百分比", "嗜酸性粒细胞", "EOS%", "EO%", "EOS", "EO"],
     "normalized_unit": "%",
     "unit_factors": {"%": 1},
     "default_range": {"lower": 0.5, "upper": 5}
@@ -454,5 +470,165 @@
     "normalized_unit": "ng/mL",
     "unit_factors": {"ng/mL": 1, "ng/ml": 1},
     "default_range": {"lower": 0, "upper": 5}
+  },
+  {
+    "code": "body_weight",
+    "display_name": "体重",
+    "synonyms": ["体重", "Weight", "Body Weight"],
+    "normalized_unit": "kg",
+    "unit_factors": {"kg": 1, "KG": 1},
+    "default_range": {"lower": 0, "upper": 100}
+  },
+  {
+    "code": "body_height",
+    "display_name": "身高",
+    "synonyms": ["身高", "Height", "Body Height"],
+    "normalized_unit": "cm",
+    "unit_factors": {"cm": 1, "CM": 1, "m": 100},
+    "default_range": {"lower": 42, "upper": 200}
+  },
+  {
+    "code": "bmi",
+    "display_name": "体质指数",
+    "synonyms": ["体质指数", "身体质量指数", "BMI"],
+    "normalized_unit": "kg/m2",
+    "unit_factors": {"kg/m2": 1, "kg/m^2": 1},
+    "default_range": {"lower": 18.5, "upper": 23.9999}
+  },
+  {
+    "code": "systolic_bp",
+    "display_name": "收缩压",
+    "synonyms": ["收缩压", "高压", "SBP", "Systolic Blood Pressure"],
+    "normalized_unit": "mmHg",
+    "unit_factors": {"mmHg": 1, "mmhg": 1},
+    "default_range": {"lower": 90, "upper": 139}
+  },
+  {
+    "code": "diastolic_bp",
+    "display_name": "舒张压",
+    "synonyms": ["舒张压", "低压", "DBP", "Diastolic Blood Pressure"],
+    "normalized_unit": "mmHg",
+    "unit_factors": {"mmHg": 1, "mmhg": 1},
+    "default_range": {"lower": 60, "upper": 89}
+  },
+  {
+    "code": "waist_circumference",
+    "display_name": "腰围",
+    "synonyms": ["腰围", "Waist", "Waist Circumference"],
+    "normalized_unit": "cm",
+    "unit_factors": {"cm": 1, "CM": 1},
+    "default_range": {"lower": 55, "upper": 79.999}
+  },
+  {
+    "code": "hip_circumference",
+    "display_name": "臀围",
+    "synonyms": ["臀围", "Hip", "Hip Circumference"],
+    "normalized_unit": "cm",
+    "unit_factors": {"cm": 1, "CM": 1},
+    "default_range": {"lower": 50, "upper": 150}
+  },
+  {
+    "code": "waist_hip_ratio",
+    "display_name": "腰臀比",
+    "synonyms": ["腰臀比", "腰围臀围比", "WHR", "Waist Hip Ratio"],
+    "normalized_unit": "ratio",
+    "unit_factors": {"ratio": 1},
+    "default_range": {"lower": 0, "upper": 0.929}
+  },
+  {
+    "code": "platelet_count",
+    "display_name": "血小板",
+    "synonyms": ["血小板计数", "血小板", "PLT", "Platelet"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 125, "upper": 350}
+  },
+  {
+    "code": "neutrophil_percentage",
+    "display_name": "中性粒细胞",
+    "synonyms": ["中性粒细胞比率", "中性粒细胞百分比", "中性粒细胞", "NEUT%", "Neu%", "NEUT"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 40, "upper": 75}
+  },
+  {
+    "code": "lymphocyte_percentage",
+    "display_name": "淋巴细胞",
+    "synonyms": ["淋巴细胞比率", "淋巴细胞百分比", "淋巴细胞", "LYM%", "Lymph%", "LYM"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 20, "upper": 50}
+  },
+  {
+    "code": "monocyte_percentage",
+    "display_name": "单核细胞",
+    "synonyms": ["单核细胞比率", "单核细胞百分比", "单核细胞", "MONO%", "Mono%", "MONO"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 3, "upper": 10}
+  },
+  {
+    "code": "basophil_percentage",
+    "display_name": "嗜碱性粒细胞",
+    "synonyms": ["嗜碱性粒细胞比率", "嗜碱性粒细胞百分比", "嗜碱性粒细胞", "BAS%", "Bas%", "BAS"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 0, "upper": 1}
+  },
+  {
+    "code": "neutrophil_absolute",
+    "display_name": "中性粒细胞绝对值",
+    "synonyms": ["中性粒细胞绝对值", "NEUT#", "Neu#", "NE#"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 1.8, "upper": 6.3}
+  },
+  {
+    "code": "lymphocyte_absolute",
+    "display_name": "淋巴细胞绝对值",
+    "synonyms": ["淋巴细胞绝对值", "LYM#", "Lymph#", "LY#"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 1.1, "upper": 3.2}
+  },
+  {
+    "code": "monocyte_absolute",
+    "display_name": "单核细胞数绝对值",
+    "synonyms": ["单核细胞数绝对值", "单核细胞绝对值", "MONO#", "Mono#", "MO#"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 0.1, "upper": 0.6}
+  },
+  {
+    "code": "eosinophil_absolute",
+    "display_name": "嗜酸性粒细胞绝对值",
+    "synonyms": ["嗜酸性粒细胞绝对值", "EOS#", "EO#"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 0, "upper": 0.5}
+  },
+  {
+    "code": "basophil_absolute",
+    "display_name": "嗜碱性粒细胞绝对值",
+    "synonyms": ["嗜碱性粒细胞绝对值", "BAS#", "BA#"],
+    "normalized_unit": "10^9/L",
+    "unit_factors": {"10^9/L": 1},
+    "default_range": {"lower": 0, "upper": 0.1}
+  },
+  {
+    "code": "mean_platelet_volume",
+    "display_name": "平均血小板体积",
+    "synonyms": ["平均血小板体积", "MPV"],
+    "normalized_unit": "fL",
+    "unit_factors": {"fL": 1, "fl": 1},
+    "default_range": {"lower": 6.5, "upper": 12}
+  },
+  {
+    "code": "plateletcrit",
+    "display_name": "血小板压积",
+    "synonyms": ["血小板压积", "PCT", "Plateletcrit"],
+    "normalized_unit": "%",
+    "unit_factors": {"%": 1},
+    "default_range": {"lower": 0.108, "upper": 0.282}
   }
 ]

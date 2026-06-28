@@ -1,4 +1,4 @@
-# RAG 接入验证报告
+﻿# RAG 接入验证报告
 
 本文档记录当前 RAG 接入的最终验证状态，供交付审查使用。
 
@@ -58,7 +58,7 @@
 模型目录位于仓库外：
 
 ```text
-C:/RAG/models/bge-m3
+./bge-m3
 ```
 
 该目录以只读方式挂载到容器内：
@@ -180,7 +180,7 @@ OK
 - `backend/app/data/rag_index/`
 - `backend/app/services/rag_retriever.py`
 - `backend/app/services/rag_safety.py`
-- `backend/app/services/recommendation_local_restored.py`
+- `backend/app/services/recommendation_local_engine.py`
 - `backend/app/services/review_local.py`
 - `frontend/components/case-workbench-local.tsx`
 - `scripts/build_rag_corpus.py`

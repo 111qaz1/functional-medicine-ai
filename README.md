@@ -1,4 +1,4 @@
-﻿# Functional Medicine Nutrition AI Local MVP
+﻿# Functional Medicine Nutrition AI 本地部署版
 
 本项目现在收敛为一个“本地可跑通”的功能医学营养推荐工作台。
 
@@ -149,18 +149,18 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `compose.yaml`
 - `.env.example`
 - `docs/deployment.md`
+- `docs/customer-api-delivery-guide.md`
 
 功能稳定后，可以直接用 Docker 方式把同一套本地版交给其他人部署。
 
 新成员第一次用 Docker 启动项目时，优先参考：`docs/docker-first-run.md`。
+如果以接口形式交付给外部系统，优先参考：`docs/customer-api-delivery-guide.md`。
 
 ## 团队协作
 
-项目仍在开发阶段时，推荐使用“私有 Git 仓库交付源码 + Docker Compose 统一启动环境”的方式协作。Git 负责多人改代码、提交历史和合并；Docker Compose 负责让新成员快速跑起同一套前后端环境。
+推荐使用“私有 Git 仓库或源码包交付 + Docker Compose 统一启动环境”的方式协作。Git 负责提交历史和版本追踪；Docker Compose 负责让部署方快速跑起同一套前后端环境。
 
 医学资料需要分级管理：整理后的 JSON/CSV 规则数据可以进入仓库，真实病例、原始 PDF/Word/Excel、`.env`、`.runtime` 和本地数据库不要进入 Git。
-
-新成员加入、资料边界和分支流程详见：`docs/team-collaboration.md`。
 
 ## 验证
 

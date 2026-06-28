@@ -4,6 +4,7 @@
 .gitignore
 .runtime
 backend/.runtime
+backend/tests
 frontend/.next
 frontend/node_modules
 node_modules
@@ -17,6 +18,8 @@ backend/app/data/rag_staging
 coverage
 dist
 build
+work
+bge-m3
 体检报告
 功能医学相关资料
 AI学习功能医学相关资料

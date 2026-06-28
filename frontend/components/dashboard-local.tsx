@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
@@ -225,7 +225,7 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
             <p>
               {workspaceScope === "doctor"
                 ? "医生工作台里的病例只对当前登录医生可见。"
-                : "公共工作台不需要登录，适合临时病例；这里不能保存新的医生规则。"}
+                : "公共工作台不需要登录，适合快速建档；这里不能保存新的医生规则。"}
             </p>
           </div>
         </SectionCard>

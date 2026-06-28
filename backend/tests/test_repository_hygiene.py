@@ -8,7 +8,7 @@ from pathlib import Path
 class RepositoryHygieneTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[2]
     SCANNED_SUFFIXES = {".py", ".json", ".md", ".ts", ".tsx", ".js"}
-    SKIPPED_DIRS = {".git", ".runtime", "node_modules", "__pycache__", "dist", "build"}
+    SKIPPED_DIRS = {".git", ".runtime", "node_modules", "__pycache__", "dist", "build", "bge-m3", "work"}
     SKIPPED_GENERATED_FILES = {"knowledge_statements.json", "knowledge_statements_tfm2010_curated.json"}
     ALLOWED_PHONE_PLACEHOLDERS = {"010-00000000", "400-000-0000"}
     PHONE_PATTERN = re.compile(r"(?<!\d)(?:1[3-9]\d{9}|0\d{2,3}-\d{7,8}|400-\d{3}-\d{4})(?!\d)")

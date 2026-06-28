@@ -22,6 +22,8 @@ frontend/tsconfig.tsbuildinfo
 .env
 .env.local
 context.md
+work/
+bge-m3/
 
 # Local medical/source documents and runtime knowledge folders are kept outside Git.
 体检报告/

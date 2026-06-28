@@ -25,7 +25,7 @@ RUN if [ "$PRELOAD_RAG_MODEL" = "1" ]; then \
       echo "Skipping BAAI/bge-m3 preload; set PRELOAD_RAG_MODEL=1 for release images." ; \
     fi
 
-COPY backend /app/backend
+COPY backend/app /app/backend/app
 
 WORKDIR /app/backend
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import json
@@ -27,7 +27,7 @@ def _tokenize(value: str) -> set[str]:
     return {token for token in tokens if len(token) > 1}
 
 
-class DemoOCRProvider:
+class DocumentOCRProvider:
     """Hybrid OCR provider that prefers real text extraction and safe vision OCR."""
 
     _TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json"}

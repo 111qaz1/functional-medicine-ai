@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -183,7 +183,7 @@ export function AssistantRuleManager() {
           <Link href="/" className="back-link">
             返回工作台
           </Link>
-          <h1>AI 智慧助手规则</h1>
+          <h1>智能助手规则</h1>
           <p className="hero__copy">
             医生可以把单个病例里沉淀出来的经验，调整成可复用的规则。保存后，后续相似病例在重新生成草案时，
             系统会自动把这些规则作为推荐加权依据。
@@ -244,7 +244,7 @@ export function AssistantRuleManager() {
               ))}
             </div>
             {!loading && rules.length === 0 ? (
-              <p className="muted">还没有沉淀好的医生规则。可以先进入具体病例，在“AI 智慧助手”里记录第一条经验。</p>
+              <p className="muted">还没有沉淀好的医生规则。可以先进入具体病例，在“智能助手”里记录第一条经验。</p>
             ) : null}
           </div>
         </SectionCard>

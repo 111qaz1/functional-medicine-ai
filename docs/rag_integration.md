@@ -1,4 +1,4 @@
-# RAG 知识库接入与运维指南
+﻿# RAG 知识库接入与运维指南
 
 本文档面向项目维护者，说明本地功能医学 RAG 知识库从语料构建、索引生成、Docker 运行到报告接入的完整流程。RAG 只作为报告描述增强层，不是推荐决策层。
 
@@ -45,7 +45,7 @@ python scripts\build_rag_corpus.py `
 
 - `backend/app/data/rag_corpus.jsonl`
 - `backend/app/data/rag_import_report.json`
-- `backend/app/data/rag_staging` 下的临时抽样审查文件
+- `backend/app/data/rag_staging` 下的阶段性抽样审查文件
 
 交付前应删除 `backend/app/data/rag_staging`。该目录已忽略，可按需重新生成。
 
@@ -77,7 +77,7 @@ python scripts\index_builder.py `
 不要把 `BAAI/bge-m3` 复制进项目仓库。推荐外部路径：
 
 ```text
-C:/RAG/models/bge-m3
+./bge-m3
 ```
 
 如果 Windows HuggingFace 缓存快照中包含 Linux 容器无法解析的符号链接，需要在仓库外物化为普通文件目录。同一磁盘上优先使用硬链接，可避免额外占用完整 2.3 GB 物理空间。
@@ -85,7 +85,7 @@ C:/RAG/models/bge-m3
 Docker Compose 相关环境变量：
 
 ```env
-FM_RAG_MODEL_HOST_DIR=C:/RAG/models/bge-m3
+FM_RAG_MODEL_HOST_DIR=./bge-m3
 FM_RAG_MODEL_PATH=/models/bge-m3
 FM_RAG_LOCAL_FILES_ONLY=1
 FM_RAG_LLM_FUSION_ENABLED=1
@@ -153,7 +153,7 @@ RAG 命中与既有 `knowledge_hits` 保持独立。推荐服务会构建安全 
 - 生活方式干预重点
 - 复查与跟进建议
 
-前端待审预览也会进行同类自然融合，避免医生在“审核后发布内容”中看到一份未增强的临时草稿。真实客户报告不显示 RAG 标记，也不单独列出“功能医学知识库（仅供参考）”。
+前端待审预览也会进行同类自然融合，避免医生在“审核后发布内容”中看到一份未增强的待审草稿。真实客户报告不显示 RAG 标记，也不单独列出“功能医学知识库（仅供参考）”。
 
 个性化营养素方案不做额外 RAG 扩写。该区块以产品目录、推荐规则、禁忌和人工审核为准；药企方后续提供的产品营养素介绍可作为独立产品文案来源。
 

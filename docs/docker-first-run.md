@@ -1,4 +1,4 @@
-# Docker 首次启动指南
+﻿# Docker 首次启动指南
 
 这份文档给第一次加入项目的新成员使用。目标是从 GitHub 私有仓库拉取源码后，用 Docker Compose 在本地快速启动完整前后端。
 
@@ -168,7 +168,7 @@ docker compose up --build -d
 - 能打开 `http://localhost:3000`
 - `http://localhost:8000/health` 返回 `{"status":"ok"}`
 - 能进入公共工作台
-- 能创建测试病例
+- 能创建验收病例
 - 能看到产品规则、医生规则或相关管理页面
 
 如果以上都正常，说明本地 Docker 复现成功。

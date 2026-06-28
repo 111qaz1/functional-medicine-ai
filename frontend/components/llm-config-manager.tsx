@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -99,7 +99,7 @@ export function LlmConfigManager() {
           </Link>
           <h1>大模型配置</h1>
           <p className="hero__copy">
-            在这里直接配置甲方自己的大模型接口。保存后系统会重新加载模型能力，后续识别和报告润色会优先使用这里的配置。
+            在这里配置模型服务接口。保存后系统会重新加载模型能力，后续识别和报告润色会优先使用这里的配置。
           </p>
         </div>
         <div className="hero__panel">
@@ -128,7 +128,7 @@ export function LlmConfigManager() {
         <div className="stack">
           <div className="info-note">
             <strong>先填写这三项就可以</strong>
-            <p>对大多数甲方来说，只需要填写 Base URL、API Key 和模型名。接口风格、超时时间、温度都可以先保持默认。</p>
+            <p>通常只需要填写 Base URL、API Key 和模型名。接口风格、超时时间、温度可以先保持默认。</p>
             <p>注意：API Key 不是服务地址，不要把 Base URL 粘贴到 API Key 栏；如果 Key 以 Bearer 开头，系统会自动去掉 Bearer 前缀。</p>
           </div>
 
@@ -147,7 +147,7 @@ export function LlmConfigManager() {
               type="password"
               value={config.api_key ?? ""}
               onChange={(event) => updateField("api_key", event.target.value)}
-              placeholder="粘贴甲方自己的 API Key"
+              placeholder="粘贴模型服务 API Key"
             />
           </label>
 

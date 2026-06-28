@@ -84,6 +84,53 @@ SOURCE_LEAK_PATTERNS = (
     re.compile(r"\.docx|\.pdf|ISBN|版权|页码|第\s*\d+\s*页", re.IGNORECASE),
 )
 
+TEXTBOOK_REF = r"[表图]\s*\d+(?:\s*[-－—–]\s*\d+)*"
+TEXTBOOK_TITLE_WORDS = (
+    "分型",
+    "分类",
+    "标准",
+    "定义",
+    "机制",
+    "用量",
+    "剂量",
+    "特性",
+    "指标",
+    "方案",
+    "流程",
+    "列表",
+)
+
+
+def strip_textbook_internal_markers(text: str) -> str:
+    """Remove textbook-only table/figure references while preserving clinical text."""
+
+    cleaned = str(text or "")
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(rf"[（(]\s*(?:见|详见|参见)?\s*{TEXTBOOK_REF}\s*[）)]", "", cleaned)
+    cleaned = re.sub(rf"(?:见|详见|参见)\s*{TEXTBOOK_REF}", "", cleaned)
+    cleaned = re.sub(rf"如\s*{TEXTBOOK_REF}\s*所示", "", cleaned)
+    cleaned = re.sub(r"(?:如下|下|上)?[表图]\s*所示", "", cleaned)
+    cleaned = re.sub(r"如下表所示|如下图所示|见下表|见下图|详见下表|详见下图", "", cleaned)
+    cleaned = re.sub(r"(?:(?<=^)|(?<=[\s。；;，,]))续\s*表(?=$|[\s。；;，,])", "", cleaned)
+
+    title_words = "|".join(TEXTBOOK_TITLE_WORDS)
+    cleaned = re.sub(
+        rf"(?:(?<=^)|(?<=[\s。；;，,])){TEXTBOOK_REF}"
+        rf"[^\s。；;，,，。；:：]{{0,24}}(?:{title_words})[^\s。；;，,，。；:：]{{0,16}}",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(rf"(?:(?<=^)|(?<=[\s。；;，,])){TEXTBOOK_REF}(?=(?:如下|如上|所示|$|[\s。；;，,]))", "", cleaned)
+    cleaned = re.sub(r"[（(]\s*[）)]", "", cleaned)
+    cleaned = re.sub(r"[ \t\u3000]+", " ", cleaned)
+    cleaned = re.sub(r"[ \t\u3000]*([，、。；：！？])[ \t\u3000]*", r"\1", cleaned)
+    cleaned = re.sub(r"([，、；：])([。；])", r"\1", cleaned)
+    cleaned = re.sub(r"([。；，、]){2,}", lambda match: match.group(1), cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip(" ，。；")
+
 
 @dataclass(frozen=True)
 class SafeRagHit:
@@ -219,7 +266,7 @@ class RagSafetyFilter:
         text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
         text = re.sub(r"[\r\n\t|]+", " ", text)
         text = re.sub(r"\s+", " ", text)
-        return text.strip()
+        return strip_textbook_internal_markers(text).strip()
 
     def _language_quality_reason(self, text: str) -> str | None:
         compact = re.sub(r"\s+", "", text or "")
@@ -263,6 +310,7 @@ class RagSafetyFilter:
 
         for sentence in sentences[:8]:
             sentence = self._polish_sentence(sentence)
+            sentence = strip_textbook_internal_markers(sentence)
             if len(sentence) < 18:
                 continue
             if self._language_quality_reason(sentence):
@@ -320,6 +368,7 @@ class RagSafetyFilter:
             parts.append(f"后续解读可结合{downstream}")
 
         excerpt = "，".join(parts)
+        excerpt = strip_textbook_internal_markers(excerpt)
         if len(excerpt) > 180:
             excerpt = excerpt[:180].rstrip(" ，,；;")
         if any(pattern.search(excerpt) for pattern in ACTIONABLE_DRUG_PATTERNS):
@@ -329,7 +378,7 @@ class RagSafetyFilter:
         return excerpt
 
     def _polish_sentence(self, sentence: str) -> str:
-        sentence = sentence.strip(" -—:：，,。；;")
+        sentence = strip_textbook_internal_markers(sentence).strip(" -—:：，,。；;")
         if "促进甲状腺激素正常合成的因素" in sentence:
             return (
                 "甲状腺激素合成与碘、酪氨酸、锌、硒及多种维生素等营养与抗氧化状态有关，"

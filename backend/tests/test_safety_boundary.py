@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -21,7 +22,7 @@ from app.domain.models import (
 )
 from app.providers.base import DraftCompositionResult
 from app.services.rag_retriever import RagHit
-from app.services.rag_safety import CUSTOMER_RAG_PREFIX
+from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter
 
 
 class CaptureComposer:
@@ -220,6 +221,31 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn(CUSTOMER_RAG_PREFIX, nutrition_block)
         self.assertNotIn("胰岛素抵抗", nutrition_block)
 
+    def test_rag_safety_strips_textbook_table_markers_without_dropping_content(self) -> None:
+        safety_filter = RagSafetyFilter(self.container.repository.list_products(enabled_only=True))
+        safe_hits, rejections = safety_filter.filter_hits(
+            [
+                rag_hit(
+                    "在临床上血脂异常可以按表型分类，可以按是否继发于全身系统性疾病分类，可以按基因分类，"
+                    "简单地分类是把血脂异常分为高胆固醇血症、高甘油三酯血症、混合性高脂血症和"
+                    "低密度脂蛋白胆固醇血症（表7-2）。表7-2血脂异常的分型 续表 ↑表示升高，↓表示降低。",
+                    chunk_id="table_marker_lipid",
+                    topic_tags=["代谢"],
+                )
+            ],
+            context=SimpleNamespace(medications=set(), conditions=set(), allergies=set(), pregnancy=False),
+            red_flags=[],
+            contraindications=[],
+        )
+
+        self.assertEqual(rejections, [])
+        self.assertEqual(len(safe_hits), 1)
+        self.assertIn("高胆固醇血症", safe_hits[0].excerpt)
+        self.assertIn("低密度脂蛋白胆固醇血症", safe_hits[0].excerpt)
+        self.assertNotIn("表7-2", safe_hits[0].excerpt)
+        self.assertNotIn("血脂异常的分型", safe_hits[0].excerpt)
+        self.assertNotIn("续表", safe_hits[0].excerpt)
+
     def test_red_flags_and_contraindications_still_take_priority_over_rag(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
             [
@@ -407,7 +433,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
                 "异常指标汇总": [
                     {
                         "index": 0,
-                        "text": "空腹血糖: 6.2 mmol/L (需关注).\n- 说明: 结合知识库观点，可把空腹值、餐后反应和复查趋势放在一起理解",
+                        "text": "空腹血糖: 6.2 mmol/L (需关注).\n- 说明: 结合知识库观点，可把空腹值、餐后反应和复查趋势放在一起理解（表7-2）。表7-2血脂异常的分型",
                     }
                 ],
                 "生活方式干预处方": [
@@ -456,6 +482,8 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertIn("空腹值、餐后反应和复查趋势", review.publishable_report)
         self.assertIn("睡眠、饭后活动和压力恢复", review.publishable_report)
         self.assertIn("空腹血糖：6.2 mmol/L（需关注）。说明：", review.publishable_report)
+        self.assertNotIn("表7-2", review.publishable_report)
+        self.assertNotIn("血脂异常的分型", review.publishable_report)
         self.assertIn("睡眠修复：固定起床时间", review.publishable_report)
         self.assertNotIn("\n- -", review.publishable_report)
         self.assertNotIn("\n- 1)", review.publishable_report)
@@ -472,6 +500,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
             "## 异常指标汇总\n"
             "- 血清镁：要注意血清镁仅占体内总镁的1 \n"
             "%，即使细胞内已经存在镁缺乏，血清镁也可能显示正常。\n"
+            "- 低密度脂蛋白胆固醇：血脂异常可分为高胆固醇血症、高甘油三酯血症、混合性高脂血症和低密度脂蛋白胆固醇血症（表7-2）。表7-2血脂异常的分型 见表13-1，图2-3如下表所示。\n"
             "- 蛋白质代谢：TH 可无特异 性地加强基础蛋白质合成\n\n"
             "## 首月营养素干预方案\n"
             "- 甲状腺支持：每日 1粒，早餐后使用。；适用说明：结合 甲状腺支持、基础代谢支持 与本次资料提示，作 为当前阶段的建议。；注意/禁忌：涉及碘补充，建议结合甲状腺检查结果人工确认。；与甲状腺素类药物需 错开使用。；甲状腺亢进、碘限制人群需顾问确认\n"
@@ -481,15 +510,21 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
         self.assertIn("每天安排2次5分钟呼吸练习", normalized)
         self.assertIn("体内总镁的1%，即使细胞内", normalized)
+        self.assertIn("高胆固醇血症、高甘油三酯血症、混合性高脂血症和低密度脂蛋白胆固醇血症", normalized)
         self.assertIn("TH 可无特异性地加强基础蛋白质合成。", normalized)
         self.assertIn("甲状腺支持：每日1粒，早餐后使用；适用说明：结合甲状腺支持、基础代谢支持与本次资料提示，作为当前阶段的建议；注意/禁忌：涉及碘补充，建议结合甲状腺检查结果人工确认；与甲状腺素类药物需错开使用；甲状腺亢进、碘限制人群需顾问确认。", normalized)
         self.assertNotIn("2 \n次", normalized)
         self.assertNotIn("1 \n%", normalized)
+        self.assertNotIn("表7-2", normalized)
+        self.assertNotIn("血脂异常的分型", normalized)
+        self.assertNotIn("见表13-1", normalized)
+        self.assertNotIn("图2-3", normalized)
+        self.assertNotIn("如下表所示", normalized)
         self.assertNotIn("特异 性", normalized)
         self.assertNotIn("作 为", normalized)
         self.assertNotIn("需 错", normalized)
         self.assertNotIn("。；", normalized)
-        self.assertEqual(normalized.count("- "), 4)
+        self.assertEqual(normalized.count("- "), 5)
 
     def test_optional_remote_rag_fusion_falls_back_when_output_leaks_internal_labels(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
@@ -659,7 +694,6 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertTrue(any(evidence_id.startswith("clinician_rule:") for evidence_id in draft.evidence_ids))
         self.assertNotIn("改为推荐目录外产品", serialized_sections)
         self.assertIn("direct_product_reference", serialized_sections)
-
 
 if __name__ == "__main__":
     unittest.main()

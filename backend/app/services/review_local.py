@@ -10,7 +10,7 @@ from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.pdf_export import PdfReportExporter
-from app.services.rag_safety import CUSTOMER_RAG_PREFIX
+from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
 
 
 class ReviewService:
@@ -259,7 +259,7 @@ class ReviewService:
         )
         for marker in hidden_markers:
             cleaned = cleaned.replace(marker, "")
-        return cleaned
+        return strip_textbook_internal_markers(cleaned)
 
     def _normalize_customer_visible_report_text(self, report_text: str | None) -> str:
         text = str(report_text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -308,7 +308,8 @@ class ReviewService:
         return f"{prefix}{content}" if prefix else content
 
     def _normalize_report_inline_spacing(self, text: str) -> str:
-        normalized = re.sub(r"[ \t\f\v]+", " ", str(text or "")).strip()
+        normalized = strip_textbook_internal_markers(str(text or ""))
+        normalized = re.sub(r"[ \t\f\v]+", " ", normalized).strip()
         normalized = re.sub(r"\s*([，、。；：！？])\s*", r"\1", normalized)
         normalized = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", normalized)
         normalized = re.sub(
@@ -321,10 +322,11 @@ class ReviewService:
             lambda match: re.sub(r"\s+", "", match.group(1)) + match.group(2),
             normalized,
         )
+        normalized = re.sub(r"(?<=\d)。(?=(?:%|％|‰|℃|°|次|个|颗|粒|片|周|天|小时|分钟|秒))", "", normalized)
         normalized = re.sub(r"。+；", "；", normalized)
         normalized = re.sub(r"；+。", "；", normalized)
         normalized = re.sub(r"([，。；：！？、])\1+", r"\1", normalized)
-        return normalized
+        return strip_textbook_internal_markers(normalized)
 
     def _normalize_nutrition_item_punctuation(self, text: str) -> str:
         normalized = text.strip(" ，。；")
@@ -508,7 +510,7 @@ class ReviewService:
         for title, (prefix, source_key) in source_map.items():
             items = []
             for index, item in enumerate(self._customerize_items(sections.get(source_key, []))[:6], start=1):
-                text = self._strip_customer_rag_prefix(item)
+                text = strip_textbook_internal_markers(self._strip_customer_rag_prefix(item))
                 if text and not self._llm_text_quality_reason(text):
                     items.append({"id": f"{prefix}_{index}", "text": text[:420]})
             context[title] = items
@@ -633,6 +635,7 @@ class ReviewService:
     def _normalize_llm_report_item_format(self, raw_item: Any) -> str:
         item = str(raw_item or "")
         item = self._remove_customer_hidden_rag_labels(item)
+        item = strip_textbook_internal_markers(item)
         item = item.replace("\r\n", "\n").replace("\r", "\n")
         item = re.sub(r"\n\s*(?:[-*•·]+|\d+[.)、]|[（(]?\d+[）)])\s*", " ", item)
         item = self._collapse_inline_soft_breaks(item)
@@ -651,6 +654,7 @@ class ReviewService:
         item = re.sub(r"(?<=[\u4e00-\u9fff])\.\s*", "。", item)
         item = re.sub(r"([，。；：！？、])\1+", r"\1", item)
         item = re.sub(r"([。！？])([。！？])+", r"\1", item)
+        item = strip_textbook_internal_markers(item)
         item = item.strip(" ，；")
         if item and not re.search(r"[。！？；）)]$", item):
             item += "。"
@@ -1325,6 +1329,7 @@ class ReviewService:
 
     def _rag_customer_clause(self, rag_item: str, *, max_len: int, purpose: str) -> str:
         cleaned = self._strip_customer_rag_prefix(rag_item)
+        cleaned = strip_textbook_internal_markers(cleaned)
         cleaned = re.sub(r"；这部分仅作为营养支持背景说明.*$", "", cleaned)
         cleaned = re.sub(r"具体补充剂、禁忌和复查安排仍以医生审核与产品规则为准.*$", "", cleaned)
         cleaned = self._collapse_inline_soft_breaks(cleaned).strip(" ，。；")
@@ -1338,7 +1343,7 @@ class ReviewService:
         return cleaned.rstrip("。") + "。"
 
     def _naturalize_rag_clause(self, cleaned: str, *, purpose: str) -> str:
-        cleaned = cleaned.strip(" ，。；")
+        cleaned = strip_textbook_internal_markers(cleaned).strip(" ，。；")
         if not cleaned:
             return ""
         if purpose == "health":
@@ -1392,6 +1397,7 @@ class ReviewService:
             cleaned = cleaned.replace("候选推荐", "建议")
             cleaned = cleaned.replace("已审核知识命中", "本次资料提示")
             cleaned = cleaned.replace("人工复核", "顾问确认")
+            cleaned = strip_textbook_internal_markers(cleaned)
             cleaned = self._collapse_inline_soft_breaks(cleaned).strip(" ，。；")
             if cleaned:
                 items.append(cleaned)

@@ -181,6 +181,7 @@ def project_root() -> Path:
 def normalize_text(value: str) -> str:
     value = value.replace("\x00", " ").replace("\r", "\n")
     value = re.sub(r"[\u200b-\u200f\ufeff]", "", value)
+    value = strip_textbook_internal_markers(value)
     value = re.sub(r"[ \t\u3000]+", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()
@@ -188,6 +189,35 @@ def normalize_text(value: str) -> str:
 
 def compact_text(value: str) -> str:
     return re.sub(r"\s+", " ", normalize_text(value)).strip()
+
+
+def strip_textbook_internal_markers(text: str) -> str:
+    cleaned = str(text or "")
+    if not cleaned:
+        return ""
+
+    textbook_ref = r"[表图]\s*\d+(?:\s*[-－—–]\s*\d+)*"
+    title_words = "分型|分类|标准|定义|机制|用量|剂量|特性|指标|方案|流程|列表"
+    cleaned = re.sub(rf"[（(]\s*(?:见|详见|参见)?\s*{textbook_ref}\s*[）)]", "", cleaned)
+    cleaned = re.sub(rf"(?:见|详见|参见)\s*{textbook_ref}", "", cleaned)
+    cleaned = re.sub(rf"如\s*{textbook_ref}\s*所示", "", cleaned)
+    cleaned = re.sub(r"(?:如下|下|上)?[表图]\s*所示", "", cleaned)
+    cleaned = re.sub(r"如下表所示|如下图所示|见下表|见下图|详见下表|详见下图", "", cleaned)
+    cleaned = re.sub(r"(?:(?<=^)|(?<=[\s。；;，,]))续\s*表(?=$|[\s。；;，,])", "", cleaned)
+    cleaned = re.sub(
+        rf"(?:(?<=^)|(?<=[\s。；;，,])){textbook_ref}"
+        rf"[^\s。；;，,，。；:：]{{0,24}}(?:{title_words})[^\s。；;，,，。；:：]{{0,16}}",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(rf"(?:(?<=^)|(?<=[\s。；;，,])){textbook_ref}(?=(?:如下|如上|所示|$|[\s。；;，,]))", "", cleaned)
+    cleaned = re.sub(r"[（(]\s*[）)]", "", cleaned)
+    cleaned = re.sub(r"[ \t\u3000]+", " ", cleaned)
+    cleaned = re.sub(r"[ \t\u3000]*([，、。；：！？])[ \t\u3000]*", r"\1", cleaned)
+    cleaned = re.sub(r"([，、；：])([。；])", r"\1", cleaned)
+    cleaned = re.sub(r"([。；，、]){2,}", lambda match: match.group(1), cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip(" ，。；")
 
 
 def strip_sensitive_metadata(value: str) -> str:

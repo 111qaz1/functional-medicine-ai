@@ -15,7 +15,17 @@ def _clean_token(value: str | None) -> str:
 
 
 def _canonicalize_exponent_units(value: str) -> str:
-    return value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+    normalized = value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+    normalized = normalized.replace("µ", "u").replace("μ", "u").replace("渭", "u").replace("碌", "u")
+    normalized = re.sub(
+        r"(?i)\b10\s*(?:\^|\*|x|×)\s*(\d{1,2})\s*/\s*([A-Za-z%]+)",
+        r"10^\1/\2",
+        normalized,
+    )
+    normalized = re.sub(r"(?i)\b10\s+(\d{1,2})\s*/\s*([A-Za-z%]+)", r"10^\1/\2", normalized)
+    normalized = re.sub(r"(?i)\b10\^(\d{1,2})\s*/\s*([A-Za-z%]+)", r"10^\1/\2", normalized)
+    normalized = re.sub(r"(?i)\bu\s*mol\s*/\s*L\b", "umol/L", normalized)
+    return normalized
 
 
 class LabNormalizationService:
@@ -35,6 +45,10 @@ class LabNormalizationService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
 
     def __init__(self, marker_catalog_path: Path) -> None:
@@ -100,6 +114,45 @@ class LabNormalizationService:
             )
 
         return normalized_items
+
+    def find_unknown_lab_candidates(
+        self,
+        *,
+        spans: list[SourceSpan],
+        lab_items: list[ExtractedLabItem],
+        limit: int = 20,
+    ) -> list[str]:
+        """Surface likely lab rows that were not normalized for manual review."""
+        recognized_snippets = {
+            _clean_token(item.source_span.snippet)
+            for item in lab_items
+            if item.source_span and item.source_span.snippet
+        }
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        for span in self._iter_candidate_spans(spans):
+            line = re.sub(r"\s+", " ", _canonicalize_exponent_units(span.snippet)).strip()
+            if not self._looks_like_candidate_line(line):
+                continue
+            if self._match_marker(line):
+                continue
+            if not self._looks_like_unknown_lab_candidate(line):
+                continue
+
+            cleaned_line = _clean_token(line)
+            if any(cleaned_line in item or item in cleaned_line for item in recognized_snippets if item):
+                continue
+
+            warning = f"疑似未识别指标：{line[:120]}"
+            if warning in seen:
+                continue
+            seen.add(warning)
+            candidates.append(warning)
+            if len(candidates) >= limit:
+                break
+
+        return candidates
 
     def _iter_candidate_spans(self, spans: list[SourceSpan]) -> list[SourceSpan]:
         candidates: list[SourceSpan] = []
@@ -388,6 +441,55 @@ class LabNormalizationService:
         if not normalized:
             return False
         return any(normalized.startswith(prefix.replace(" ", "")) for prefix in self._ADMIN_METADATA_PREFIXES)
+
+    def _looks_like_unknown_lab_candidate(self, line: str) -> bool:
+        stripped = line.strip()
+        if not stripped or self._is_section_header(stripped):
+            return False
+        if self._is_admin_metadata_line(stripped):
+            return False
+        if re.search(r"\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}", stripped):
+            return False
+        if re.search(r"(?:电话|手机号|身份证|病历号|条码|申请单|报告单)", stripped):
+            return False
+        if re.search(r"[A-Za-z0-9]{14,}", stripped):
+            return False
+        has_name = re.search(r"[\u4e00-\u9fff]{2,}|[A-Z][A-Za-z0-9/-]{1,8}", stripped) is not None
+        if not has_name:
+            return False
+        measurement_evidence = (
+            re.search(
+                r"\d+(?:\.\d+)?\s*(?:10\^\d+/[A-Za-z]+|mmol/L|umol/L|mg/dL|mg/L|ng/mL|pg/mL|g/L|U/L|IU/mL|mIU/L|%)\b",
+                stripped,
+                re.IGNORECASE,
+            )
+            or re.search(r"\d+(?:\.\d+)?\s*(?:--|[-~])\s*\d+(?:\.\d+)?", stripped)
+            or re.search(r"[↑↓鈫戔啌]", stripped)
+        )
+        if measurement_evidence is None:
+            return False
+        return self._unknown_candidate_has_attention_signal(stripped)
+
+    def _unknown_candidate_has_attention_signal(self, line: str) -> bool:
+        if re.search(r"[\u2191\u2193鈫戔啌]|偏高|偏低|升高|降低|阳性|弱阳性", line):
+            return True
+
+        numbers = [float(match.group(0)) for match in re.finditer(r"-?\d+(?:\.\d+)?", line)]
+        range_match = re.search(
+            r"(?P<lower>-?\d+(?:\.\d+)?)\s*(?:--|[-~])\s*(?P<upper>-?\d+(?:\.\d+)?)",
+            line,
+        )
+        if not range_match or not numbers:
+            return False
+
+        value = numbers[0]
+        marker_match = re.search(r"[A-Za-z#]+\s*(?P<value>-?\d+(?:\.\d+)?)", line)
+        if marker_match:
+            value = float(marker_match.group("value"))
+
+        lower = float(range_match.group("lower"))
+        upper = float(range_match.group("upper"))
+        return value < lower or value > upper
 
     def _looks_like_multiline_marker(self, line: str) -> bool:
         stripped = _canonicalize_exponent_units(line.strip())

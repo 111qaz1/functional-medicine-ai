@@ -102,8 +102,10 @@ class CaseService:
         parse_confidence: float,
         source_spans,
         lab_items,
+        parse_warnings: list[str] | None = None,
     ) -> CaseRecord:
         case = self.get_case(case_id)
+        parse_warnings = list(parse_warnings or [])
         for uploaded in case.files:
             if uploaded.id == file_id:
                 uploaded.raw_extracted_text = extracted_text
@@ -112,12 +114,13 @@ class CaseService:
                 uploaded.source_spans = list(source_spans)
                 uploaded.parse_status = FileParseStatus.parsed if extracted_text else FileParseStatus.failed
                 uploaded.needs_manual_review = True
+                uploaded.missing_fields = parse_warnings
                 break
         case.extracted_lab_items = lab_items
         case.parsing_review_completed = False
         case.parsing_reviewed_at = None
         case.parsing_reviewed_by = None
-        case.parsing_missing_fields = []
+        case.parsing_missing_fields = parse_warnings
         case.parsing_review_notes = None
         case.status = CaseStatus.parsing_completed if case.extracted_lab_items or extracted_text else CaseStatus.files_received
         case.updated_at = utc_now()
@@ -126,7 +129,12 @@ class CaseService:
             case.id,
             "parse_completed",
             "system",
-            {"file_id": file_id, "lab_item_count": len(lab_items), "parse_confidence": parse_confidence},
+            {
+                "file_id": file_id,
+                "lab_item_count": len(lab_items),
+                "parse_confidence": parse_confidence,
+                "parse_warning_count": len(parse_warnings),
+            },
         )
         return case
 

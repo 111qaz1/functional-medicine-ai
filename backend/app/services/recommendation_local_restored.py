@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft
+from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft, SourceSpan
 from app.providers.base import DraftCompositionInput, LLMProvider, VectorStoreProvider
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
@@ -87,7 +87,12 @@ class RecommendationService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
+    _PARSE_WARNING_RE = re.compile(r"^\s*疑似未识别指标[:：]\s*(?P<line>.+?)\s*$")
 
     def __init__(
         self,
@@ -97,6 +102,7 @@ class RecommendationService:
         indicator_service: CaseIndicatorService,
         vector_store: VectorStoreProvider,
         llm_provider: LLMProvider,
+        parsing_service=None,
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v1",
@@ -107,12 +113,14 @@ class RecommendationService:
         self.indicator_service = indicator_service
         self.vector_store = vector_store
         self.llm_provider = llm_provider
+        self.parsing_service = parsing_service
         self.rag_retriever = rag_retriever
         self.model_version = model_version
         self.prompt_version = prompt_version
         self.rule_version = rule_version
         self.object_store = None
         self.product_tag_profiles = self._load_product_tag_profiles()
+        self.product_safety_profiles = self._load_product_safety_profiles()
 
     def _load_product_tag_profiles(self) -> dict[str, ProductTagProfile]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_tag_matrix.json"
@@ -149,6 +157,56 @@ class RecommendationService:
             )
         return profiles
 
+    def _load_product_safety_profiles(self) -> dict[str, dict[str, tuple[str, ...]]]:
+        matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_safety_matrix.json"
+        if not matrix_path.exists():
+            return {}
+        try:
+            payload = json.loads(matrix_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+        def as_tuple(value) -> tuple[str, ...]:
+            if not isinstance(value, list):
+                return ()
+            return tuple(str(item).strip() for item in value if str(item).strip())
+
+        profiles: dict[str, dict[str, tuple[str, ...]]] = {}
+        for item in payload.get("products", []):
+            sku_id = str(item.get("sku_id") or "").strip()
+            if not sku_id:
+                continue
+            profiles[sku_id] = {
+                "contraindications": as_tuple(item.get("contraindications")),
+                "cautions": as_tuple(item.get("cautions")),
+                "interaction_warnings": as_tuple(item.get("interaction_warnings")),
+                "exclusion_rules": as_tuple(item.get("exclusion_rules")),
+            }
+        return profiles
+
+    def _list_products(self, *, enabled_only: bool = True) -> list[ProductRule]:
+        return [
+            self._apply_product_safety_profile(product)
+            for product in self.repository.list_products(enabled_only=enabled_only)
+        ]
+
+    def _apply_product_safety_profile(self, product: ProductRule) -> ProductRule:
+        profile = self.product_safety_profiles.get(product.sku_id)
+        if not profile:
+            return product
+
+        def merged(existing: list[str], additions: tuple[str, ...]) -> list[str]:
+            return list(dict.fromkeys([*existing, *additions]))
+
+        return product.model_copy(
+            update={
+                "contraindications": merged(product.contraindications, profile.get("contraindications", ())),
+                "warning_text": merged(product.warning_text, profile.get("cautions", ())),
+                "interaction_rule": merged(product.interaction_rule, profile.get("interaction_warnings", ())),
+                "exclusions": merged(product.exclusions, profile.get("exclusion_rules", ())),
+            }
+        )
+
     def generate(self, case_id: str, requested_by: str) -> RecommendationDraft:
         case = self.case_service.get_case(case_id)
         customer_name = self._resolve_customer_name(case)
@@ -176,7 +234,7 @@ class RecommendationService:
             knowledge_hits = self.vector_store.search(retrieval_query, top_k=12 if analysis_mode == "llm_primary" else 8)
 
         knowledge_by_id = {item.statement_id: item for item in reviewed_knowledge}
-        product_by_id = {item.sku_id: item for item in self.repository.list_products(enabled_only=True)}
+        product_by_id = {item.sku_id: item for item in self._list_products(enabled_only=True)}
         matched_clinician_rules = self.list_matched_clinician_rules(case, context=context, support_profiles=support_profiles)
         clinician_rule_by_id = {item.id: item for item in matched_clinician_rules}
 
@@ -254,9 +312,7 @@ class RecommendationService:
                             knowledge_by_id=knowledge_by_id,
                             clinician_rule_by_id=clinician_rule_by_id,
                         ),
-                        warnings=list(
-                            dict.fromkeys(product.warning_text + product.interaction_rule + product.contraindications)
-                        )[:4],
+                        warnings=self._product_safety_warnings(product),
                     )
                 )
 
@@ -640,8 +696,79 @@ class RecommendationService:
                 missing.append("尚未补充 MSQ 系统负担评分。")
         else:
             missing.append("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。")
-        missing.extend(case.parsing_missing_fields)
+        missing.extend(self._visible_parse_warnings(case.parsing_missing_fields, case=case))
         return list(dict.fromkeys(missing))
+
+    def _visible_parse_warnings(self, warnings: list[str] | None, *, case=None) -> list[str]:
+        visible: list[str] = []
+        for warning in warnings or []:
+            if self._should_keep_parse_warning(warning, case=case):
+                visible.append(warning)
+        return visible
+
+    def _should_keep_parse_warning(self, warning: str, *, case=None) -> bool:
+        match = self._PARSE_WARNING_RE.match(str(warning or ""))
+        if not match:
+            return bool(str(warning or "").strip())
+
+        line = re.sub(r"\s+", " ", match.group("line")).strip()
+        if not line:
+            return False
+        if self._is_admin_metadata_snippet(line):
+            return False
+        if re.search(r"(?:电话|热线|手机号|身份证|病历号|条码|申请单|报告单)", line):
+            return False
+        if case is not None and self._parse_warning_already_has_indicator(line, case):
+            return False
+
+        normalization_service = getattr(getattr(self, "parsing_service", None), "normalization_service", None)
+        if normalization_service is None:
+            return True
+
+        span = SourceSpan(file_name="parse-warning", page=1, line_number=1, snippet=line)
+        try:
+            lab_items = normalization_service.normalize(spans=[span])
+            candidates = normalization_service.find_unknown_lab_candidates(spans=[span], lab_items=lab_items, limit=1)
+        except Exception:
+            return True
+
+        # If the current dictionary can normalize the row, it belongs in structured indicators,
+        # not in the "unrecognized metric" review chips. Keep only warnings that still look unknown.
+        if lab_items:
+            return False
+        return bool(candidates)
+
+    def _parse_warning_already_has_indicator(self, line: str, case) -> bool:
+        warning_norm = self._normalize_parse_warning_line(line)
+        if not warning_norm:
+            return False
+        try:
+            indicators = self.indicator_service.build(case)
+        except Exception:
+            return False
+        for indicator in indicators:
+            snippet = getattr(getattr(indicator, "source_span", None), "snippet", "") or ""
+            indicator_text = " ".join(
+                str(part or "")
+                for part in (
+                    getattr(indicator, "indicator_name", ""),
+                    getattr(indicator, "result_text", ""),
+                    snippet,
+                )
+            )
+            indicator_norm = self._normalize_parse_warning_line(indicator_text)
+            if not indicator_norm:
+                continue
+            if warning_norm in indicator_norm or indicator_norm in warning_norm:
+                return True
+        return False
+
+    def _normalize_parse_warning_line(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", str(value or "")).lower()
+        normalized = normalized.replace("μ", "u").replace("µ", "u")
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = re.sub(r"[|｜:：,，;；。()（）\[\]【】]", "", normalized)
+        return normalized
 
     def _build_reviewed_report_text(self, case) -> str:
         chunks: list[str] = []
@@ -995,7 +1122,7 @@ class RecommendationService:
             )
         )
 
-        for product in self.repository.list_products(enabled_only=True):
+        for product in self._list_products(enabled_only=True):
             exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
             if exclusion_matches:
                 contraindications.extend([f"{product.display_name} 被排除: {rule}" for rule in exclusion_matches])
@@ -1106,7 +1233,7 @@ class RecommendationService:
     ):
         ranked: list[tuple[float, ProductRule, list[str]]] = []
         contraindications: list[str] = []
-        products = self.repository.list_products(enabled_only=True)
+        products = self._list_products(enabled_only=True)
 
         for product in products:
             exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
@@ -1767,9 +1894,21 @@ class RecommendationService:
             association += min(28, len(marker_hits) * 14)
             for marker_code in marker_hits[:2]:
                 evidence_ids.append(f"signal:tag_marker_{marker_code}")
-        text_hit_count = len(symptom_hits) + len(condition_hits) + len(goal_hits) + len(lifestyle_hits)
-        if text_hit_count:
-            association += min(16, text_hit_count * 4)
+        text_association = 0
+        if symptom_hits:
+            text_association += min(24, len(symptom_hits) * 8)
+            evidence_ids.append("signal:tag_symptom_match")
+        if condition_hits:
+            text_association += min(18, len(condition_hits) * 6)
+            evidence_ids.append("signal:tag_condition_match")
+        if goal_hits:
+            text_association += min(18, len(goal_hits) * 6)
+            evidence_ids.append("signal:tag_goal_match")
+        if lifestyle_hits:
+            text_association += min(12, len(lifestyle_hits) * 4)
+            evidence_ids.append("signal:tag_lifestyle_match")
+        if text_association:
+            association += min(36, text_association)
             evidence_ids.append("signal:tag_context_match")
         if mechanism_hits:
             association += min(12, len(mechanism_hits) * 4)
@@ -2018,6 +2157,14 @@ class RecommendationService:
             return "最高优先系统主轴匹配"
         if signal_id == "tag_context_match":
             return "产品标签命中：症状/目标/生活方式"
+        if signal_id == "tag_symptom_match":
+            return "产品标签命中：症状"
+        if signal_id == "tag_condition_match":
+            return "产品标签命中：既往病史/问题"
+        if signal_id == "tag_goal_match":
+            return "产品标签命中：健康目标"
+        if signal_id == "tag_lifestyle_match":
+            return "产品标签命中：生活方式"
         if signal_id == "tag_mechanism_match":
             return "产品标签命中：机制关键词"
         if signal_id == "direct_product_rule":
@@ -2095,15 +2242,15 @@ class RecommendationService:
                 return True
             return any(item.abnormal_flag.value == extra for item in observations)
         if kind == "goal":
-            return value in context.goals
+            return self._contains_normalized_value(value, context.goals)
         if kind == "symptom":
-            return value in context.symptoms
+            return self._contains_normalized_value(value, context.symptoms)
         if kind == "condition":
-            return value in context.conditions
+            return self._contains_normalized_value(value, context.conditions)
         if kind == "med":
-            return value in context.medications
+            return self._contains_normalized_value(value, context.medications)
         if kind == "allergy":
-            return value in context.allergies
+            return self._contains_normalized_value(value, context.allergies)
         if kind == "lifestyle":
             return value in context.lifestyle_tags
         if kind == "pregnancy":
@@ -2111,6 +2258,15 @@ class RecommendationService:
         if kind == "pattern":
             return self._matches_pattern(value, context)
         return False
+
+    def _contains_normalized_value(self, expected: str, values: set[str]) -> bool:
+        if not expected:
+            return False
+        return any(
+            expected == value or expected in value or value in expected
+            for value in values
+            if value
+        )
 
     def _matches_pattern(self, pattern_name: str, context: RecommendationContext) -> bool:
         if pattern_name == "iron_deficiency":
@@ -2278,7 +2434,7 @@ class RecommendationService:
         if not raw_hits and retrieval_failures:
             return [], retrieval_failures[:4]
 
-        safety_filter = RagSafetyFilter(self.repository.list_products(enabled_only=True))
+        safety_filter = RagSafetyFilter(self._list_products(enabled_only=True))
         safe_hits, rejections = safety_filter.filter_hits(
             list(raw_hits),
             context=context,
@@ -2982,6 +3138,9 @@ class RecommendationService:
                 safety_suffix = f"；注意/禁忌：{safety_note}" if safety_note else ""
                 lines.append(f"{item.display_name}：{item.dosage}；适用说明：{item.reason}{safety_suffix}")
         return lines
+
+    def _product_safety_warnings(self, product: ProductRule) -> list[str]:
+        return list(dict.fromkeys(product.contraindications + product.interaction_rule + product.warning_text))[:6]
 
     def _public_safety_note(self, warnings: list[str], *, limit: int = 3) -> str:
         public_warnings = []

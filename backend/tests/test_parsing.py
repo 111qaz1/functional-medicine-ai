@@ -51,6 +51,110 @@ class ParsingServiceTests(unittest.TestCase):
         self.assertEqual(by_code["rbc"].unit, "10^12/L")
         self.assertEqual(by_code["rbc"].normalized_unit, "10^12/L")
 
+    def test_normalizes_split_exponent_and_micro_units(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="红细胞 RBC 5.10 10*12/L 4.3-5.8"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="血清肌酐 67.6 59-104 碌mol/L"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="血清尿酸 529.7 90-420 渭mol/L ↑"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        by_code = {item.marker_code: item for item in items}
+
+        self.assertEqual(by_code["wbc"].unit, "10^9/L")
+        self.assertEqual(by_code["rbc"].unit, "10^12/L")
+        self.assertEqual(by_code["creatinine"].unit, "umol/L")
+        self.assertEqual(by_code["uric_acid"].unit, "umol/L")
+        self.assertEqual(by_code["uric_acid"].abnormal_flag, AbnormalFlag.high)
+
+    def test_surfaces_unknown_lab_candidates_for_manual_review(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="载脂蛋白E 1.82 g/L ↑ 0.20-1.20"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="报告日期 2026-06-25"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="体重 66.6 kg 0-120"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=5, snippet="血小板 PLT 210 125-350"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        candidates = self.service.find_unknown_lab_candidates(spans=spans, lab_items=items)
+
+        self.assertTrue(any("载脂蛋白E" in item for item in candidates))
+        self.assertFalse(any("白细胞" in item for item in candidates))
+        self.assertFalse(any("报告日期" in item for item in candidates))
+        self.assertFalse(any("体重" in item for item in candidates))
+        self.assertFalse(any("血小板" in item for item in candidates))
+
+    def test_normalizes_body_metrics_and_cbc_differentials(self) -> None:
+        samples = [
+            ("体重 66.6 kg 0-120", "body_weight", "kg"),
+            ("Weight 72.5 kg 0-120", "body_weight", "kg"),
+            ("身高 166.6 cm 120-220", "body_height", "cm"),
+            ("Height 1.72 m 1.2-2.2", "body_height", "cm"),
+            ("体质指数 21.8 18.5-23.9999", "bmi", "kg/m2"),
+            ("BMI 24.6 18.5-23.9999", "bmi", "kg/m2"),
+            ("收缩压 116 mmHg 90-139", "systolic_bp", "mmHg"),
+            ("SBP 128 mmHg 90-139", "systolic_bp", "mmHg"),
+            ("舒张压 74 60-89", "diastolic_bp", "mmHg"),
+            ("DBP 82 mmHg 60-89", "diastolic_bp", "mmHg"),
+            ("腰围 76 cm 55-90", "waist_circumference", "cm"),
+            ("Waist 82 cm 55-90", "waist_circumference", "cm"),
+            ("臀围 94 cm 50-150", "hip_circumference", "cm"),
+            ("Hip 100 cm 50-150", "hip_circumference", "cm"),
+            ("腰臀比 0.80 0-0.929", "waist_hip_ratio", "ratio"),
+            ("WHR 0.87 0-0.929", "waist_hip_ratio", "ratio"),
+            ("血小板 PLT 210 125-350", "platelet_count", "10^9/L"),
+            ("PLT 205 10^9/L 125-350", "platelet_count", "10^9/L"),
+            ("中性粒细胞 NEUT 58.1 40-75", "neutrophil_percentage", "%"),
+            ("NEUT% 60.2 % 40-75", "neutrophil_percentage", "%"),
+            ("淋巴细胞 LYM 34.2 20-50", "lymphocyte_percentage", "%"),
+            ("LYM% 32.1 % 20-50", "lymphocyte_percentage", "%"),
+            ("单核细胞 MONO 5.1 3-10", "monocyte_percentage", "%"),
+            ("MONO% 5.4 % 3-10", "monocyte_percentage", "%"),
+            ("嗜酸性粒细胞 EOS 2.0 0.4-8", "eosinophil_percentage", "%"),
+            ("EOS% 2.3 % 0.4-8", "eosinophil_percentage", "%"),
+            ("中性粒细胞绝对值 NEUT# 3.00 1.8-6.3", "neutrophil_absolute", "10^9/L"),
+            ("NEUT# 3.10 10^9/L 1.8-6.3", "neutrophil_absolute", "10^9/L"),
+            ("淋巴细胞绝对值 LYM# 1.90 1.1-3.2", "lymphocyte_absolute", "10^9/L"),
+            ("LYM# 2.10 10^9/L 1.1-3.2", "lymphocyte_absolute", "10^9/L"),
+            ("单核细胞数绝对值 MONO# 0.33 0.1-0.6", "monocyte_absolute", "10^9/L"),
+            ("MONO# 0.31 10^9/L 0.1-0.6", "monocyte_absolute", "10^9/L"),
+            ("嗜酸性粒细胞绝对值 EOS# 0.11 0.0-0.5", "eosinophil_absolute", "10^9/L"),
+            ("EOS# 0.12 10^9/L 0.0-0.5", "eosinophil_absolute", "10^9/L"),
+            ("平均血小板体积 MPV 10.0 fl 6.5-12.0", "mean_platelet_volume", "fL"),
+            ("MPV 10.1 fL 6.5-12.0", "mean_platelet_volume", "fL"),
+            ("血小板压积 PCT 0.19 0.108-0.282", "plateletcrit", "%"),
+            ("PCT 0.18 % 0.108-0.282", "plateletcrit", "%"),
+            ("估算肾小球滤过率 EGFR 77.14 mL/min 80-120", "egfr", "mL/min"),
+            ("钙卫蛋白 Cal 69.8 ug/g 0-60.0", "fecal_calprotectin", "ug/g"),
+        ]
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=index + 1, snippet=snippet)
+            for index, (snippet, _, _) in enumerate(samples)
+        ]
+
+        items = self.service.normalize(spans=spans)
+        candidates = self.service.find_unknown_lab_candidates(spans=spans, lab_items=items)
+        recognized = {(item.source_span.snippet, item.marker_code, item.normalized_unit) for item in items}
+
+        for snippet, expected_code, expected_unit in samples:
+            with self.subTest(snippet=snippet):
+                self.assertIn((snippet, expected_code, expected_unit), recognized)
+        self.assertFalse(candidates)
+
+    def test_ignores_service_hotline_metadata(self) -> None:
+        spans = [
+            SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="服务热线:010-00000000"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="联系电话 400-000-0000"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        candidates = self.service.find_unknown_lab_candidates(spans=spans, lab_items=items)
+
+        self.assertFalse(items)
+        self.assertFalse(candidates)
+
     def test_normalizes_multiline_marker_blocks(self) -> None:
         spans = [
             SourceSpan(file_name="report.txt", page=1, line_number=1, snippet="血清丙氨酸氨基转移酶"),

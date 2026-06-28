@@ -6,7 +6,17 @@ from app.domain.models import AbnormalFlag, CaseIndicator, IndicatorStatus, Sour
 
 
 def _canonicalize_exponent_units(value: str) -> str:
-    return value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+    normalized = value.replace("∧", "^").replace("＾", "^").replace("ˆ", "^")
+    normalized = normalized.replace("µ", "u").replace("μ", "u").replace("渭", "u").replace("碌", "u")
+    normalized = re.sub(
+        r"(?i)\b10\s*(?:\^|\*|x|×)\s*(\d{1,2})\s*/\s*([A-Za-z%]+)",
+        r"10^\1/\2",
+        normalized,
+    )
+    normalized = re.sub(r"(?i)\b10\s+(\d{1,2})\s*/\s*([A-Za-z%]+)", r"10^\1/\2", normalized)
+    normalized = re.sub(r"(?i)\b10\^(\d{1,2})\s*/\s*([A-Za-z%]+)", r"10^\1/\2", normalized)
+    normalized = re.sub(r"(?i)\bu\s*mol\s*/\s*L\b", "umol/L", normalized)
+    return normalized
 
 
 def _normalize_snippet(value: str) -> str:
@@ -32,6 +42,10 @@ class CaseIndicatorService:
         "床号",
         "科室",
         "诊断",
+        "服务热线",
+        "热线",
+        "联系电话",
+        "电话",
     )
 
     def build(self, case) -> list[CaseIndicator]:

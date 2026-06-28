@@ -5,6 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.external_routes import router as external_router
 from app.api.routes import router
 from app.core.bootstrap import build_container
 
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     )
     app.state.container = container
     app.include_router(router)
+    app.include_router(external_router)
     return app
 
 

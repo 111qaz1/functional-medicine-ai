@@ -38,7 +38,43 @@ def _load_json(path: Path):
 
 def load_products(settings: AppSettings) -> list[ProductRule]:
     payload = _load_json(_data_path(settings, "product_catalog.json"))
-    return [ProductRule.model_validate(item) for item in payload]
+    products = [ProductRule.model_validate(item) for item in payload]
+    safety_path = _data_path(settings, "product_safety_matrix.json")
+    if not safety_path.exists():
+        return products
+    try:
+        safety_payload = _load_json(safety_path)
+    except (OSError, json.JSONDecodeError):
+        return products
+
+    safety_profiles = {
+        str(item.get("sku_id") or "").strip(): item
+        for item in safety_payload.get("products", [])
+        if str(item.get("sku_id") or "").strip()
+    }
+
+    def merged(existing: list[str], additions) -> list[str]:
+        if not isinstance(additions, list):
+            additions = []
+        return list(dict.fromkeys([*existing, *(str(item).strip() for item in additions if str(item).strip())]))
+
+    enriched: list[ProductRule] = []
+    for product in products:
+        profile = safety_profiles.get(product.sku_id)
+        if not profile:
+            enriched.append(product)
+            continue
+        enriched.append(
+            product.model_copy(
+                update={
+                    "contraindications": merged(product.contraindications, profile.get("contraindications")),
+                    "warning_text": merged(product.warning_text, profile.get("cautions")),
+                    "interaction_rule": merged(product.interaction_rule, profile.get("interaction_warnings")),
+                    "exclusions": merged(product.exclusions, profile.get("exclusion_rules")),
+                }
+            )
+        )
+    return enriched
 
 
 def load_knowledge(settings: AppSettings) -> list[KnowledgeStatement]:
@@ -157,6 +193,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service=indicator_service,
         vector_store=vector_store,
         llm_provider=llm_provider,
+        parsing_service=parsing_service,
         rag_retriever=rag_retriever,
         model_version=model_version,
         prompt_version=prompt_version,

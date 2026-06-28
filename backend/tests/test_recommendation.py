@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
-from app.domain.models import AnalysisMode, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
+from app.domain.models import AnalysisMode, CaseIndicator, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
 from app.providers.local import GroundedDraftComposer
 from app.providers.base import DraftCompositionResult
 
@@ -140,6 +140,76 @@ class RecommendationServiceTests(unittest.TestCase):
             any("注意/禁忌：" in item for item in draft.report_sections.get("首月营养素干预方案", []))
         )
 
+    def test_product_safety_matrix_blocks_clear_contraindications(self) -> None:
+        case = self._prepare_case(
+            "hs-CRP 5.2 mg/L 0-3",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["关节疼痛", "炎症"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["抗炎支持"],
+                pregnant_or_lactating=True,
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+        contraindication_text = " ".join(draft.contraindications)
+
+        self.assertNotIn("sku_super_anti_inflammatory", recommended_ids)
+        self.assertIn("超级抗炎 被排除", contraindication_text)
+        self.assertIn("pregnancy", contraindication_text)
+
+    def test_product_safety_matrix_keeps_caution_items_with_warning(self) -> None:
+        case = self._prepare_case(
+            "空腹血糖 6.8 mmol/L 3.9-5.6\n糖化血红蛋白 6.1 % 4-6",
+            Questionnaire(
+                age=45,
+                sex="male",
+                symptoms=["餐后困倦", "嗜甜"],
+                known_conditions=["胰岛素抵抗"],
+                medications=["二甲双胍"],
+                allergies=[],
+                goals=["血糖平衡"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        blood_sugar_item = next(
+            item for item in draft.recommended_skus if item.sku_id == "sku_blood_sugar_complex"
+        )
+        warnings_text = " ".join(blood_sugar_item.warnings)
+
+        self.assertIn("sku_blood_sugar_complex", {item.sku_id for item in draft.recommended_skus})
+        self.assertIn("降糖药物", warnings_text)
+        self.assertIn("监测血糖", warnings_text)
+
+    def test_symptom_tag_matrix_promotes_directly_relevant_nutrients(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=38,
+                sex="female",
+                symptoms=["入睡困难", "夜醒", "紧张"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["睡眠恢复"],
+                sleep_quality="差",
+                stress_level="high",
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+        evidence_details = " ".join(draft.evidence_details)
+
+        self.assertIn("sku_sleep_support", recommended_ids[:4])
+        self.assertIn("产品标签命中：症状", evidence_details)
+
     def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
         root = Path(self.temp_dir.name)
         settings = AppSettings(
@@ -218,7 +288,7 @@ class RecommendationServiceTests(unittest.TestCase):
 
     def test_uses_case_customer_name_even_when_upload_contains_name_candidate(self) -> None:
         case = self.container.case_service.create_case(
-            customer_name="方",
+            customer_name="建档客户甲",
             consultant_id="nutrition-team",
             notes=None,
             consent=None,
@@ -226,20 +296,20 @@ class RecommendationServiceTests(unittest.TestCase):
         uploaded_file = UploadedFile(
             id="file_named_questionnaire",
             case_id=case.id,
-            filename="MSQ--王堃.docx",
+            filename="MSQ--上传姓名乙.docx",
             content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             size_bytes=128,
-            storage_uri="memory://MSQ--王堃.docx",
-            raw_extracted_text="姓名：王堃 性别：男 年龄：30",
+            storage_uri="memory://MSQ--上传姓名乙.docx",
+            raw_extracted_text="姓名：上传姓名乙 性别：男 年龄：30",
         )
         case = self.container.case_service.add_uploaded_file(case.id, uploaded_file)
 
-        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "方")
-        self.assertEqual(self.container.review_service._customer_display_name(case), "方")
+        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "建档客户甲")
+        self.assertEqual(self.container.review_service._customer_display_name(case), "建档客户甲")
 
     def test_falls_back_to_case_customer_name_when_report_text_has_no_valid_name(self) -> None:
         case = self.container.case_service.create_case(
-            customer_name="王彦喆",
+            customer_name="建档客户乙",
             consultant_id="nutrition-team",
             notes=None,
             consent=None,
@@ -255,8 +325,8 @@ class RecommendationServiceTests(unittest.TestCase):
         )
         case = self.container.case_service.add_uploaded_file(case.id, uploaded_file)
 
-        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "王彦喆")
-        self.assertEqual(self.container.review_service._customer_display_name(case), "王彦喆")
+        self.assertEqual(self.container.recommendation_service._resolve_customer_name(case), "建档客户乙")
+        self.assertEqual(self.container.review_service._customer_display_name(case), "建档客户乙")
 
     def test_keeps_internal_candidate_products_before_manual_parse_review(self) -> None:
         case = self.container.case_service.create_case(
@@ -308,6 +378,178 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertTrue(draft.manual_review_required)
         self.assertTrue(draft.recommended_skus)
         self.assertNotIn("当前暂无明确可发布的首月营养素组合", " ".join(draft.report_sections["首月营养素干预方案"]))
+
+    def test_parse_warnings_stay_out_of_customer_report(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="解析提醒隔离",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        report_text = "25-OH维生素D 18 ng/mL 30-100"
+        uploaded_file = UploadedFile(
+            id="file_parse_warning",
+            case_id=case.id,
+            filename="report.txt",
+            content_type="text/plain",
+            size_bytes=len(report_text.encode("utf-8")),
+            storage_uri="memory://report.txt",
+        )
+        self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+        extraction, lab_items = self.container.parsing_service.parse(
+            filename="report.txt",
+            content_type="text/plain",
+            content=report_text.encode("utf-8"),
+        )
+        self.container.case_service.attach_parse_results(
+            case.id,
+            uploaded_file.id,
+            extracted_text=extraction.text,
+            parse_confidence=extraction.confidence,
+            source_spans=extraction.spans,
+            lab_items=lab_items,
+            parse_warnings=["疑似未识别指标：示例指标A 88.8 example-unit 1-2"],
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(
+                age=33,
+                sex="female",
+                symptoms=["疲劳"],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        report = self.container.review_service._render_report(
+            draft.model_copy(update={"missing_info": draft.missing_info + ["疑似未识别指标：示例指标A 88.8 example-unit 1-2"]}),
+            self.container.case_service.get_case(case.id),
+        )
+
+        self.assertIn("疑似未识别指标", " ".join(draft.missing_info))
+        self.assertNotIn("疑似未识别指标", report)
+        self.assertIn("尚未完成人工解析校对", report)
+
+    def test_stale_normal_parse_warnings_are_rechecked_before_draft_display(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="解析提醒复核",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        report_text = "25-OH维生素D 18 ng/mL 30-100"
+        uploaded_file = UploadedFile(
+            id="file_stale_parse_warning",
+            case_id=case.id,
+            filename="report.txt",
+            content_type="text/plain",
+            size_bytes=len(report_text.encode("utf-8")),
+            storage_uri="memory://report.txt",
+        )
+        self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+        extraction, lab_items = self.container.parsing_service.parse(
+            filename="report.txt",
+            content_type="text/plain",
+            content=report_text.encode("utf-8"),
+        )
+        self.container.case_service.attach_parse_results(
+            case.id,
+            uploaded_file.id,
+            extracted_text=extraction.text,
+            parse_confidence=extraction.confidence,
+            source_spans=extraction.spans,
+            lab_items=lab_items,
+            parse_warnings=[
+                "疑似未识别指标：服务热线:010-00000000",
+                "疑似未识别指标：体重 66.6 kg 0-120",
+                "疑似未识别指标：血小板 PLT 210 125-350",
+                "疑似未识别指标：中性粒细胞 NEUT 58.1 40-75",
+            ],
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(
+                age=33,
+                sex="female",
+                symptoms=["疲劳"],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        joined_missing = " ".join(draft.missing_info)
+
+        self.assertNotIn("服务热线", joined_missing)
+        self.assertNotIn("体重", joined_missing)
+        self.assertNotIn("血小板", joined_missing)
+        self.assertNotIn("NEUT", joined_missing)
+
+    def test_parse_warning_is_hidden_when_same_row_is_already_key_indicator(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="关键指标去重",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        report_text = "25-OH维生素D 18 ng/mL 30-100"
+        uploaded_file = UploadedFile(
+            id="file_key_indicator_warning",
+            case_id=case.id,
+            filename="report.txt",
+            content_type="text/plain",
+            size_bytes=len(report_text.encode("utf-8")),
+            storage_uri="memory://report.txt",
+        )
+        self.container.case_service.add_uploaded_file(case.id, uploaded_file)
+        extraction, lab_items = self.container.parsing_service.parse(
+            filename="report.txt",
+            content_type="text/plain",
+            content=report_text.encode("utf-8"),
+        )
+        self.container.case_service.attach_parse_results(
+            case.id,
+            uploaded_file.id,
+            extracted_text=extraction.text,
+            parse_confidence=extraction.confidence,
+            source_spans=extraction.spans,
+            lab_items=lab_items,
+            parse_warnings=["疑似未识别指标：示例肠道指标 ABCX 12 xunit 0-10"],
+        )
+        case = self.container.case_service.get_case(case.id)
+        case.manual_indicators = [
+            CaseIndicator(
+                indicator_name="示例肠道指标",
+                result_text="12 xunit",
+                status=IndicatorStatus.attention,
+                category="lab",
+                source_span=SourceSpan(
+                    file_name="report.txt",
+                    page=1,
+                    line_number=1,
+                    snippet="示例肠道指标 ABCX 12 xunit 0-10",
+                ),
+            )
+        ]
+        self.container.repository.save_case(case)
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(
+                age=33,
+                sex="female",
+                symptoms=["疲劳"],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertNotIn("示例肠道指标", " ".join(draft.missing_info))
 
     def test_thyroid_condition_in_questionnaire_does_not_break_profile_matching(self) -> None:
         case = self._prepare_case(

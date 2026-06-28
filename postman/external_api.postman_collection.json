@@ -1,0 +1,267 @@
+{
+  "info": {
+    "_postman_id": "54b12664-1676-4fd7-8d68-fm-external-api",
+    "name": "Functional Medicine External API",
+    "description": "系统间授信外部接口测试集合。医生身份由甲方系统签名声明，工作台仅校验签名并签发 Bearer token。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Exchange signed doctor identity for token",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const issuer = pm.environment.get('issuer');",
+              "const doctorId = pm.environment.get('doctor_id');",
+              "const doctorName = pm.environment.get('doctor_name');",
+              "const timestamp = Math.floor(Date.now() / 1000).toString();",
+              "const nonce = `nonce-${Date.now()}`;",
+              "const canonical = [issuer, doctorId, doctorName, timestamp, nonce].join('\\n');",
+              "const signature = CryptoJS.HmacSHA256(canonical, pm.environment.get('shared_secret')).toString(CryptoJS.enc.Hex);",
+              "pm.environment.set('timestamp', timestamp);",
+              "pm.environment.set('nonce', nonce);",
+              "pm.environment.set('signature', signature);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('token exchange succeeds', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.test('returns bearer token', function () {",
+              "  pm.expect(payload.token_type).to.eql('bearer');",
+              "  pm.expect(payload.access_token).to.be.a('string').and.not.empty;",
+              "});",
+              "pm.environment.set('access_token', payload.access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"issuer\": \"{{issuer}}\",\n  \"doctor_id\": \"{{doctor_id}}\",\n  \"doctor_name\": \"{{doctor_name}}\",\n  \"timestamp\": {{timestamp}},\n  \"nonce\": \"{{nonce}}\",\n  \"signature\": \"{{signature}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/auth/token",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "token"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "2. Create external case",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('case created', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.case_id).to.be.a('string').and.not.empty;",
+              "pm.environment.set('case_id', payload.case_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customer_name\": \"Postman外部接口测试\",\n  \"consultant_id\": \"{{doctor_name}}\",\n  \"notes\": \"Postman collection smoke test\",\n  \"analysis_mode\": \"llm_primary\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/cases",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "cases"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "3. Upload case attachment",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('attachment uploaded and parsed', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.results[0].status).to.eql('parsed');",
+              "pm.expect(payload.results[0].lab_item_count).to.be.above(0);",
+              "pm.test('unknown candidate is surfaced for manual review', function () {",
+              "  pm.expect(payload.results[0].parse_warnings.join('\\n')).to.include('载脂蛋白E');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "attachment_type",
+              "value": "case",
+              "type": "text"
+            },
+            {
+              "key": "files",
+              "type": "file",
+              "src": "postman/fixtures/labs.txt"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/cases/{{case_id}}/attachments",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "cases",
+            "{{case_id}}",
+            "attachments"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "4. Generate nutrition recommendations",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('recommendation generated', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.draft_id).to.be.a('string').and.not.empty;",
+              "pm.expect(payload.manual_review_required).to.eql(true);",
+              "pm.expect(payload.recommendations).to.be.an('array');",
+              "pm.environment.set('draft_id', payload.draft_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/cases/{{case_id}}/nutrition-recommendations",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "cases",
+            "{{case_id}}",
+            "nutrition-recommendations"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "5. Report download blocked before approval",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('unapproved report is blocked', function () {",
+              "  pm.response.to.have.status(409);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/report-download",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "drafts",
+            "{{draft_id}}",
+            "report-download"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

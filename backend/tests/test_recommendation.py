@@ -463,9 +463,9 @@ class RecommendationServiceTests(unittest.TestCase):
             lab_items=lab_items,
             parse_warnings=[
                 "疑似未识别指标：服务热线:010-00000000",
-                "疑似未识别指标：体重 66.6 kg 0-120",
-                "疑似未识别指标：血小板 PLT 210 125-350",
-                "疑似未识别指标：中性粒细胞 NEUT 58.1 40-75",
+                "疑似未识别指标：体重 12.34 kg 0-999",
+                "疑似未识别指标：血小板 PLT 123.45 0-999",
+                "疑似未识别指标：中性粒细胞 NEUT 12.34 0-999",
             ],
         )
         self.container.case_service.submit_questionnaire(

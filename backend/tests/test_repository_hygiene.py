@@ -33,6 +33,12 @@ class RepositoryHygieneTests(unittest.TestCase):
         "NEUT# " + "2.40",
         "LYM# " + "1.60",
         "MONO# " + "0.20",
+        "\u4f53\u91cd " + "66" + ".6",
+        "\u8eab\u9ad8 " + "166" + ".6",
+        "\u8840\u5c0f\u677f PLT " + "210",
+        "\u4e2d\u6027\u7c92\u7ec6\u80de NEUT " + "58" + ".1",
+        "EGFR " + "77" + ".14",
+        "Cal " + "69" + ".8",
     )
 
     def test_source_files_do_not_contain_real_case_literals(self) -> None:

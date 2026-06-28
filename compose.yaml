@@ -30,7 +30,7 @@ services:
       - ./.runtime:/app/.runtime
       - ./knowledge:/app/knowledge:ro
       - type: bind
-        source: ${FM_RAG_MODEL_HOST_DIR:-C:/RAG/models/bge-m3}
+        source: ${FM_RAG_MODEL_HOST_DIR:-./bge-m3}
         target: /models/bge-m3
         read_only: true
     ports:

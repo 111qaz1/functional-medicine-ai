@@ -77,7 +77,7 @@ flowchart LR
 - Frontend: `Next.js + React + TypeScript`
 - Local storage: `SQLite + filesystem`
 - Knowledge retrieval: `local keyword vector store (in-memory)`
-- OCR / parsing: `local demo provider with text-first extraction`
+- OCR / parsing: `document OCR provider with text-first extraction`
 
 ## 容器化约束
 

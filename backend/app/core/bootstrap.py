@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ from pathlib import Path
 from app.core.settings import AppSettings, load_settings
 from app.domain.models import KnowledgeStatement, ProductRule
 from app.providers.local import (
-    DemoOCRProvider,
+    DocumentOCRProvider,
     GroundedDraftComposer,
     InMemoryVectorStore,
     JsonKnowledgeImporter,
@@ -177,7 +177,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     case_service = CaseService(repository)
     indicator_service = CaseIndicatorService()
     parsing_service = DocumentParsingService(
-        ocr_provider=DemoOCRProvider(
+        ocr_provider=DocumentOCRProvider(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
             model=settings.llm_model,

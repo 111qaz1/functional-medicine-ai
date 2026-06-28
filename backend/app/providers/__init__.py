@@ -1,2 +1,2 @@
-"""Provider abstractions and demo adapters."""
+﻿"""Provider abstractions and document processing adapters."""
 

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
@@ -1748,7 +1748,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           </div>
           <form className="stack" onSubmit={handleQuestionnaireSubmit}>
             <p className="muted">
-              已按你放入的《MSQ--功能医学信息调查问卷》和甲方评估报告结构收口。问卷仍然是可选的，但补充后会让系统分析更完整。
+              已按《MSQ--功能医学信息调查问卷》和评估报告结构收口。问卷仍然是可选的，但补充后会让系统分析更完整。
             </p>
 
             <div className="grid-two">

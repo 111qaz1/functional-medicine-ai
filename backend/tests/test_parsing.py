@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 import unittest
@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.domain.models import AbnormalFlag, SourceSpan
-from app.providers.local import DemoOCRProvider
+from app.providers.local import DocumentOCRProvider
 from app.services.parsing import LabNormalizationService
 
 
@@ -443,7 +443,7 @@ class ParsingServiceTests(unittest.TestCase):
 
 class OCRProviderTests(unittest.TestCase):
     def test_falls_back_to_embedded_image_ocr_for_scanned_pdf(self) -> None:
-        class StubPdfOCRProvider(DemoOCRProvider):
+        class StubPdfOCRProvider(DocumentOCRProvider):
             def __init__(self) -> None:
                 super().__init__(base_url="https://example.test/v1", api_key="token", model="vision-model")
                 self.calls: list[tuple[int, str]] = []
@@ -475,7 +475,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertEqual([span.page for span in extraction.spans], [1, 1])
 
     def test_keeps_pdf_text_layer_when_it_is_already_readable(self) -> None:
-        class GuardPdfOCRProvider(DemoOCRProvider):
+        class GuardPdfOCRProvider(DocumentOCRProvider):
             def __init__(self) -> None:
                 super().__init__(base_url="https://example.test/v1", api_key="token", model="vision-model")
 
@@ -501,7 +501,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertIn("主诉:乏力", extraction.text)
 
     def test_extracts_docx_tables_as_separate_rows(self) -> None:
-        provider = DemoOCRProvider()
+        provider = DocumentOCRProvider()
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
             archive.writestr(
@@ -544,7 +544,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertIn("红细胞分布宽度-标准差 | RDW-SD | 43.00 | | 39—52 | fL", extraction.text)
 
     def test_extracts_text_from_pptx_slides(self) -> None:
-        provider = DemoOCRProvider()
+        provider = DocumentOCRProvider()
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
             archive.writestr(
@@ -596,7 +596,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertGreater(extraction.confidence, 0.8)
 
     def test_binary_image_without_ocr_config_returns_empty_text(self) -> None:
-        provider = DemoOCRProvider()
+        provider = DocumentOCRProvider()
         fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 128 + b"Mg 8.0 mmol/L"
 
         extraction = provider.extract(filename="report.png", content_type="image/png", content=fake_png)
@@ -606,7 +606,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertLess(extraction.confidence, 0.2)
 
     def test_extracts_text_from_responses_summary_payload(self) -> None:
-        provider = DemoOCRProvider()
+        provider = DocumentOCRProvider()
         payload = {
             "output": [
                 {
@@ -628,7 +628,7 @@ class OCRProviderTests(unittest.TestCase):
         self.assertIn("人民医院检验报告单", parsed)
 
     def test_filters_placeholder_ocr_lines(self) -> None:
-        provider = DemoOCRProvider()
+        provider = DocumentOCRProvider()
 
         self.assertEqual(provider._clean_line("逐行文本"), "")
         self.assertEqual(provider._clean_line("逐行的每个放数组里"), "")

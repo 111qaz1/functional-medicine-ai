@@ -18,14 +18,14 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.7.1+cpu
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
-ARG PRELOAD_RAG_MODEL=1
+ARG PRELOAD_RAG_MODEL=0
 RUN if [ "$PRELOAD_RAG_MODEL" = "1" ]; then \
       HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')" ; \
     else \
       echo "Skipping BAAI/bge-m3 preload; set PRELOAD_RAG_MODEL=1 for release images." ; \
     fi
 
-COPY backend /app/backend
+COPY backend/app /app/backend/app
 
 WORKDIR /app/backend
 

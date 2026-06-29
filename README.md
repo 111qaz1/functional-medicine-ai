@@ -41,6 +41,23 @@ cd <项目目录>
 
 这是当前最推荐的本地打开方式，会同时拉起后端和前端，并按项目现有配置接入本地运行环境。
 
+如果部署方使用千问/通义千问模型，先在项目根目录 `.env` 中配置：
+
+```env
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=你的千问API Key
+LLM_MODEL=qwen-plus
+LLM_API_STYLE=chat
+```
+
+然后启动：
+
+```bat
+scripts\start-local-qwen.cmd
+```
+
+如果部署方使用豆包模型，可使用：
+
 ```bat
 scripts\start-local-doubao.cmd
 ```
@@ -184,6 +201,15 @@ npm run build
 ## 可选模型增强
 
 当同时配置了 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 后，后端会自动切换到“远端模型辅助 + 本地规则兜底”模式。
+
+千问/通义千问推荐配置：
+
+```env
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=你的千问API Key
+LLM_MODEL=qwen-plus
+LLM_API_STYLE=chat
+```
 
 如果目标服务使用 `responses` 风格接口，例如火山方舟 `https://ark.cn-beijing.volces.com/api/v3/responses`，可额外设置：
 - `LLM_API_STYLE=responses`

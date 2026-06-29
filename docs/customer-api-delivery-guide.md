@@ -114,6 +114,21 @@ LLM_MODEL=
 LLM_API_STYLE=auto
 ```
 
+如果部署方使用千问/通义千问，推荐配置为：
+
+```text
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=your-qwen-api-key
+LLM_MODEL=qwen-plus
+LLM_API_STYLE=chat
+```
+
+Windows 本地非 Docker 启动可使用：
+
+```powershell
+.\scripts\start-local-qwen.cmd
+```
+
 `FM_EXTERNAL_TRUST_SHARED_SECRET` 是外部系统换取 Bearer token 的系统间共享密钥。生产环境使用双方线下约定的高强度密钥，不使用示例值。
 
 ## 5. 启动服务

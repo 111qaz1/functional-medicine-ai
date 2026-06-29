@@ -153,6 +153,21 @@ LLM_MODEL=
 LLM_API_STYLE=auto
 ```
 
+如果使用千问/通义千问，推荐配置为：
+
+```env
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=你的千问API Key
+LLM_MODEL=qwen-plus
+LLM_API_STYLE=chat
+```
+
+本地脚本启动方式：
+
+```powershell
+.\scripts\start-local-qwen.cmd
+```
+
 真实 API Key 不放入 Git，需要负责人单独提供。
 
 ### 修改代码后没有生效

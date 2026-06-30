@@ -42,8 +42,15 @@ docker compose up --build
 ```
 
 默认端口：
-- Frontend: `3000`
-- Backend: `8000`
+- Frontend: `127.0.0.1:3000`
+- Backend: `127.0.0.1:8000`
+
+正式环境建议不要直接暴露 `3000/8000`，使用 Nginx 统一代理 `80/443`。
+
+正式部署推荐配置参考：
+
+- `docs/production-recommended-config.md`
+- `docs/nginx-production-deployment.md`
 
 ## 验收步骤
 

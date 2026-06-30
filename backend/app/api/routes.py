@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 import uuid
@@ -63,6 +64,13 @@ _CLINICAL_SUMMARY_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".t
 SESSION_COOKIE_NAME = "fm_session"
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _container(request: Request):
     return request.app.state.container
 
@@ -107,7 +115,7 @@ def _set_session_cookie(response: Response, session_id: str) -> None:
         session_id,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=_env_flag("FM_SESSION_COOKIE_SECURE"),
         max_age=14 * 24 * 60 * 60,
         path="/",
     )

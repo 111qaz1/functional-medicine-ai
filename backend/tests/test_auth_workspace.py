@@ -68,6 +68,20 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:3100", origins)
         self.assertIn("http://custom.local:5173", origins)
 
+    def test_session_cookie_secure_flag_is_configurable(self) -> None:
+        with patch.dict(os.environ, {"FM_SESSION_COOKIE_SECURE": "1"}):
+            response = self.client_a.post(
+                "/auth/register",
+                json={
+                    "username": "secure-cookie-doctor",
+                    "password": "secret123",
+                    "display_name": "Secure Cookie Doctor",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("secure", response.headers["set-cookie"].lower())
+
     def _register(self, client: TestClient, username: str):
         response = client.post(
             "/auth/register",

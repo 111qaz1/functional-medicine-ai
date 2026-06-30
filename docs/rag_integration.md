@@ -27,13 +27,26 @@ RAG 必要数据位于 `backend/app/data`：
 
 ## 构建语料
 
-原始 DOCX 仅保存在授权的本地目录，不进入 Git。构建命令示例：
+原始 DOCX 仅保存在授权的本地目录，不进入 Git。下面路径仅为示例，部署或重新构建时请按实际服务器目录调整。
 
 ```powershell
+$docxDir = "<authorized-docx-dir>"
+
 python scripts\build_rag_corpus.py `
-  --docx-dir "D:\medical\AI学习功能医学相关资料\功能医学概论" `
+  --docx-dir $docxDir `
   --output-dir backend\app\data `
   --staging-dir backend\app\data\rag_staging
+```
+
+Linux / Ubuntu 环境示例：
+
+```bash
+DOCX_DIR=/opt/functional-medicine/materials/functional-medicine-docx
+
+python scripts/build_rag_corpus.py \
+  --docx-dir "$DOCX_DIR" \
+  --output-dir backend/app/data \
+  --staging-dir backend/app/data/rag_staging
 ```
 
 脚本读取：

@@ -171,6 +171,13 @@ http://localhost:3000
 http://localhost:8000/docs
 ```
 
+正式环境建议使用 Nginx 统一代理和 HTTPS，不直接暴露 `3000/8000`，具体配置参考：
+
+```text
+docs/production-recommended-config.md
+docs/nginx-production-deployment.md
+```
+
 ## 6. 接口鉴权
 
 外部接口统一挂载在：

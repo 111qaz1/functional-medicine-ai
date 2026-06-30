@@ -24,6 +24,7 @@ services:
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
       TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
       FM_LLM_DRAFT_COMPOSER_ENABLED: ${FM_LLM_DRAFT_COMPOSER_ENABLED:-0}
+      FM_SESSION_COOKIE_SECURE: ${FM_SESSION_COOKIE_SECURE:-0}
       OMP_WAIT_POLICY: PASSIVE
       TOKENIZERS_PARALLELISM: "false"
     volumes:
@@ -34,7 +35,7 @@ services:
         target: /models/bge-m3
         read_only: true
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
 
   frontend:
     build:
@@ -47,4 +48,4 @@ services:
     depends_on:
       - backend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"

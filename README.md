@@ -172,6 +172,8 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 
 新成员第一次用 Docker 启动项目时，优先参考：`docs/docker-first-run.md`。
 如果以接口形式交付给外部系统，优先参考：`docs/customer-api-delivery-guide.md`。
+正式环境建议使用 Nginx 统一代理和 HTTPS，参考：`docs/nginx-production-deployment.md`。
+甲方正式部署推荐配置参考：`docs/production-recommended-config.md`。
 
 ## 团队协作
 

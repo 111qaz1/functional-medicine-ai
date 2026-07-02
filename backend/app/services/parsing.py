@@ -60,7 +60,7 @@ class LabNormalizationService:
         seen: set[tuple[str, float | None, str | None, str, str]] = set()
 
         for span in self._iter_candidate_spans(spans):
-            line = span.snippet.strip()
+            line = self._repair_common_ocr_marker_text(span.snippet.strip())
             if not self._looks_like_candidate_line(line):
                 continue
 
@@ -80,6 +80,8 @@ class LabNormalizationService:
                 continue
 
             normalized_value, normalized_unit, reference_range = converted
+            if not self._measurement_value_is_plausible(marker, normalized_value):
+                continue
             abnormal_flag = self._explicit_abnormal_flag(line) or self._classify(normalized_value, reference_range)
             signature = (
                 marker["code"],
@@ -114,6 +116,27 @@ class LabNormalizationService:
             )
 
         return normalized_items
+
+    def _repair_common_ocr_marker_text(self, line: str) -> str:
+        """Recover common OCR-truncated marker names before dictionary matching."""
+        if "密度脂蛋白胆固醇" in line and not any(
+            token in line for token in ("低密度脂蛋白胆固醇", "高密度脂蛋白胆固醇", "非高密度脂蛋白胆固醇", "极低密度脂蛋白胆固醇")
+        ):
+            return line.replace("密度脂蛋白胆固醇", "低密度脂蛋白胆固醇", 1)
+        if "密度胆固醇" in line and not any(token in line for token in ("低密度胆固醇", "高密度胆固醇", "非高密度胆固醇", "极低密度胆固醇")):
+            return line.replace("密度胆固醇", "低密度胆固醇", 1)
+        return line
+
+    def _measurement_value_is_plausible(self, marker: dict, normalized_value: float) -> bool:
+        """Drop physiologically impossible values that come from narrative text."""
+        plausible_ranges = {
+            "body_weight": (20.0, 300.0),
+        }
+        bounds = plausible_ranges.get(marker.get("code"))
+        if not bounds:
+            return True
+        lower, upper = bounds
+        return lower <= normalized_value <= upper
 
     def find_unknown_lab_candidates(
         self,
@@ -412,6 +435,8 @@ class LabNormalizationService:
                             unit = unit_match.group(1)
 
         if unit and not self._unit_looks_valid(marker, unit):
+            return None
+        if marker.get("code") == "body_weight" and not unit:
             return None
 
         return value, unit, raw_range, parsed_range, raw_name

@@ -73,7 +73,7 @@ class ParsingServiceTests(unittest.TestCase):
             SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
             SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="载脂蛋白E 1.82 g/L ↑ 0.20-1.20"),
             SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="报告日期 2026-06-25"),
-            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="体重 12.34 kg 0-999"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="体重 66.6 kg 0-120"),
             SourceSpan(file_name="report.pdf", page=1, line_number=5, snippet="血小板 PLT 123.45 0-999"),
         ]
 
@@ -89,8 +89,8 @@ class ParsingServiceTests(unittest.TestCase):
     def test_normalizes_body_metrics_and_cbc_differentials(self) -> None:
         # Use obvious fixture values/ranges so tests cover formats without resembling a real patient record.
         samples = [
-            ("体重 12.34 kg 0-999", "body_weight", "kg"),
-            ("Weight 23.45 kg 0-999", "body_weight", "kg"),
+            ("体重 66.6 kg 0-120", "body_weight", "kg"),
+            ("Weight 72.5 kg 0-120", "body_weight", "kg"),
             ("身高 123.45 cm 0-999", "body_height", "cm"),
             ("Height 1.23 m 0-9", "body_height", "cm"),
             ("体质指数 12.34 0-999", "bmi", "kg/m2"),
@@ -142,6 +142,38 @@ class ParsingServiceTests(unittest.TestCase):
         for snippet, expected_code, expected_unit in samples:
             with self.subTest(snippet=snippet):
                 self.assertIn((snippet, expected_code, expected_unit), recognized)
+        self.assertFalse(candidates)
+
+    def test_does_not_extract_body_weight_from_lifestyle_water_intake_text(self) -> None:
+        spans = [
+            SourceSpan(
+                file_name="draft.txt",
+                page=1,
+                line_number=1,
+                snippet="禁酒;尤其是啤酒、白酒。控制体重。多饮水,每天饮水量 2000 毫升以上。",
+            )
+        ]
+
+        items = self.service.normalize(spans=spans)
+
+        self.assertFalse(any(item.marker_code == "body_weight" for item in items))
+
+    def test_repairs_ocr_truncated_ldl_marker_name(self) -> None:
+        spans = [
+            SourceSpan(
+                file_name="report.pdf",
+                page=1,
+                line_number=1,
+                snippet="密度脂蛋白胆固醇 3.49 (0.00~3.37 mmol/L)↑",
+            )
+        ]
+
+        items = self.service.normalize(spans=spans)
+        candidates = self.service.find_unknown_lab_candidates(spans=spans, lab_items=items)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].marker_code, "ldl_c")
+        self.assertEqual(items[0].abnormal_flag, AbnormalFlag.high)
         self.assertFalse(candidates)
 
     def test_ignores_service_hotline_metadata(self) -> None:

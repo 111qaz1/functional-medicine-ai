@@ -166,8 +166,7 @@ class ReviewService:
                 return self._render_report(draft, case)
             if not self._looks_like_internal_generated_report(publishable_summary) and not self._looks_like_corrupted_publishable_report(publishable_summary):
                 report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
-                report = self._ensure_report_nutrition_safety(report, draft)
-                return self._ensure_report_rag_enhancement(report, draft, case)
+                return self._ensure_report_nutrition_safety(report, draft)
         return self._render_report(draft, case)
 
     def is_stale_publishable_report(self, report_text: str | None) -> bool:

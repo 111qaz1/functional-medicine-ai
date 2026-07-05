@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from app.domain.models import AnalysisMode, DoctorAccount, UploadedFile, WorkspaceScope
+from app.services.prescription_advice import PrescriptionAdviceService
 
 
 router = APIRouter(prefix="/api/v1", tags=["external-api"])
@@ -85,6 +86,14 @@ class ExternalNutritionRecommendationResponse(BaseModel):
     recommendations: list[ExternalNutritionRecommendation] = Field(default_factory=list)
     contraindications: list[str] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
+
+
+class ExternalPrescriptionItemsResponse(BaseModel):
+    case_id: str
+    draft_id: str
+    status: str
+    medical_advice: str
+    advice_source: Literal["llm", "local_fallback"]
 
 
 class ExternalReportDownloadResponse(BaseModel):
@@ -187,6 +196,17 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
         recommendations=recommendations,
         contraindications=draft.contraindications,
         missing_info=draft.missing_info,
+    )
+
+
+def _prescription_items_response(container, draft) -> ExternalPrescriptionItemsResponse:
+    advice = PrescriptionAdviceService(container.settings).build_advice(draft)
+    return ExternalPrescriptionItemsResponse(
+        case_id=draft.case_id,
+        draft_id=draft.id,
+        status=getattr(draft.status, "value", str(draft.status)),
+        medical_advice=advice.medical_advice,
+        advice_source=advice.advice_source,
     )
 
 
@@ -343,6 +363,17 @@ def get_latest_external_nutrition_recommendations(
     if not draft:
         raise HTTPException(status_code=404, detail="Latest draft not found")
     return _nutrition_response(container, draft)
+
+
+@router.get("/drafts/{draft_id}/prescription-items", response_model=ExternalPrescriptionItemsResponse)
+def get_external_prescription_items(
+    draft_id: str,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    container = _container(request)
+    _, draft = _require_owned_draft(container, draft_id, doctor)
+    return _prescription_items_response(container, draft)
 
 
 @router.get("/drafts/{draft_id}/report-download", response_model=ExternalReportDownloadResponse)

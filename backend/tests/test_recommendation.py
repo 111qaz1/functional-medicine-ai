@@ -1395,6 +1395,15 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("## 异常指标汇总", review.publishable_report)
         self.assertIn("说明：", review.publishable_report)
         self.assertIn("## 生活方式干预处方", review.publishable_report)
+        self.assertIn("## 首月营养素干预方案", review.publishable_report)
+        self.assertIn("## 总医嘱说明", review.publishable_report)
+        self.assertLess(
+            review.publishable_report.index("## 首月营养素干预方案"),
+            review.publishable_report.index("## 总医嘱说明"),
+        )
+        self.assertIn("处方级营养素", review.publishable_report)
+        self.assertIn("身体当下所需营养", review.publishable_report)
+        self.assertNotIn("对症治疗", review.publishable_report)
         self.assertIn("### 1.", review.publishable_report)
         self.assertIn("### A. 饮食干预", review.publishable_report)
         self.assertIn("抗炎餐盘", review.publishable_report)
@@ -1482,6 +1491,13 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertIn(recommended.display_name, review.publishable_report)
+        self.assertIn("## 总医嘱说明", review.publishable_report)
+        self.assertLess(
+            review.publishable_report.index("## 首月营养素干预方案"),
+            review.publishable_report.index("## 总医嘱说明"),
+        )
+        self.assertIn("处方级营养素", review.publishable_report)
+        self.assertNotIn("对症治疗", review.publishable_report)
 
     def test_approval_rerenders_legacy_auto_customer_report(self) -> None:
         case = self._prepare_case(

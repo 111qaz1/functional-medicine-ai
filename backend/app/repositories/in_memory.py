@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -94,6 +96,10 @@ class LocalRepository:
                     expires_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS seed_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(connection, "cases", "workspace_scope", "TEXT NOT NULL DEFAULT 'public'")
@@ -114,14 +120,18 @@ class LocalRepository:
         products: list[ProductRule],
         manifest_entries: list[KnowledgeManifestEntry],
     ) -> None:
+        knowledge_fingerprint = self._knowledge_fingerprint(knowledge)
         with self._lock, closing(self._connect()) as connection, connection:
-            connection.executemany(
-                "INSERT OR REPLACE INTO knowledge (statement_id, review_status, payload) VALUES (?, ?, ?)",
-                [
-                    (item.statement_id, item.review_status.value, item.model_dump_json())
-                    for item in knowledge
-                ],
-            )
+            if self._should_seed_knowledge(connection, knowledge, knowledge_fingerprint):
+                connection.executemany(
+                    "INSERT OR REPLACE INTO knowledge (statement_id, review_status, payload) VALUES (?, ?, ?)",
+                    [
+                        (item.statement_id, item.review_status.value, item.model_dump_json())
+                        for item in knowledge
+                    ],
+                )
+                self._set_seed_metadata(connection, "knowledge_fingerprint_v1", knowledge_fingerprint)
+                self._set_seed_metadata(connection, "knowledge_count_v1", str(len(knowledge)))
             connection.executemany(
                 "INSERT OR IGNORE INTO products (sku_id, enabled, payload) VALUES (?, ?, ?)",
                 [(item.sku_id, 1 if item.enabled else 0, item.model_dump_json()) for item in products],
@@ -133,6 +143,84 @@ class LocalRepository:
                     for item in manifest_entries
                 ],
             )
+
+    def _knowledge_fingerprint(self, knowledge: list[KnowledgeStatement]) -> str:
+        digest = hashlib.sha256()
+        for item in sorted(knowledge, key=lambda statement: statement.statement_id):
+            self._update_knowledge_digest(
+                digest,
+                statement_id=item.statement_id,
+                review_status=item.review_status.value,
+                version=item.version,
+                normalized_text=item.normalized_text,
+            )
+        return digest.hexdigest()
+
+    def _knowledge_fingerprint_from_db(self, connection: sqlite3.Connection) -> str | None:
+        rows = connection.execute("SELECT payload FROM knowledge ORDER BY statement_id").fetchall()
+        digest = hashlib.sha256()
+        try:
+            payloads = [json.loads(row["payload"]) for row in rows]
+        except (TypeError, json.JSONDecodeError):
+            return None
+        for payload in sorted(payloads, key=lambda item: str(item.get("statement_id") or "")):
+            self._update_knowledge_digest(
+                digest,
+                statement_id=str(payload.get("statement_id") or ""),
+                review_status=str(payload.get("review_status") or ""),
+                version=str(payload.get("version") or ""),
+                normalized_text=str(payload.get("normalized_text") or ""),
+            )
+        return digest.hexdigest()
+
+    def _update_knowledge_digest(
+        self,
+        digest: "hashlib._Hash",
+        *,
+        statement_id: str,
+        review_status: str,
+        version: str,
+        normalized_text: str,
+    ) -> None:
+        for value in (statement_id, review_status, version, normalized_text):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+
+    def _should_seed_knowledge(
+        self,
+        connection: sqlite3.Connection,
+        knowledge: list[KnowledgeStatement],
+        fingerprint: str,
+    ) -> bool:
+        row = connection.execute("SELECT COUNT(*) AS total FROM knowledge").fetchone()
+        existing_count = int(row["total"] if row else 0)
+        expected_count = len(knowledge)
+        stored_fingerprint = self._seed_metadata(connection, "knowledge_fingerprint_v1")
+        stored_count = self._seed_metadata(connection, "knowledge_count_v1")
+        if (
+            existing_count == expected_count
+            and stored_fingerprint == fingerprint
+            and stored_count == str(expected_count)
+        ):
+            return False
+        if existing_count == expected_count and stored_fingerprint is None:
+            existing_fingerprint = self._knowledge_fingerprint_from_db(connection)
+            if existing_fingerprint != fingerprint:
+                return True
+            self._set_seed_metadata(connection, "knowledge_fingerprint_v1", fingerprint)
+            self._set_seed_metadata(connection, "knowledge_count_v1", str(expected_count))
+            return False
+        return True
+
+    def _seed_metadata(self, connection: sqlite3.Connection, key: str) -> str | None:
+        row = connection.execute("SELECT value FROM seed_metadata WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else None
+
+    def _set_seed_metadata(self, connection: sqlite3.Connection, key: str, value: str) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO seed_metadata (key, value) VALUES (?, ?)",
+            (key, value),
+        )
 
     def list_cases(
         self,

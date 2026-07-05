@@ -87,11 +87,24 @@ class PdfReportExporter:
             Spacer(1, 12),
         ]
 
-        for section_title, items in sections:
+        skip_section_indexes: set[int] = set()
+        for index, (section_title, items) in enumerate(sections):
+            if index in skip_section_indexes:
+                continue
             story.append(Paragraph(escape(section_title), self._section_style(section_title, styles)))
             story.append(Spacer(1, 5))
             if section_title in self.nutrition_sections and recommended_skus:
-                story.extend(self._build_nutrition_table_flowables(recommended_skus, styles))
+                prescription_advice_items: list[str] = []
+                if index + 1 < len(sections) and sections[index + 1][0] == "总医嘱说明":
+                    prescription_advice_items = sections[index + 1][1]
+                    skip_section_indexes.add(index + 1)
+                story.extend(
+                    self._build_nutrition_table_flowables(
+                        recommended_skus,
+                        styles,
+                        prescription_advice_items=prescription_advice_items,
+                    )
+                )
             else:
                 for item in items:
                     if self._is_subheading_item(item):
@@ -301,6 +314,8 @@ class PdfReportExporter:
         self,
         recommended_skus: list[Any],
         styles: dict[str, ParagraphStyle],
+        *,
+        prescription_advice_items: list[str] | None = None,
     ) -> list[Any]:
         rows = self._nutrition_table_rows(recommended_skus)
         if not rows:
@@ -352,7 +367,27 @@ class PdfReportExporter:
             )
         )
         flowables.append(table)
+        flowables.extend(self._build_prescription_advice_flowables(prescription_advice_items or [], styles))
         flowables.extend(self._build_nutrition_basis_flowables(rows, styles))
+        return flowables
+
+    def _build_prescription_advice_flowables(
+        self,
+        items: list[str],
+        styles: dict[str, ParagraphStyle],
+    ) -> list[Any]:
+        cleaned_items = [self._clean_customer_text(item) for item in items if self._clean_customer_text(item)]
+        if not cleaned_items:
+            return []
+
+        flowables: list[Any] = [
+            Spacer(1, 9),
+            Paragraph("总医嘱说明", styles["subsection"]),
+            Spacer(1, 4),
+        ]
+        for item in cleaned_items:
+            flowables.append(Paragraph(self._format_item("总医嘱说明", item), styles["body"]))
+            flowables.append(Spacer(1, 4))
         return flowables
 
     def _nutrition_table_rows(self, recommended_skus: list[Any]) -> list[dict[str, Any]]:

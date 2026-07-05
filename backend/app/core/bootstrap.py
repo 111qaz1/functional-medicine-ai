@@ -23,6 +23,7 @@ from app.services.indicator_extraction import CaseIndicatorService
 from app.services.ingestion import KnowledgeIngestionService
 from app.services.parsing import DocumentParsingService, LabNormalizationService
 from app.services.pdf_export import PdfReportExporter
+from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.questionnaire_import import QuestionnaireImportService
 from app.services.recommendation_local import RecommendationService
 from app.services.review_local import ReviewService
@@ -168,7 +169,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     repository.seed(knowledge=knowledge, products=products, manifest_entries=manifest_entries)
 
     vector_store = InMemoryVectorStore()
-    vector_store.index(repository.list_knowledge(reviewed_only=True))
+    vector_store.index([item for item in knowledge if item.review_status.value == "reviewed"])
     llm_provider, model_version, prompt_version = build_llm_provider(settings)
     rag_fusion_provider = build_rag_fusion_provider(settings)
     rag_retriever = build_rag_retriever(settings)
@@ -205,6 +206,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service,
         PdfReportExporter(settings.report_export_dir),
         rag_fusion_provider=rag_fusion_provider,
+        prescription_advice_service=PrescriptionAdviceService(settings),
     )
     assistant_rule_service = ClinicianRuleService(
         repository=repository,

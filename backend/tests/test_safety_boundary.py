@@ -494,6 +494,48 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("。；", normalized)
         self.assertEqual(normalized.count("- "), 5)
 
+    def test_customer_visible_report_splits_inline_subheadings_with_blank_lines(self) -> None:
+        raw_report = (
+            "# 功能医学综合分析与首月干预方案\n\n"
+            "## 功能医学系统失衡分析\n"
+            "###1. 消化系统/肠道（优先级高）\n"
+            "- 腹胀、排便波动提示消化道执行力会影响整体方案效果。 ###2. 铁储备/造血支持（重点跟进）\n"
+            "- 铁蛋白、血清铁相关线索提示铁储备可能影响疲劳。###3. 免疫系统/甲状腺（轻度关注）\n"
+            "- 甲状腺功能需结合症状和复查趋势观察。\n"
+        )
+
+        normalized = self.container.review_service._normalize_customer_visible_report_text(raw_report)
+
+        self.assertIn("\n\n### 1. 消化系统/肠道（优先级高）\n\n", normalized)
+        self.assertIn("\n\n### 2. 铁储备/造血支持（重点跟进）\n\n", normalized)
+        self.assertIn("\n\n### 3. 免疫系统/甲状腺（轻度关注）\n\n", normalized)
+        self.assertNotIn("。 ###2", normalized)
+        self.assertNotIn("。###3", normalized)
+
+    def test_indicator_rag_fusion_does_not_attach_unmatched_knowledge_to_bmi(self) -> None:
+        indicator = SimpleNamespace(
+            indicator_name="体质指数",
+            result_text="17.65 kg/m2",
+            source_span=SimpleNamespace(snippet="体质指数 17.65 kg/m2"),
+            status=SimpleNamespace(value="attention"),
+        )
+        items = self.container.review_service._customer_key_indicators([indicator])
+
+        fused = self.container.review_service._fuse_rag_into_key_indicators(
+            items,
+            [indicator],
+            [
+                f"{CUSTOMER_RAG_PREFIX}甲状腺HPT轴功能失衡需要结合临床症状、TSH、FT3、FT4和甲状腺抗体变化综合评估。",
+                f"{CUSTOMER_RAG_PREFIX}在LDL达到最小水平时，通常将会少量增加LDL，但是会减少那些较高水平的LDL。",
+            ],
+        )
+        serialized = "\n".join(fused)
+
+        self.assertIn("体重或体成分偏离理想范围", serialized)
+        self.assertNotIn("甲状腺HPT轴", serialized)
+        self.assertNotIn("TSH", serialized)
+        self.assertNotIn("LDL", serialized)
+
     def test_optional_remote_rag_fusion_falls_back_when_output_leaks_internal_labels(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
             [

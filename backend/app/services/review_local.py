@@ -335,26 +335,48 @@ class ReviewService:
         text = str(report_text or "").replace("\r\n", "\n").replace("\r", "\n")
         normalized_lines: list[str] = []
         for raw_line in text.split("\n"):
-            line = self._normalize_report_inline_spacing(raw_line.strip())
-            if self._is_internal_parse_warning(line):
-                continue
-            if not line:
-                if normalized_lines and normalized_lines[-1] != "":
-                    normalized_lines.append("")
-                continue
-            if line.startswith(("# ", "## ", "### ", "- ")):
+            for raw_part in self._split_inline_report_markers(raw_line):
+                line = self._normalize_report_inline_spacing(raw_part.strip())
+                if self._is_internal_parse_warning(line):
+                    continue
+                if not line:
+                    if normalized_lines and normalized_lines[-1] != "":
+                        normalized_lines.append("")
+                    continue
+                line = self._normalize_report_heading_marker(line)
+                if line.startswith(("# ", "## ", "### ", "- ")):
+                    normalized_lines.append(line)
+                    continue
+                if normalized_lines and normalized_lines[-1].startswith("- "):
+                    normalized_lines[-1] = self._normalize_report_line(
+                        self._collapse_inline_soft_breaks(f"{normalized_lines[-1]}\n{line}")
+                    )
+                    continue
                 normalized_lines.append(line)
-                continue
-            if normalized_lines and normalized_lines[-1].startswith("- "):
-                normalized_lines[-1] = self._normalize_report_line(
-                    self._collapse_inline_soft_breaks(f"{normalized_lines[-1]}\n{line}")
-                )
-                continue
-            normalized_lines.append(line)
         finalized_lines = [
             self._normalize_report_line(line) if line else "" for line in normalized_lines
         ]
-        return "\n".join(finalized_lines).strip()
+        return "\n".join(self._space_report_paragraphs(finalized_lines)).strip()
+
+    def _split_inline_report_markers(self, text: str) -> list[str]:
+        prepared = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        prepared = re.sub(r"(?<=[^\s#])\s*(?=#{2,3}\s*(?:\d+[\.\uFF0E、]|[A-Z]\.))", "\n", prepared)
+        return prepared.split("\n")
+
+    def _space_report_paragraphs(self, lines: list[str]) -> list[str]:
+        spaced: list[str] = []
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                if spaced and spaced[-1] != "":
+                    spaced.append("")
+                continue
+            if spaced and spaced[-1] != "":
+                spaced.append("")
+            spaced.append(line)
+        while spaced and spaced[-1] == "":
+            spaced.pop()
+        return spaced
 
     def _collapse_inline_soft_breaks(self, text: str) -> str:
         collapsed = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -368,7 +390,7 @@ class ReviewService:
         return self._normalize_report_inline_spacing(collapsed)
 
     def _normalize_report_line(self, text: str) -> str:
-        normalized = self._normalize_report_inline_spacing(text)
+        normalized = self._normalize_report_heading_marker(self._normalize_report_inline_spacing(text))
         if not normalized or normalized.startswith(("# ", "## ", "### ")):
             return normalized
         prefix = "- " if normalized.startswith("- ") else ""
@@ -378,6 +400,14 @@ class ReviewService:
         elif prefix and content and not re.search(r"[。！？；）)]$", content):
             content += "。"
         return f"{prefix}{content}" if prefix else content
+
+    def _normalize_report_heading_marker(self, text: str) -> str:
+        normalized = str(text or "").strip()
+        normalized = re.sub(r"^(#{1,3})(?!#)\s*(?=\S)", r"\1 ", normalized)
+        normalized = re.sub(r"^(#{2,3})\s+(\d+[\.\uFF0E、])\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(r"^(#{2,3})\s+([A-Z]\.)\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(r"[ \t\f\v]+", " ", normalized).strip()
+        return normalized
 
     def _normalize_report_inline_spacing(self, text: str) -> str:
         normalized = strip_textbook_internal_markers(str(text or ""))
@@ -849,6 +879,11 @@ class ReviewService:
         if not abnormal_indicators:
             return None
         normalized = self._normalize_text(rag_item)
+        if any(term in normalized for term in ("体质指数", "bmi", "体重", "体脂", "腰围")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("体质指数", "bmi", "体重", "体脂", "腰围")):
+                    return index
         if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "hpt", "桥本")):
             for index, indicator in enumerate(abnormal_indicators):
                 name = self._normalize_text(getattr(indicator, "indicator_name", ""))
@@ -864,19 +899,24 @@ class ReviewService:
                 name = self._normalize_text(getattr(indicator, "indicator_name", ""))
                 if any(term in name for term in ("crp", "反应蛋白", "白细胞", "炎症")):
                     return index
-        return 0
+        if any(term in normalized for term in ("胆固醇", "甘油三酯", "低密度", "载脂蛋白", "ldl", "tg", "tc", "血脂")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("胆固醇", "甘油三酯", "低密度", "载脂蛋白", "ldl", "tg", "tc", "血脂")):
+                    return index
+        return None
 
     def _fallback_follow_up_row_for_rag(self, rag_item: str, follow_items: list[str]) -> int | None:
         if not follow_items:
             return None
         normalized = self._normalize_text(rag_item)
         if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
-            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体")) or 0
+            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体"))
         if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
-            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查")) or 0
+            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查"))
         if any(term in normalized for term in ("睡眠", "压力", "hpa", "皮质醇")):
-            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访")) or 0
-        return 0
+            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访"))
+        return None
 
     def _first_matching_row(self, items: list[str], terms: tuple[str, ...]) -> int | None:
         normalized_terms = [self._normalize_text(term) for term in terms]
@@ -940,7 +980,7 @@ class ReviewService:
             lines.append(f"## {title}")
             for item in items:
                 if self._is_report_subheading(item):
-                    lines.append(item if item.startswith("### ") else f"### {item}")
+                    lines.append(self._normalize_report_line(item))
                 else:
                     lines.append(f"- {item}")
             lines.append("")
@@ -956,7 +996,7 @@ class ReviewService:
         return [str(item).strip() for item in content if str(item).strip()]
 
     def _is_report_subheading(self, item: str) -> bool:
-        return str(item or "").strip().startswith("### ")
+        return bool(re.match(r"^###\s*(?:\d+[\.\uFF0E、]|[A-Z]\.)", str(item or "").strip()))
 
     def _structure_system_analysis(self, items: list[str]) -> list[str]:
         if not items or any(self._is_report_subheading(item) for item in items):
@@ -1077,6 +1117,7 @@ class ReviewService:
     def _indicator_aliases(self, normalized_name: str) -> set[str]:
         aliases = {normalized_name}
         mapping = {
+            "体质指数": {"体质指数", "bmi", "体重", "体脂", "腰围"},
             "甲状腺过氧化物酶抗体": {"甲状腺过氧化物酶抗体", "tpoab", "tpo", "桥本"},
             "甲状腺球蛋白抗体": {"甲状腺球蛋白抗体", "tgab", "桥本"},
             "促甲状腺激素": {"促甲状腺激素", "甲状腺", "tsh", "hpt", "桥本"},
@@ -1084,6 +1125,7 @@ class ReviewService:
             "超敏c反应蛋白": {"超敏c反应蛋白", "hscrp", "crp", "炎症"},
             "25羟维生素d": {"25羟维生素d", "维生素d", "25ohd", "免疫"},
             "甘油三酯": {"甘油三酯", "血脂", "代谢"},
+            "低密度脂蛋白胆固醇": {"低密度脂蛋白胆固醇", "低密度", "ldl", "ldl-c", "胆固醇", "血脂"},
         }
         for key, values in mapping.items():
             if key in normalized_name:
@@ -1109,7 +1151,7 @@ class ReviewService:
         if "25" in name and ("维生素d" in name or "vitamin d" in name) or "羟维生素d" in name:
             return "维生素D和免疫调节、骨骼健康、情绪与整体恢复有关，偏低时可把规律日晒、饮食来源和营养补充一起纳入计划。"
         if "体质指数" in name or "bmi" in name:
-            return "提示体重和体脂管理压力增加，建议重点观察腰围、餐盘结构、运动量和睡眠节律。"
+            return "提示体重或体成分偏离理想范围，建议结合腰围、肌肉量、近期饮食摄入、运动量和睡眠节律一起评估。"
         if "腰围" in name:
             return "腰围偏高通常提示腹部脂肪压力增加，和血糖、血脂、脂肪肝及炎症负担都有关。"
         if "血压" in name or "收缩压" in name or "舒张压" in name:

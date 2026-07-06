@@ -398,6 +398,100 @@ textarea {
   gap: 10px;
 }
 
+.publishable-editor-field {
+  gap: 12px;
+}
+
+.publishable-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.publishable-editor-actions {
+  justify-content: flex-end;
+}
+
+.publishable-editor-textarea {
+  min-height: 520px;
+  resize: vertical;
+  line-height: 1.72;
+  font-size: 16px;
+}
+
+.draft-reference {
+  border-top: 1px solid rgba(36, 52, 42, 0.08);
+  padding-top: 14px;
+}
+
+.draft-reference summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.draft-reference__body {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.report-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(20, 27, 23, 0.42);
+  backdrop-filter: blur(10px);
+}
+
+.report-editor-dialog {
+  width: min(1180px, 100%);
+  max-height: calc(100vh - 56px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+
+.report-editor-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.report-editor-dialog__head h3 {
+  margin: 4px 0 0;
+  font-size: clamp(22px, 3vw, 30px);
+}
+
+.report-editor-dialog__textarea {
+  width: 100%;
+  min-height: min(70vh, 720px);
+  border: 1px solid rgba(36, 52, 42, 0.1);
+  border-radius: 16px;
+  padding: 16px 18px;
+  background: rgba(255, 252, 247, 0.96);
+  color: var(--ink);
+  line-height: 1.72;
+  font-size: 16px;
+  resize: none;
+}
+
+.report-editor-dialog__textarea:focus {
+  outline: none;
+  border-color: rgba(15, 118, 110, 0.42);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.08);
+}
+
 .manual-indicator-panel {
   display: grid;
   gap: 12px;
@@ -947,6 +1041,35 @@ td {
   .section-divider {
     padding-top: 18px;
     margin-top: 28px;
+  }
+
+  .publishable-editor-head,
+  .report-editor-dialog__head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .publishable-editor-actions,
+  .report-editor-dialog__head .inline-actions {
+    justify-content: flex-start;
+  }
+
+  .publishable-editor-textarea {
+    min-height: 360px;
+  }
+
+  .report-editor-overlay {
+    padding: 12px;
+    align-items: stretch;
+  }
+
+  .report-editor-dialog {
+    max-height: calc(100vh - 24px);
+    padding: 16px;
+  }
+
+  .report-editor-dialog__textarea {
+    min-height: 58vh;
   }
 
   .assistant-widget {

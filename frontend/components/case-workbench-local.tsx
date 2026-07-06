@@ -127,6 +127,45 @@ function normalizeInlineSpacing(text: string) {
     .trim();
 }
 
+function normalizeHeadingMarker(text: string) {
+  return text
+    .trim()
+    .replace(/^(#{1,3})(?!#)\s*(?=\S)/, "$1 ")
+    .replace(/^(#{2,3})\s+(\d+[\.\uFF0E、])\s*/, "$1 $2 ")
+    .replace(/^(#{2,3})\s+([A-Z]\.)\s*/, "$1 $2 ")
+    .replace(/[ \t\f\v]+/g, " ")
+    .trim();
+}
+
+function splitInlineReportMarkers(text: string) {
+  return String(text ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/(?<=[^\s#])\s*(?=#{2,3}\s*(?:\d+[\.\uFF0E、]|[A-Z]\.))/g, "\n")
+    .split("\n");
+}
+
+function spaceReportParagraphs(lines: string[]) {
+  const spaced: string[] = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (spaced.length && spaced[spaced.length - 1] !== "") {
+        spaced.push("");
+      }
+      continue;
+    }
+    if (spaced.length && spaced[spaced.length - 1] !== "") {
+      spaced.push("");
+    }
+    spaced.push(line);
+  }
+  while (spaced[spaced.length - 1] === "") {
+    spaced.pop();
+  }
+  return spaced;
+}
+
 function normalizeNutritionItemPunctuation(text: string) {
   return `${text
     .trim()
@@ -140,8 +179,8 @@ function normalizeNutritionItemPunctuation(text: string) {
 }
 
 function normalizeReportLine(text: string) {
-  const normalized = normalizeInlineSpacing(text);
-  if (!normalized || normalized.startsWith("# ") || normalized.startsWith("## ")) {
+  const normalized = normalizeHeadingMarker(normalizeInlineSpacing(text));
+  if (!normalized || normalized.startsWith("# ") || normalized.startsWith("## ") || normalized.startsWith("### ")) {
     return normalized;
   }
   const prefix = normalized.startsWith("- ") ? "- " : "";
@@ -173,26 +212,28 @@ function normalizeCustomerVisibleReportText(reportText?: string | null) {
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")) {
-    const line = normalizeReportLine(rawLine.trim());
-    if (!line) {
-      if (normalizedLines.length && normalizedLines[normalizedLines.length - 1] !== "") {
-        normalizedLines.push("");
+    for (const rawPart of splitInlineReportMarkers(rawLine)) {
+      const line = normalizeReportLine(rawPart.trim());
+      if (!line) {
+        if (normalizedLines.length && normalizedLines[normalizedLines.length - 1] !== "") {
+          normalizedLines.push("");
+        }
+        continue;
       }
-      continue;
-    }
-    if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("- ")) {
+      if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ") || line.startsWith("- ")) {
+        normalizedLines.push(line);
+        continue;
+      }
+      if (normalizedLines.length && normalizedLines[normalizedLines.length - 1].startsWith("- ")) {
+        normalizedLines[normalizedLines.length - 1] = normalizeReportLine(
+          collapseInlineSoftBreaks(`${normalizedLines[normalizedLines.length - 1]}\n${line}`)
+        );
+        continue;
+      }
       normalizedLines.push(line);
-      continue;
     }
-    if (normalizedLines.length && normalizedLines[normalizedLines.length - 1].startsWith("- ")) {
-      normalizedLines[normalizedLines.length - 1] = normalizeReportLine(
-        collapseInlineSoftBreaks(`${normalizedLines[normalizedLines.length - 1]}\n${line}`)
-      );
-      continue;
-    }
-    normalizedLines.push(line);
   }
-  return normalizedLines.join("\n").trim();
+  return spaceReportParagraphs(normalizedLines).join("\n").trim();
 }
 
 function cleanCustomerText(item: string) {
@@ -320,10 +361,10 @@ function appendClauseToBestItem(items: string[], clause: string, preferredTokens
     : lowerClause.includes("甲状腺")
       ? ["甲状腺", "TSH", "FT3", "FT4", "TPO", "TGAb", "抗体"]
       : ["血糖", "胰岛素", "代谢", "炎症", "CRP", "胆固醇"];
-  const index = Math.max(
-    0,
-    items.findIndex((item) => tokens.some((token) => item.toLowerCase().includes(token.toLowerCase())))
-  );
+  const index = items.findIndex((item) => tokens.some((token) => item.toLowerCase().includes(token.toLowerCase())));
+  if (index < 0) {
+    return items;
+  }
   const nextItems = [...items];
   nextItems[index] = appendClause(nextItems[index], clause);
   return nextItems;
@@ -413,7 +454,7 @@ function indicatorExplanation(indicator: CaseIndicator) {
     return "维生素D和免疫调节、骨骼健康、情绪与整体恢复有关，偏低时可把规律日晒、饮食来源和营养补充一起纳入计划。";
   }
   if (name.includes("体质指数") || name.includes("bmi")) {
-    return "提示体重和体脂管理压力增加，建议重点观察腰围、餐盘结构、运动量和睡眠节律。";
+    return "提示体重或体成分偏离理想范围，建议结合腰围、肌肉量、近期饮食摄入、运动量和睡眠节律一起评估。";
   }
   if (name.includes("腰围")) {
     return "腰围偏高通常提示腹部脂肪压力增加，和血糖、血脂、脂肪肝及炎症负担都有关。";
@@ -811,6 +852,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [currentDoctor, setCurrentDoctor] = useState<DoctorAccount | null>(null);
   const [reviewerId, setReviewerId] = useState("reviewer-01");
   const [publishableSummary, setPublishableSummary] = useState("");
+  const [publishableEditorExpanded, setPublishableEditorExpanded] = useState(false);
   const [excludedSkuIds, setExcludedSkuIds] = useState<string[]>([]);
   const [questionnaire, setQuestionnaire] = useState<Questionnaire>(DEFAULT_FORM);
   const [questionnaireImportHint, setQuestionnaireImportHint] = useState<string | null>(null);
@@ -869,6 +911,19 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           ]
     );
   }
+
+  useEffect(() => {
+    if (!publishableEditorExpanded) {
+      return;
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPublishableEditorExpanded(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [publishableEditorExpanded]);
 
   async function refresh(options?: { showLoading?: boolean }) {
     const showLoading = options?.showLoading ?? false;
@@ -1193,7 +1248,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     if (!payload?.latest_draft) {
       return;
     }
-    setPublishableSummary(buildPublishableReport(payload, excludedSkuIds, { forceDraft: true }));
+    setPublishableSummary(normalizeCustomerVisibleReportText(buildPublishableReport(payload, excludedSkuIds, { forceDraft: true })));
   }
 
   async function handleReparseFile(fileId: string) {
@@ -2298,41 +2353,35 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </div>
 
                 <div className="stack">
-                  <div>
-                    <h3>结构化章节</h3>
-                    {Object.entries(latestDraft.report_sections).map(([title, content]) => (
-                      <div key={title} className="recommendation-row">
-                        <div>
-                          <strong>{title}</strong>
-                          {Array.isArray(content) ? (
-                            <ul className="flat-list">
-                              {content.map((item, index) => (
-                                <li key={`${title}-${index}-${item}`}>{item}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p>{String(content)}</p>
-                          )}
+                  <details className="draft-reference" open>
+                    <summary>结构化章节参考</summary>
+                    <div className="draft-reference__body">
+                      {Object.entries(latestDraft.report_sections).map(([title, content]) => (
+                        <div key={title} className="recommendation-row">
+                          <div>
+                            <strong>{title}</strong>
+                            {Array.isArray(content) ? (
+                              <ul className="flat-list">
+                                {content.map((item, index) => (
+                                  <li key={`${title}-${index}-${item}`}>{item}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p>{String(content)}</p>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </details>
 
                   <div>
                     <h3>纳入报告的营养素</h3>
                     <p className="muted">
                       删除后该营养素和推荐理由不会进入 PDF 营养素表；如需同步下方报告正文，请点击“更新报告文本”。
                     </p>
-                    <div className="inline-actions">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={busy || !latestDraft.recommended_skus.length}
-                        onClick={handleRebuildPublishableSummary}
-                      >
-                        更新报告文本
-                      </button>
-                      {removedRecommendedSkus.length ? (
+                    {removedRecommendedSkus.length ? (
+                      <div className="inline-actions">
                         <button
                           type="button"
                           className="secondary-button"
@@ -2341,8 +2390,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                         >
                           恢复已删除 {removedRecommendedSkus.length} 项
                         </button>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null}
                     <div className="stack">
                       {activeRecommendedSkus.map((sku) => (
                         <article key={sku.sku_id} className="recommendation-row">
@@ -2380,17 +2429,39 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                       </p>
                     ) : null}
                   </div>
-                </div>
 
-                <label className="field">
-                  <span>审核后发布内容</span>
-                  <textarea
-                    rows={14}
-                    value={publishableSummary}
-                    onChange={(event) => setPublishableSummary(event.target.value)}
-                    placeholder="在这里编辑最终对外发布的结构化报告"
-                  />
-                </label>
+                  <div className="field publishable-editor-field">
+                    <div className="publishable-editor-head">
+                      <span>审核后发布内容</span>
+                      <div className="inline-actions publishable-editor-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy}
+                          onClick={handleRebuildPublishableSummary}
+                        >
+                          更新报告文本
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy}
+                          onClick={() => setPublishableEditorExpanded(true)}
+                        >
+                          放大编辑
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      className="publishable-editor-textarea"
+                      rows={24}
+                      value={publishableSummary}
+                      onChange={(event) => setPublishableSummary(event.target.value)}
+                      placeholder="在这里编辑最终对外发布的结构化报告"
+                      aria-label="审核后发布内容"
+                    />
+                  </div>
+                </div>
 
                 <button className="primary-button" disabled={busy} onClick={() => void handleApproveDraft()}>
                   审核并发布
@@ -2415,6 +2486,39 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             )}
           </div>
         </SectionCard>
+
+        {publishableEditorExpanded ? (
+          <div className="report-editor-overlay" role="presentation">
+            <div
+              className="report-editor-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="report-editor-title"
+            >
+              <div className="report-editor-dialog__head">
+                <div>
+                  <p className="section-card__eyebrow">Publishable report</p>
+                  <h3 id="report-editor-title">审核后发布内容</h3>
+                </div>
+                <div className="inline-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => setPublishableEditorExpanded(false)}
+                  >
+                    完成
+                  </button>
+                </div>
+              </div>
+              <textarea
+                className="report-editor-dialog__textarea"
+                value={publishableSummary}
+                onChange={(event) => setPublishableSummary(event.target.value)}
+                aria-label="放大编辑审核后发布内容"
+              />
+            </div>
+          </div>
+        ) : null}
 
         <SectionCard title="审计日志" subtitle="Audit trail">
           <div className="audit-list">

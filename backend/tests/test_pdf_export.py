@@ -156,6 +156,29 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertIn("1. 代谢/内分泌系统", formatted)
         self.assertNotIn("- ", formatted)
 
+    def test_nutrition_table_places_prescription_advice_before_basis(self) -> None:
+        flowables = self.exporter._build_nutrition_table_flowables(
+            [
+                SimpleNamespace(
+                    sku_id="sku_immune_support",
+                    display_name="免疫支持（现货）",
+                    dosage="每日 1 粒，餐后使用。",
+                    reason="结合本次炎症和免疫状态进行支持。",
+                    warnings=[],
+                )
+            ],
+            self.exporter._styles(),
+            prescription_advice_items=[
+                "处方级营养素用于补充身体当下所需营养，予以免疫调节支持等方向的营养支持，帮助平衡免疫、抗炎、抗氧化及代谢调节。"
+            ],
+        )
+
+        paragraph_text = [item.getPlainText() for item in flowables if hasattr(item, "getPlainText")]
+
+        self.assertIn("总医嘱说明", paragraph_text)
+        self.assertIn("推荐搭配说明", paragraph_text)
+        self.assertLess(paragraph_text.index("总医嘱说明"), paragraph_text.index("推荐搭配说明"))
+
     def test_export_generates_pdf_with_structured_nutrition_table(self) -> None:
         pdf_path = self.exporter.export(
             draft_id="draft_demo",

@@ -10,6 +10,7 @@ from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.pdf_export import PdfReportExporter
+from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
 
 
@@ -21,12 +22,14 @@ class ReviewService:
         indicator_service: CaseIndicatorService,
         pdf_exporter: PdfReportExporter,
         rag_fusion_provider: Any | None = None,
+        prescription_advice_service: PrescriptionAdviceService | None = None,
     ) -> None:
         self.repository = repository
         self.case_service = case_service
         self.indicator_service = indicator_service
         self.pdf_exporter = pdf_exporter
         self.rag_fusion_provider = rag_fusion_provider
+        self.prescription_advice_service = prescription_advice_service
 
     def approve(
         self,
@@ -43,13 +46,14 @@ class ReviewService:
         case = self.case_service.get_case(draft.case_id)
         draft.status = DraftStatus.approved
         effective_draft = self._draft_with_filtered_recommendations(draft, edits)
-        report = self._normalize_customer_visible_report_text(
-            self._remove_excluded_nutrition_lines(
-                self._select_publishable_report(effective_draft, case, publishable_summary),
-                draft,
-                edits,
-            )
+        report = self._select_publishable_report(effective_draft, case, publishable_summary)
+        report = self._remove_excluded_nutrition_lines(report, draft, edits)
+        report = self._ensure_prescription_advice_section(
+            report,
+            effective_draft,
+            replace_existing=self._is_manual_publishable_summary(publishable_summary),
         )
+        report = self._normalize_customer_visible_report_text(report)
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
             customer_name=self._customer_display_name(case),
@@ -97,12 +101,13 @@ class ReviewService:
 
         case = self.case_service.get_case(draft.case_id)
         report = review.publishable_report
+        effective_draft = self._draft_with_filtered_recommendations(draft, review.edits)
         if self.is_stale_publishable_report(report):
-            report = self._render_report(self._draft_with_filtered_recommendations(draft, review.edits), case)
+            report = self._render_report(effective_draft, case)
         report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
+        report = self._ensure_prescription_advice_section(report, effective_draft)
         report = self._normalize_customer_visible_report_text(report)
         review.publishable_report = report
-        effective_draft = self._draft_with_filtered_recommendations(draft, review.edits)
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
             customer_name=self._customer_display_name(case),
@@ -168,6 +173,72 @@ class ReviewService:
                 report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
                 return self._ensure_report_nutrition_safety(report, draft)
         return self._render_report(draft, case)
+
+    def _is_manual_publishable_summary(self, publishable_summary: str | None) -> bool:
+        if not publishable_summary or not publishable_summary.strip():
+            return False
+        return (
+            not self._looks_like_legacy_customer_report(publishable_summary)
+            and not self._looks_like_internal_generated_report(publishable_summary)
+            and not self._looks_like_corrupted_publishable_report(publishable_summary)
+        )
+
+    def _prescription_medical_advice(self, draft) -> str:
+        if not self.prescription_advice_service:
+            return ""
+        return self.prescription_advice_service.build_advice(draft).medical_advice
+
+    def _ensure_prescription_advice_section(
+        self,
+        report_text: str,
+        draft,
+        *,
+        replace_existing: bool = False,
+    ) -> str:
+        advice = self._prescription_medical_advice(draft)
+        if not advice:
+            return report_text
+
+        lines = (report_text or "").strip().splitlines()
+        if not lines:
+            return report_text
+
+        section_title = "总医嘱说明"
+        existing_start = self._section_start_index(lines, section_title)
+        if existing_start is not None and not replace_existing:
+            return report_text
+        if existing_start is not None:
+            existing_end = self._section_end_index(lines, existing_start)
+            lines = lines[:existing_start] + lines[existing_end:]
+
+        section_lines = ["", f"## {section_title}", f"- {advice}", ""]
+        nutrition_start = self._first_section_start_index(
+            lines,
+            ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
+        )
+        if nutrition_start is not None:
+            insert_at = self._section_end_index(lines, nutrition_start)
+            lines = lines[:insert_at] + section_lines + lines[insert_at:]
+        else:
+            notice_start = self._section_start_index(lines, "重要提醒")
+            insert_at = notice_start if notice_start is not None else len(lines)
+            lines = lines[:insert_at] + section_lines + lines[insert_at:]
+        return "\n".join(lines).strip()
+
+    def _section_start_index(self, lines: list[str], title: str) -> int | None:
+        header = f"## {title}"
+        return next((index for index, line in enumerate(lines) if line.strip() == header), None)
+
+    def _first_section_start_index(self, lines: list[str], titles: tuple[str, ...]) -> int | None:
+        starts = [self._section_start_index(lines, title) for title in titles]
+        starts = [index for index in starts if index is not None]
+        return min(starts) if starts else None
+
+    def _section_end_index(self, lines: list[str], start_index: int) -> int:
+        for index in range(start_index + 1, len(lines)):
+            if lines[index].startswith("## "):
+                return index
+        return len(lines)
 
     def is_stale_publishable_report(self, report_text: str | None) -> bool:
         return (
@@ -264,26 +335,48 @@ class ReviewService:
         text = str(report_text or "").replace("\r\n", "\n").replace("\r", "\n")
         normalized_lines: list[str] = []
         for raw_line in text.split("\n"):
-            line = self._normalize_report_inline_spacing(raw_line.strip())
-            if self._is_internal_parse_warning(line):
-                continue
-            if not line:
-                if normalized_lines and normalized_lines[-1] != "":
-                    normalized_lines.append("")
-                continue
-            if line.startswith(("# ", "## ", "### ", "- ")):
+            for raw_part in self._split_inline_report_markers(raw_line):
+                line = self._normalize_report_inline_spacing(raw_part.strip())
+                if self._is_internal_parse_warning(line):
+                    continue
+                if not line:
+                    if normalized_lines and normalized_lines[-1] != "":
+                        normalized_lines.append("")
+                    continue
+                line = self._normalize_report_heading_marker(line)
+                if line.startswith(("# ", "## ", "### ", "- ")):
+                    normalized_lines.append(line)
+                    continue
+                if normalized_lines and normalized_lines[-1].startswith("- "):
+                    normalized_lines[-1] = self._normalize_report_line(
+                        self._collapse_inline_soft_breaks(f"{normalized_lines[-1]}\n{line}")
+                    )
+                    continue
                 normalized_lines.append(line)
-                continue
-            if normalized_lines and normalized_lines[-1].startswith("- "):
-                normalized_lines[-1] = self._normalize_report_line(
-                    self._collapse_inline_soft_breaks(f"{normalized_lines[-1]}\n{line}")
-                )
-                continue
-            normalized_lines.append(line)
         finalized_lines = [
             self._normalize_report_line(line) if line else "" for line in normalized_lines
         ]
-        return "\n".join(finalized_lines).strip()
+        return "\n".join(self._space_report_paragraphs(finalized_lines)).strip()
+
+    def _split_inline_report_markers(self, text: str) -> list[str]:
+        prepared = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        prepared = re.sub(r"(?<=[^\s#])\s*(?=#{2,3}\s*(?:\d+[\.\uFF0E、]|[A-Z]\.))", "\n", prepared)
+        return prepared.split("\n")
+
+    def _space_report_paragraphs(self, lines: list[str]) -> list[str]:
+        spaced: list[str] = []
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                if spaced and spaced[-1] != "":
+                    spaced.append("")
+                continue
+            if spaced and spaced[-1] != "":
+                spaced.append("")
+            spaced.append(line)
+        while spaced and spaced[-1] == "":
+            spaced.pop()
+        return spaced
 
     def _collapse_inline_soft_breaks(self, text: str) -> str:
         collapsed = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -297,7 +390,7 @@ class ReviewService:
         return self._normalize_report_inline_spacing(collapsed)
 
     def _normalize_report_line(self, text: str) -> str:
-        normalized = self._normalize_report_inline_spacing(text)
+        normalized = self._normalize_report_heading_marker(self._normalize_report_inline_spacing(text))
         if not normalized or normalized.startswith(("# ", "## ", "### ")):
             return normalized
         prefix = "- " if normalized.startswith("- ") else ""
@@ -307,6 +400,14 @@ class ReviewService:
         elif prefix and content and not re.search(r"[。！？；）)]$", content):
             content += "。"
         return f"{prefix}{content}" if prefix else content
+
+    def _normalize_report_heading_marker(self, text: str) -> str:
+        normalized = str(text or "").strip()
+        normalized = re.sub(r"^(#{1,3})(?!#)\s*(?=\S)", r"\1 ", normalized)
+        normalized = re.sub(r"^(#{2,3})\s+(\d+[\.\uFF0E、])\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(r"^(#{2,3})\s+([A-Z]\.)\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(r"[ \t\f\v]+", " ", normalized).strip()
+        return normalized
 
     def _normalize_report_inline_spacing(self, text: str) -> str:
         normalized = strip_textbook_internal_markers(str(text or ""))
@@ -778,6 +879,11 @@ class ReviewService:
         if not abnormal_indicators:
             return None
         normalized = self._normalize_text(rag_item)
+        if any(term in normalized for term in ("体质指数", "bmi", "体重", "体脂", "腰围")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("体质指数", "bmi", "体重", "体脂", "腰围")):
+                    return index
         if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "hpt", "桥本")):
             for index, indicator in enumerate(abnormal_indicators):
                 name = self._normalize_text(getattr(indicator, "indicator_name", ""))
@@ -793,19 +899,24 @@ class ReviewService:
                 name = self._normalize_text(getattr(indicator, "indicator_name", ""))
                 if any(term in name for term in ("crp", "反应蛋白", "白细胞", "炎症")):
                     return index
-        return 0
+        if any(term in normalized for term in ("胆固醇", "甘油三酯", "低密度", "载脂蛋白", "ldl", "tg", "tc", "血脂")):
+            for index, indicator in enumerate(abnormal_indicators):
+                name = self._normalize_text(getattr(indicator, "indicator_name", ""))
+                if any(term in name for term in ("胆固醇", "甘油三酯", "低密度", "载脂蛋白", "ldl", "tg", "tc", "血脂")):
+                    return index
+        return None
 
     def _fallback_follow_up_row_for_rag(self, rag_item: str, follow_items: list[str]) -> int | None:
         if not follow_items:
             return None
         normalized = self._normalize_text(rag_item)
         if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
-            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体")) or 0
+            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体"))
         if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
-            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查")) or 0
+            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查"))
         if any(term in normalized for term in ("睡眠", "压力", "hpa", "皮质醇")):
-            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访")) or 0
-        return 0
+            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访"))
+        return None
 
     def _first_matching_row(self, items: list[str], terms: tuple[str, ...]) -> int | None:
         normalized_terms = [self._normalize_text(term) for term in terms]
@@ -843,6 +954,7 @@ class ReviewService:
         )
         system_analysis = self._structure_system_analysis(system_analysis)
         supplement_adjustments = self._customerize_items(sections.get("现有补充剂调整建议", []))
+        prescription_advice = self._prescription_medical_advice(draft)
 
         ordered_sections = [
             ("核心结论与健康画像", health_portrait),
@@ -852,6 +964,7 @@ class ReviewService:
             ("生活方式干预处方", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
             ("后续检查建议", follow_up),
             ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
+            ("总医嘱说明", [prescription_advice] if prescription_advice else []),
             ("现有补充剂调整建议", supplement_adjustments),
             ("需要补充确认", missing_info),
             ("重要提醒", self._customer_notice()),
@@ -867,7 +980,7 @@ class ReviewService:
             lines.append(f"## {title}")
             for item in items:
                 if self._is_report_subheading(item):
-                    lines.append(item if item.startswith("### ") else f"### {item}")
+                    lines.append(self._normalize_report_line(item))
                 else:
                     lines.append(f"- {item}")
             lines.append("")
@@ -883,7 +996,7 @@ class ReviewService:
         return [str(item).strip() for item in content if str(item).strip()]
 
     def _is_report_subheading(self, item: str) -> bool:
-        return str(item or "").strip().startswith("### ")
+        return bool(re.match(r"^###\s*(?:\d+[\.\uFF0E、]|[A-Z]\.)", str(item or "").strip()))
 
     def _structure_system_analysis(self, items: list[str]) -> list[str]:
         if not items or any(self._is_report_subheading(item) for item in items):
@@ -1004,6 +1117,7 @@ class ReviewService:
     def _indicator_aliases(self, normalized_name: str) -> set[str]:
         aliases = {normalized_name}
         mapping = {
+            "体质指数": {"体质指数", "bmi", "体重", "体脂", "腰围"},
             "甲状腺过氧化物酶抗体": {"甲状腺过氧化物酶抗体", "tpoab", "tpo", "桥本"},
             "甲状腺球蛋白抗体": {"甲状腺球蛋白抗体", "tgab", "桥本"},
             "促甲状腺激素": {"促甲状腺激素", "甲状腺", "tsh", "hpt", "桥本"},
@@ -1011,6 +1125,7 @@ class ReviewService:
             "超敏c反应蛋白": {"超敏c反应蛋白", "hscrp", "crp", "炎症"},
             "25羟维生素d": {"25羟维生素d", "维生素d", "25ohd", "免疫"},
             "甘油三酯": {"甘油三酯", "血脂", "代谢"},
+            "低密度脂蛋白胆固醇": {"低密度脂蛋白胆固醇", "低密度", "ldl", "ldl-c", "胆固醇", "血脂"},
         }
         for key, values in mapping.items():
             if key in normalized_name:
@@ -1036,7 +1151,7 @@ class ReviewService:
         if "25" in name and ("维生素d" in name or "vitamin d" in name) or "羟维生素d" in name:
             return "维生素D和免疫调节、骨骼健康、情绪与整体恢复有关，偏低时可把规律日晒、饮食来源和营养补充一起纳入计划。"
         if "体质指数" in name or "bmi" in name:
-            return "提示体重和体脂管理压力增加，建议重点观察腰围、餐盘结构、运动量和睡眠节律。"
+            return "提示体重或体成分偏离理想范围，建议结合腰围、肌肉量、近期饮食摄入、运动量和睡眠节律一起评估。"
         if "腰围" in name:
             return "腰围偏高通常提示腹部脂肪压力增加，和血糖、血脂、脂肪肝及炎症负担都有关。"
         if "血压" in name or "收缩压" in name or "舒张压" in name:

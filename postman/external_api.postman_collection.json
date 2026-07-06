@@ -225,7 +225,59 @@
       "response": []
     },
     {
-      "name": "5. Report download blocked before approval",
+      "name": "5. Get prescription advice",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('prescription advice returned', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.case_id).to.eql(pm.environment.get('case_id'));",
+              "pm.expect(payload.draft_id).to.eql(pm.environment.get('draft_id'));",
+              "pm.expect(payload).to.not.have.property('course_period_default');",
+              "pm.expect(payload).to.not.have.property('items');",
+              "pm.expect(payload).to.not.have.property('dosage');",
+              "pm.expect(payload.medical_advice).to.be.a('string').and.not.empty;",
+              "pm.expect(payload.medical_advice.length).to.be.within(50, 100);",
+              "pm.expect(['llm', 'local_fallback']).to.include(payload.advice_source);",
+              "const serialized = JSON.stringify(payload);",
+              "['关联度', '命中产品标签', 'RAG内部审查', 'product:', 'statement_', '?????', 'API Key', '治疗', '治愈', '疗效'].forEach(function (term) {",
+              "  pm.expect(serialized).to.not.include(term);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/prescription-items",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "drafts",
+            "{{draft_id}}",
+            "prescription-items"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "6. Report download blocked before approval",
       "event": [
         {
           "listen": "test",

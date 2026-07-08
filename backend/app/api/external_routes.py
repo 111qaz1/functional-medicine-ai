@@ -96,6 +96,21 @@ class ExternalPrescriptionItemsResponse(BaseModel):
     advice_source: Literal["llm", "local_fallback"]
 
 
+class ExternalDraftApproveRequest(BaseModel):
+    reviewer_id: str | None = None
+    publishable_summary: str | None = None
+    edits: dict[str, object] = Field(default_factory=dict)
+
+
+class ExternalDraftApproveResponse(BaseModel):
+    case_id: str
+    draft_id: str
+    status: str
+    report_ready: bool
+    filename: str
+    download_url: str
+
+
 class ExternalReportDownloadResponse(BaseModel):
     draft_id: str
     filename: str
@@ -374,6 +389,36 @@ def get_external_prescription_items(
     container = _container(request)
     _, draft = _require_owned_draft(container, draft_id, doctor)
     return _prescription_items_response(container, draft)
+
+
+@router.post("/drafts/{draft_id}/approve", response_model=ExternalDraftApproveResponse)
+def approve_external_draft(
+    draft_id: str,
+    payload: ExternalDraftApproveRequest,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    container = _container(request)
+    case, _ = _require_owned_draft(container, draft_id, doctor)
+    reviewer_id = payload.reviewer_id or doctor.display_name or doctor.username or doctor.id
+    try:
+        review = container.review_service.approve(
+            draft_id,
+            reviewer_id=reviewer_id,
+            publishable_summary=payload.publishable_summary,
+            edits=payload.edits,
+        )
+        _, filename = container.review_service.ensure_pdf(draft_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ExternalDraftApproveResponse(
+        case_id=case.id,
+        draft_id=draft_id,
+        status=getattr(review.final_status, "value", str(review.final_status)),
+        report_ready=True,
+        filename=filename,
+        download_url=str(request.url_for("download_external_pdf_report", draft_id=draft_id)),
+    )
 
 
 @router.get("/drafts/{draft_id}/report-download", response_model=ExternalReportDownloadResponse)

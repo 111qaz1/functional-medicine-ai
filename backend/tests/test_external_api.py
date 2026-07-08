@@ -245,6 +245,41 @@ class ExternalApiTests(unittest.TestCase):
         )
         self.assertEqual(report_url.status_code, 409, report_url.text)
 
+    def test_external_approve_publishes_report_download(self) -> None:
+        token, case_id, payload = self._external_case_with_draft(doctor_id="doctor-approve", doctor_name="瀹℃牳鍖荤敓")
+        draft_id = payload["draft_id"]
+
+        denied = self.other_client.post(
+            f"/api/v1/drafts/{draft_id}/approve",
+            headers={"Authorization": f"Bearer {self._external_token(self.other_client, 'doctor-denied', 'Denied Doctor')}"},
+            json={},
+        )
+        self.assertEqual(denied.status_code, 403, denied.text)
+
+        approved = self.client.post(
+            f"/api/v1/drafts/{draft_id}/approve",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "reviewer_id": "external-reviewer",
+                "edits": {"excluded_sku_ids": []},
+            },
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        approved_payload = approved.json()
+        self.assertEqual(approved_payload["case_id"], case_id)
+        self.assertEqual(approved_payload["draft_id"], draft_id)
+        self.assertEqual(approved_payload["status"], "approved")
+        self.assertTrue(approved_payload["report_ready"])
+        self.assertTrue(approved_payload["filename"].endswith(".pdf"))
+        self.assertIn(f"/api/v1/drafts/{draft_id}/report.pdf", approved_payload["download_url"])
+
+        report_url = self.client.get(
+            f"/api/v1/drafts/{draft_id}/report-download",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(report_url.status_code, 200, report_url.text)
+        self.assertEqual(report_url.json()["draft_id"], draft_id)
+
     def test_external_prescription_items_uses_llm_json_when_available(self) -> None:
         token, _, payload = self._external_case_with_draft(doctor_id="doctor-llm", doctor_name="LLM 医生")
         self.container.settings = replace(

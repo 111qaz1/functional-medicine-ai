@@ -184,7 +184,6 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             model=settings.llm_model,
             api_style=settings.llm_api_style,
             timeout_seconds=max(settings.llm_timeout_seconds, 90.0),
-            pdf_image_ocr_enabled=settings.pdf_image_ocr_enabled,
         ),
         normalization_service=LabNormalizationService(_data_path(settings, "marker_dictionary.json")),
     )

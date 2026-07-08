@@ -38,7 +38,6 @@ class AppSettings:
     llm_timeout_seconds: float = 45.0
     llm_temperature: float = 0.1
     llm_draft_composer_enabled: bool = False
-    pdf_image_ocr_enabled: bool = False
     rag_enabled: bool = True
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
@@ -100,12 +99,6 @@ def load_settings() -> AppSettings:
         "yes",
         "on",
     }
-    pdf_image_ocr_enabled = os.getenv("FM_PDF_IMAGE_OCR_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
     rag_enabled = os.getenv("FM_RAG_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
     rag_index_dir = _resolve_path("FM_RAG_INDEX_DIR", data_dir / "rag_index")
     rag_llm_fusion_enabled = os.getenv("FM_RAG_LLM_FUSION_ENABLED", "1").strip().lower() not in {
@@ -131,7 +124,6 @@ def load_settings() -> AppSettings:
         llm_timeout_seconds=llm_timeout_seconds,
         llm_temperature=llm_temperature,
         llm_draft_composer_enabled=llm_draft_composer_enabled,
-        pdf_image_ocr_enabled=pdf_image_ocr_enabled,
         rag_enabled=rag_enabled,
         rag_index_dir=rag_index_dir,
         rag_llm_fusion_enabled=rag_llm_fusion_enabled,

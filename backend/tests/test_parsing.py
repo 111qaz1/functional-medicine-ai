@@ -477,7 +477,12 @@ class OCRProviderTests(unittest.TestCase):
     def test_falls_back_to_embedded_image_ocr_for_scanned_pdf(self) -> None:
         class StubPdfOCRProvider(DocumentOCRProvider):
             def __init__(self) -> None:
-                super().__init__(base_url="https://example.test/v1", api_key="token", model="vision-model")
+                super().__init__(
+                    base_url="https://example.test/v1",
+                    api_key="token",
+                    model="vision-model",
+                    pdf_image_ocr_enabled=True,
+                )
                 self.calls: list[tuple[int, str]] = []
 
             def _extract_image_text(self, *, content: bytes, content_type: str) -> str:
@@ -505,6 +510,32 @@ class OCRProviderTests(unittest.TestCase):
         self.assertIn("甘油三酯 2.1 mmol/L 0.56-1.70", extraction.text)
         self.assertEqual(provider.calls, [(50003, "image/jpeg")])
         self.assertEqual([span.page for span in extraction.spans], [1, 1])
+
+    def test_skips_pdf_embedded_image_ocr_by_default(self) -> None:
+        class GuardPdfOCRProvider(DocumentOCRProvider):
+            def __init__(self) -> None:
+                super().__init__(base_url="https://example.test/v1", api_key="token", model="vision-model")
+
+            def _extract_image_text(self, *, content: bytes, content_type: str) -> str:
+                raise AssertionError("PDF image OCR should be opt-in")
+
+        provider = GuardPdfOCRProvider()
+        page = SimpleNamespace(
+            extract_text=lambda: "",
+            images=[SimpleNamespace(name="scan.jpg", data=b"\xff\xd8\xff" + b"0" * 50000)],
+        )
+        reader = SimpleNamespace(pages=[page])
+
+        with patch("app.providers.local.PdfReader", return_value=reader):
+            extraction = provider.extract(
+                filename="scan.pdf",
+                content_type="application/pdf",
+                content=b"%PDF-1.4 scanned",
+            )
+
+        self.assertEqual(extraction.text, "")
+        self.assertEqual(extraction.spans, [])
+        self.assertLess(extraction.confidence, 0.2)
 
     def test_keeps_pdf_text_layer_when_it_is_already_readable(self) -> None:
         class GuardPdfOCRProvider(DocumentOCRProvider):

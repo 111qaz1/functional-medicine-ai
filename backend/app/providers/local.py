@@ -60,6 +60,7 @@ class DocumentOCRProvider:
         model: str | None = None,
         api_style: str = "auto",
         timeout_seconds: float = 45.0,
+        pdf_image_ocr_enabled: bool = False,
         http_client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/") if base_url else None
@@ -67,6 +68,7 @@ class DocumentOCRProvider:
         self.model = model
         self.api_style = api_style.strip().lower()
         self.timeout_seconds = timeout_seconds
+        self.pdf_image_ocr_enabled = pdf_image_ocr_enabled
         self.http_client = http_client
 
     def extract(self, filename: str, content_type: str, content: bytes) -> OCRExtraction:
@@ -191,6 +193,8 @@ class DocumentOCRProvider:
         return page_lines
 
     def _should_try_pdf_page_ocr(self, text_lines: list[str], page: object) -> bool:
+        if not self.pdf_image_ocr_enabled:
+            return False
         if not getattr(page, "images", None):
             return False
         if not (self.base_url and self.api_key and self.model):

@@ -50,6 +50,8 @@ class DocumentOCRProvider:
     _DRAWINGML_BREAK_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}br"
     _PDF_TEXT_LAYER_MIN_LINES = 3
     _PDF_TEXT_LAYER_MIN_CHARS = 40
+    _PDF_DOCUMENT_TEXT_LAYER_MIN_LINES = 3
+    _PDF_DOCUMENT_TEXT_LAYER_MIN_CHARS = 80
     _PDF_SCAN_MIN_IMAGE_BYTES = 20_000
 
     def __init__(
@@ -178,10 +180,20 @@ class DocumentOCRProvider:
         except Exception:
             return []
 
-        page_lines: list[tuple[int, str]] = []
+        extracted_pages: list[tuple[int, object, list[str]]] = []
         for page_number, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
             lines = self._split_lines(text)
+            extracted_pages.append((page_number, page, lines))
+
+        page_lines: list[tuple[int, str]] = []
+        if self._pdf_text_layer_is_readable([lines for _, _, lines in extracted_pages]):
+            for page_number, _, lines in extracted_pages:
+                for line in lines:
+                    page_lines.append((page_number, line))
+            return page_lines
+
+        for page_number, page, lines in extracted_pages:
             if self._should_try_pdf_page_ocr(lines, page):
                 ocr_lines = self._extract_pdf_page_image_lines(page)
                 if ocr_lines:
@@ -189,6 +201,14 @@ class DocumentOCRProvider:
             for line in lines:
                 page_lines.append((page_number, line))
         return page_lines
+
+    def _pdf_text_layer_is_readable(self, page_lines: list[list[str]]) -> bool:
+        line_count = sum(len(lines) for lines in page_lines)
+        char_count = sum(len(line) for lines in page_lines for line in lines)
+        return (
+            line_count >= self._PDF_DOCUMENT_TEXT_LAYER_MIN_LINES
+            and char_count >= self._PDF_DOCUMENT_TEXT_LAYER_MIN_CHARS
+        )
 
     def _should_try_pdf_page_ocr(self, text_lines: list[str], page: object) -> bool:
         if not getattr(page, "images", None):

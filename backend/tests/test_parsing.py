@@ -506,6 +506,43 @@ class OCRProviderTests(unittest.TestCase):
         self.assertEqual(provider.calls, [(50003, "image/jpeg")])
         self.assertEqual([span.page for span in extraction.spans], [1, 1])
 
+    def test_skips_pdf_ocr_when_document_text_layer_is_readable(self) -> None:
+        class GuardPdfOCRProvider(DocumentOCRProvider):
+            def __init__(self) -> None:
+                super().__init__(base_url="https://example.test/v1", api_key="token", model="vision-model")
+
+            def _extract_image_text(self, *, content: bytes, content_type: str) -> str:
+                raise AssertionError("Should not OCR when the PDF text layer is readable")
+
+        provider = GuardPdfOCRProvider()
+        readable_page = SimpleNamespace(
+            extract_text=lambda: (
+                "空腹血糖 6.8 mmol/L 3.9-6.1\n"
+                "甘油三酯 2.1 mmol/L 0.56-1.70\n"
+                "总胆固醇 5.9 mmol/L 2.8-5.2\n"
+                "低密度脂蛋白 3.8 mmol/L 0-3.4\n"
+                "主诉：乏力、睡眠浅、餐后困倦"
+            ),
+            images=[SimpleNamespace(name="scan.jpg", data=b"\xff\xd8\xff" + b"0" * 50000)],
+        )
+        image_heavy_page = SimpleNamespace(
+            extract_text=lambda: "报告附图\n仅供参考",
+            images=[SimpleNamespace(name="chart.jpg", data=b"\xff\xd8\xff" + b"1" * 50000)],
+        )
+        reader = SimpleNamespace(pages=[readable_page, image_heavy_page])
+
+        with patch("app.providers.local.PdfReader", return_value=reader):
+            extraction = provider.extract(
+                filename="report.pdf",
+                content_type="application/pdf",
+                content=b"%PDF-1.4 text-layer",
+            )
+
+        self.assertIn("空腹血糖 6.8 mmol/L 3.9-6.1", extraction.text)
+        self.assertIn("报告附图", extraction.text)
+        self.assertEqual([span.page for span in extraction.spans][-1], 2)
+        self.assertGreater(extraction.confidence, 0.8)
+
     def test_keeps_pdf_text_layer_when_it_is_already_readable(self) -> None:
         class GuardPdfOCRProvider(DocumentOCRProvider):
             def __init__(self) -> None:

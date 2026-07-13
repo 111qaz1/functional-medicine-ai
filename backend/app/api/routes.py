@@ -418,10 +418,11 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         storage_uri=container.recommendation_service.object_store.save(filename, content),
     )
     case = container.case_service.add_uploaded_file(case.id, uploaded_file)
-    extraction, lab_items = container.parsing_service.parse(
+    extraction, lab_items, specialty_reports = container.parsing_service.parse_with_specialty_reports(
         filename=uploaded_file.filename,
         content_type=uploaded_file.content_type,
         content=content,
+        file_id=uploaded_file.id,
     )
     parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
         spans=extraction.spans,
@@ -435,6 +436,7 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         source_spans=extraction.spans,
         lab_items=lab_items,
         parse_warnings=parse_warnings,
+        specialty_reports=specialty_reports,
     )
     return _case_detail_response(container, case)
 
@@ -453,10 +455,11 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Stored file is missing")
 
     content = file_path.read_bytes()
-    extraction, lab_items = container.parsing_service.parse(
+    extraction, lab_items, specialty_reports = container.parsing_service.parse_with_specialty_reports(
         filename=target_file.filename,
         content_type=target_file.content_type,
         content=content,
+        file_id=target_file.id,
     )
     parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
         spans=extraction.spans,
@@ -470,6 +473,7 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         source_spans=extraction.spans,
         lab_items=lab_items,
         parse_warnings=parse_warnings,
+        specialty_reports=specialty_reports,
     )
     return _case_detail_response(container, case)
 
@@ -579,11 +583,16 @@ def save_parsing_review(case_id: str, payload: ParsingReviewRequest, request: Re
             file_updates=[item.model_dump() for item in payload.files],
             normalized_lab_items=payload.normalized_lab_items,
             manual_indicators=manual_indicators,
+            specialty_reports=payload.specialty_reports,
             missing_fields=payload.missing_fields,
             review_notes=payload.review_notes,
+            expected_revision=payload.expected_revision,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "parsing_revision_conflict" else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return _case_detail_response(container, case)
 
 

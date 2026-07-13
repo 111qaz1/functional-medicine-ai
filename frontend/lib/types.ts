@@ -43,6 +43,68 @@ export interface ExtractedLabItem {
   source_span: SourceSpan;
 }
 
+export interface SpecialtyMetric {
+  code: string;
+  name: string;
+  value?: number | null;
+  raw_value?: string | null;
+  unit?: string | null;
+  ref_range: ReferenceRange;
+  abnormal_flag: "low" | "normal" | "high" | "unknown";
+  interpretation?: string | null;
+  confidence: number;
+  source_span: SourceSpan;
+}
+
+export interface SpecialtyReportBase {
+  id: string;
+  file_id: string;
+  review_status: "pending_review" | "reviewed" | "needs_review";
+  confidence: number;
+  source_pages: number[];
+  needs_manual_review: boolean;
+  warnings: string[];
+  summary_lines: string[];
+  recommendations: string[];
+}
+
+export interface ChronicFoodSensitivityReport extends SpecialtyReportBase {
+  report_type: "chronic_food_sensitivity";
+  mild_foods: string[];
+  moderate_foods: string[];
+  high_foods: string[];
+  interpretations: string[];
+}
+
+export interface GutFunctionReport extends SpecialtyReportBase {
+  report_type: "gut_function";
+  metrics: SpecialtyMetric[];
+  interpretations: string[];
+}
+
+export interface GutMicrobiomeReport extends SpecialtyReportBase {
+  report_type: "gut_microbiome";
+  health_score?: number | null;
+  diversity_index?: number | null;
+  diversity_reference: ReferenceRange;
+  detected_genera_count?: number | null;
+  dominant_genus?: string | null;
+  stability?: string | null;
+  diversity_status?: string | null;
+  enterotype?: string | null;
+  harmful_or_elevated_genera: string[];
+  low_beneficial_genera: string[];
+  risk_categories: string[];
+  prominent_risks: string[];
+  nutrient_impacts: string[];
+  summary_recommendation?: string | null;
+}
+
+export type SpecialtyReportResult =
+  | ChronicFoodSensitivityReport
+  | GutFunctionReport
+  | GutMicrobiomeReport;
+
 export interface CaseIndicator {
   indicator_name: string;
   result_text: string;
@@ -114,6 +176,7 @@ export interface CaseRecord {
   questionnaire?: Questionnaire | null;
   extracted_lab_items: ExtractedLabItem[];
   manual_indicators: CaseIndicator[];
+  specialty_reports: SpecialtyReportResult[];
   draft_ids: string[];
   flags: string[];
   parsing_review_completed: boolean;
@@ -121,6 +184,7 @@ export interface CaseRecord {
   parsing_reviewed_by?: string | null;
   parsing_missing_fields: string[];
   parsing_review_notes?: string | null;
+  parsing_revision: number;
 }
 
 export interface DraftRecommendationItem {
@@ -155,6 +219,10 @@ export interface RecommendationDraft {
   prompt_version: string;
   rule_version: string;
   generated_at: string;
+  updated_at: string;
+  revision: number;
+  last_edited_by?: string | null;
+  last_edit_reason?: string | null;
 }
 
 export interface ReviewDecision {
@@ -225,9 +293,11 @@ export interface ManualIndicatorInput {
 
 export interface ParsingReviewInput {
   reviewer_id: string;
+  expected_revision?: number | null;
   files: ParsingReviewFileInput[];
   normalized_lab_items: ExtractedLabItem[];
   manual_indicators: ManualIndicatorInput[];
+  specialty_reports?: SpecialtyReportResult[] | null;
   missing_fields: string[];
   review_notes?: string | null;
 }

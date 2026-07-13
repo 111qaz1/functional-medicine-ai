@@ -23,6 +23,7 @@ from app.domain.models import (
     RecommendationDraft,
     ReviewDecision,
     RuleScope,
+    SpecialtyReportResult,
     WorkspaceScope,
 )
 
@@ -61,9 +62,11 @@ class ManualIndicatorRequest(BaseModel):
 
 class ParsingReviewRequest(BaseModel):
     reviewer_id: str
+    expected_revision: int | None = None
     files: list[ParsingReviewFileRequest] = Field(default_factory=list)
     normalized_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[ManualIndicatorRequest] = Field(default_factory=list)
+    specialty_reports: list[SpecialtyReportResult] | None = None
     missing_fields: list[str] = Field(default_factory=list)
     review_notes: str | None = None
 

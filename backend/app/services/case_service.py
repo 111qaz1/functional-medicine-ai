@@ -14,6 +14,8 @@ from app.domain.models import (
     ExtractedLabItem,
     FileParseStatus,
     Questionnaire,
+    SpecialtyReportResult,
+    SpecialtyReviewStatus,
     UploadedFile,
     WorkspaceScope,
 )
@@ -88,6 +90,7 @@ class CaseService:
         case.parsing_reviewed_by = None
         case.parsing_missing_fields = []
         case.parsing_review_notes = None
+        case.parsing_revision += 1
         case.updated_at = utc_now()
         self.repository.save_case(case)
         self._audit(case.id, "file_uploaded", "system", {"file_id": uploaded_file.id, "filename": uploaded_file.filename})
@@ -103,11 +106,15 @@ class CaseService:
         source_spans,
         lab_items,
         parse_warnings: list[str] | None = None,
+        specialty_reports: list[SpecialtyReportResult] | None = None,
     ) -> CaseRecord:
         case = self.get_case(case_id)
         parse_warnings = list(parse_warnings or [])
+        specialty_reports = list(specialty_reports or [])
+        target_filename = None
         for uploaded in case.files:
             if uploaded.id == file_id:
+                target_filename = uploaded.filename
                 uploaded.raw_extracted_text = extracted_text
                 uploaded.corrected_text = extracted_text
                 uploaded.parse_confidence = parse_confidence
@@ -116,14 +123,31 @@ class CaseService:
                 uploaded.needs_manual_review = True
                 uploaded.missing_fields = parse_warnings
                 break
-        case.extracted_lab_items = lab_items
+        case.extracted_lab_items = [
+            item
+            for item in case.extracted_lab_items
+            if not (
+                item.source_span.file_id == file_id
+                or (item.source_span.file_id is None and target_filename and item.source_span.file_name == target_filename)
+            )
+        ] + list(lab_items)
+        case.specialty_reports = [
+            report for report in case.specialty_reports if report.file_id != file_id
+        ] + specialty_reports
         case.parsing_review_completed = False
         case.parsing_reviewed_at = None
         case.parsing_reviewed_by = None
-        case.parsing_missing_fields = parse_warnings
+        case.parsing_missing_fields = list(
+            dict.fromkeys(
+                warning
+                for uploaded in case.files
+                for warning in uploaded.missing_fields
+            )
+        )
         case.parsing_review_notes = None
         case.status = CaseStatus.parsing_completed if case.extracted_lab_items or extracted_text else CaseStatus.files_received
         case.updated_at = utc_now()
+        case.parsing_revision += 1
         self.repository.save_case(case)
         self._audit(
             case.id,
@@ -134,6 +158,7 @@ class CaseService:
                 "lab_item_count": len(lab_items),
                 "parse_confidence": parse_confidence,
                 "parse_warning_count": len(parse_warnings),
+                "specialty_report_count": len(specialty_reports),
             },
         )
         return case
@@ -186,9 +211,17 @@ class CaseService:
         missing_fields: list[str],
         review_notes: str | None,
         manual_indicators: list[CaseIndicator] | None = None,
+        specialty_reports: list[SpecialtyReportResult] | None = None,
+        expected_revision: int | None = None,
     ) -> CaseRecord:
         case = self.get_case(case_id)
+        if expected_revision is not None and expected_revision != case.parsing_revision:
+            raise ValueError("parsing_revision_conflict")
         manual_indicators = list(manual_indicators or [])
+        specialty_reports = list(specialty_reports if specialty_reports is not None else case.specialty_reports)
+        valid_file_ids = {uploaded.id for uploaded in case.files}
+        if any(report.file_id not in valid_file_ids for report in specialty_reports):
+            raise ValueError("specialty_report_file_mismatch")
         updates_by_file = {item["file_id"]: item for item in file_updates}
         for uploaded in case.files:
             update = updates_by_file.get(uploaded.id)
@@ -203,11 +236,13 @@ class CaseService:
 
         case.extracted_lab_items = normalized_lab_items
         case.manual_indicators = manual_indicators
+        case.specialty_reports = [self._prepare_reviewed_specialty_report(report) for report in specialty_reports]
         case.parsing_review_completed = True
         case.parsing_reviewed_at = utc_now()
         case.parsing_reviewed_by = reviewer_id
         case.parsing_missing_fields = missing_fields
         case.parsing_review_notes = review_notes
+        case.parsing_revision += 1
         case.updated_at = utc_now()
         case.status = CaseStatus.ready_for_recommendation if case.questionnaire else CaseStatus.parsing_completed
         self.repository.save_case(case)
@@ -219,11 +254,45 @@ class CaseService:
                 "reviewed_file_count": len(file_updates),
                 "lab_item_count": len(normalized_lab_items),
                 "manual_indicator_count": len(manual_indicators),
+                "specialty_report_count": len(case.specialty_reports),
                 "missing_fields": missing_fields,
-                "review_notes": review_notes,
+                "has_review_notes": bool(review_notes),
+                "parsing_revision": case.parsing_revision,
             },
         )
         return case
+
+    def _prepare_reviewed_specialty_report(self, report: SpecialtyReportResult) -> SpecialtyReportResult:
+        updates: dict = {
+            "review_status": SpecialtyReviewStatus.reviewed,
+            "needs_manual_review": False,
+        }
+        if report.report_type == "chronic_food_sensitivity":
+            updates["summary_lines"] = [
+                f"轻度：{'、'.join(report.mild_foods) if report.mild_foods else '无'}",
+                f"中度：{'、'.join(report.moderate_foods) if report.moderate_foods else '无'}",
+                f"重度：{'、'.join(report.high_foods) if report.high_foods else '无'}",
+            ]
+        elif report.report_type == "gut_function":
+            flag_labels = {"high": "偏高", "low": "偏低", "normal": "正常", "unknown": "待核对"}
+            updates["summary_lines"] = [
+                f"{metric.name}：{metric.raw_value or metric.value} {metric.unit or ''}（{flag_labels[metric.abnormal_flag.value]}）".strip()
+                for metric in report.metrics
+            ]
+        elif report.report_type == "gut_microbiome":
+            summary: list[str] = []
+            if report.health_score is not None:
+                summary.append(f"肠道健康评分：{report.health_score:g}")
+            if report.diversity_index is not None:
+                summary.append(f"菌群多样性：{report.diversity_index:g}（{report.diversity_status or '待核对'}）")
+            if report.detected_genera_count is not None:
+                summary.append(f"检测菌属数量：{report.detected_genera_count}")
+            if report.dominant_genus:
+                summary.append(f"优势菌属：{report.dominant_genus}")
+            if report.enterotype:
+                summary.append(f"肠型：{report.enterotype}")
+            updates["summary_lines"] = summary
+        return report.model_copy(update=updates)
 
     def append_draft(self, case_id: str, draft_id: str) -> CaseRecord:
         case = self.get_case(case_id)

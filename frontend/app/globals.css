@@ -522,6 +522,115 @@ textarea {
   background: rgba(255, 252, 247, 0.88);
 }
 
+.workbench-hero-actions,
+.workflow-guide__head,
+.specialty-report-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-help-button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--accent-strong);
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.workflow-guide {
+  display: grid;
+  gap: 18px;
+  margin: 0 0 22px;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.workflow-guide__head p {
+  margin-top: 4px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-steps li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 4px 12px;
+  border-left: 1px solid var(--border);
+}
+
+.workflow-steps li:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.workflow-steps li > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+}
+
+.workflow-steps strong,
+.workflow-steps small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.workflow-steps small {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.specialty-review-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.specialty-report-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.specialty-metric-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) repeat(5, minmax(100px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.specialty-metric-row > strong {
+  align-self: center;
+  overflow-wrap: anywhere;
+}
+
 .auth-tabs {
   display: flex;
   gap: 8px;
@@ -1089,5 +1198,20 @@ td {
   .assistant-chat__rule-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .workflow-steps {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .workflow-steps li,
+  .workflow-steps li:first-child {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .specialty-metric-row {
+    grid-template-columns: 1fr 1fr;
   }
 }

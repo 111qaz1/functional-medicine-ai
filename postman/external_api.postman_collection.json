@@ -1,13 +1,13 @@
 {
   "info": {
     "_postman_id": "54b12664-1676-4fd7-8d68-fm-external-api",
-    "name": "Functional Medicine External API",
+    "name": "功能医学外部接口全流程验证",
     "description": "系统间授信外部接口测试集合。医生身份由甲方系统签名声明，工作台仅校验签名并签发 Bearer token。",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "1. Exchange signed doctor identity for token",
+      "name": "1. 系统签名换取医生 Token",
       "event": [
         {
           "listen": "prerequest",
@@ -32,11 +32,11 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('token exchange succeeds', function () {",
+              "pm.test('系统授信换取 Token 成功', function () {",
               "  pm.response.to.have.status(200);",
               "});",
               "const payload = pm.response.json();",
-              "pm.test('returns bearer token', function () {",
+              "pm.test('返回 Bearer Token', function () {",
               "  pm.expect(payload.token_type).to.eql('bearer');",
               "  pm.expect(payload.access_token).to.be.a('string').and.not.empty;",
               "});",
@@ -73,14 +73,14 @@
       "response": []
     },
     {
-      "name": "2. Create external case",
+      "name": "2. 创建外部病例",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('case created', function () {",
+              "pm.test('病例创建成功', function () {",
               "  pm.response.to.have.status(200);",
               "});",
               "const payload = pm.response.json();",
@@ -121,20 +121,20 @@
       "response": []
     },
     {
-      "name": "3. Upload case attachment",
+      "name": "3. 上传病例附件",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('attachment uploaded and parsed', function () {",
+              "pm.test('附件上传并完成初始解析', function () {",
               "  pm.response.to.have.status(200);",
               "});",
               "const payload = pm.response.json();",
               "pm.expect(payload.results[0].status).to.eql('parsed');",
               "pm.expect(payload.results[0].lab_item_count).to.be.above(0);",
-              "pm.test('unknown candidate is surfaced for manual review', function () {",
+              "pm.test('未知指标进入人工校对提示', function () {",
               "  pm.expect(payload.results[0].parse_warnings.join('\\n')).to.include('载脂蛋白E');",
               "});"
             ]
@@ -181,21 +181,96 @@
       "response": []
     },
     {
-      "name": "4. Generate nutrition recommendations",
+      "name": "4. 读取解析校对内容",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('recommendation generated', function () {",
+              "pm.test('读取解析校对内容成功', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.revision).to.be.a('number');",
+              "pm.expect(payload.files).to.be.an('array').and.not.empty;",
+              "pm.environment.set('parsing_revision', payload.revision.toString());",
+              "pm.environment.set('parsing_files', JSON.stringify(payload.files.map(function (item) { return { file_id: item.file_id, corrected_text: item.corrected_text, missing_fields: item.missing_fields }; })));",
+              "pm.environment.set('lab_items', JSON.stringify(payload.normalized_lab_items));",
+              "pm.environment.set('specialty_reports', JSON.stringify(payload.specialty_reports));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/cases/{{case_id}}/parsing-review",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "cases", "{{case_id}}", "parsing-review"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "5. 保存解析校对",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('解析校对保存成功', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.review_completed).to.eql(true);",
+              "pm.expect(payload.revision).to.eql(Number(pm.environment.get('parsing_revision')) + 1);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"expected_revision\": {{parsing_revision}},\n  \"files\": {{parsing_files}},\n  \"normalized_lab_items\": {{lab_items}},\n  \"specialty_reports\": {{specialty_reports}},\n  \"missing_fields\": [],\n  \"review_notes\": \"Postman 自动化校对验证\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/cases/{{case_id}}/parsing-review",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "cases", "{{case_id}}", "parsing-review"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "6. 生成营养素推荐草案",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('营养素推荐草案生成成功', function () {",
               "  pm.response.to.have.status(200);",
               "});",
               "const payload = pm.response.json();",
               "pm.expect(payload.draft_id).to.be.a('string').and.not.empty;",
               "pm.expect(payload.manual_review_required).to.eql(true);",
               "pm.expect(payload.recommendations).to.be.an('array');",
-              "pm.environment.set('draft_id', payload.draft_id);"
+              "pm.environment.set('draft_id', payload.draft_id);",
+              "pm.environment.set('draft_revision', payload.revision.toString());"
             ]
           }
         }
@@ -225,14 +300,83 @@
       "response": []
     },
     {
-      "name": "5. Get prescription advice",
+      "name": "7. 读取可编辑营养素草案",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('prescription advice returned', function () {",
+              "pm.test('读取待审营养素草案成功', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.editable_fields).to.include('recommendations.dosage');",
+              "pm.expect(payload.recommendations).to.be.an('array').and.not.empty;",
+              "pm.environment.set('draft_revision', payload.revision.toString());",
+              "const editable = payload.recommendations.slice(0, 2).map(function (item) { return { sku_id: item.sku_id, dosage: item.dosage, reason: item.reason }; });",
+              "pm.environment.set('draft_recommendations', JSON.stringify(editable));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": {
+          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/nutrition-recommendations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "drafts", "{{draft_id}}", "nutrition-recommendations"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "8. 修改待审营养素草案",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('草案修改成功并递增版本', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "const payload = pm.response.json();",
+              "pm.expect(payload.revision).to.eql(Number(pm.environment.get('draft_revision')) + 1);",
+              "pm.expect(payload.recommendations).to.be.an('array').and.not.empty;",
+              "pm.environment.set('draft_revision', payload.revision.toString());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"expected_revision\": {{draft_revision}},\n  \"recommendations\": {{draft_recommendations}},\n  \"edit_reason\": \"Postman 自动化编辑验证\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/nutrition-recommendations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "drafts", "{{draft_id}}", "nutrition-recommendations"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "9. 获取处方级总医嘱",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('处方级总医嘱返回成功', function () {",
               "  pm.response.to.have.status(200);",
               "});",
               "const payload = pm.response.json();",
@@ -277,14 +421,14 @@
       "response": []
     },
     {
-      "name": "6. Report download blocked before approval",
+      "name": "10. 未审核报告下载被拦截",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('unapproved report is blocked', function () {",
+              "pm.test('未审核报告返回 409', function () {",
               "  pm.response.to.have.status(409);",
               "});"
             ]

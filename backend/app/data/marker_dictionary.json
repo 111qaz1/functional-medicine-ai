@@ -76,8 +76,56 @@
     "display_name": "钙卫蛋白",
     "synonyms": ["钙卫蛋白", "粪便钙卫蛋白", "粪钙卫蛋白", "Fecal Calprotectin", "Calprotectin", "Cal"],
     "normalized_unit": "ug/g",
-    "unit_factors": {"ug/g": 1, "μg/g": 1, "ug/g stool": 1, "mcg/g": 1},
+    "unit_factors": {"ug/g": 1, "μg/g": 1, "ug/g stool": 1, "mcg/g": 1, "mg/kg": 1},
     "default_range": {"lower": 0, "upper": 60}
+  },
+  {
+    "code": "anti_gliadin_siga",
+    "display_name": "麦胶蛋白抗体",
+    "synonyms": ["麦胶蛋白抗体", "Anti-Gliadin", "Anti-Gliadin sIgA"],
+    "normalized_unit": "U/L",
+    "unit_factors": {"U/L": 1, "u/L": 1},
+    "default_range": {"lower": null, "upper": null}
+  },
+  {
+    "code": "anti_httg_siga",
+    "display_name": "组织转麸胺酶抗体",
+    "synonyms": ["组织转麸胺酶抗体", "组织转麸酰胺酶抗体", "Anti-htTG", "Anti-htTG sIgA"],
+    "normalized_unit": "U/L",
+    "unit_factors": {"U/L": 1, "u/L": 1},
+    "default_range": {"lower": null, "upper": null}
+  },
+  {
+    "code": "secretory_iga",
+    "display_name": "分泌型免疫球蛋白 sIgA",
+    "synonyms": ["分泌型免疫球蛋白", "分泌型免疫球蛋白 sIgA", "Secretory IgA", "sIgA"],
+    "normalized_unit": "ug/mL",
+    "unit_factors": {"ug/mL": 1, "μg/mL": 1, "mcg/mL": 1},
+    "default_range": {"lower": null, "upper": null}
+  },
+  {
+    "code": "zonulin",
+    "display_name": "解连蛋白 Zonulin",
+    "synonyms": ["解连蛋白", "Zonulin"],
+    "normalized_unit": "ng/mL",
+    "unit_factors": {"ng/mL": 1},
+    "default_range": {"lower": null, "upper": null}
+  },
+  {
+    "code": "beta_glucuronidase",
+    "display_name": "β-葡萄糖醛酸酶",
+    "synonyms": ["β-葡萄糖醛酸酶", "葡萄糖醛酸酶", "Beta-Glucuronidase"],
+    "normalized_unit": "U/g",
+    "unit_factors": {"U/g": 1, "u/g": 1},
+    "default_range": {"lower": null, "upper": null}
+  },
+  {
+    "code": "pancreatic_elastase",
+    "display_name": "胰弹性蛋白酶",
+    "synonyms": ["胰弹性蛋白酶", "Pancreatic Elastase"],
+    "normalized_unit": "ug/g",
+    "unit_factors": {"ug/g": 1, "μg/g": 1, "mcg/g": 1},
+    "default_range": {"lower": null, "upper": null}
   },
   {
     "code": "wbc",

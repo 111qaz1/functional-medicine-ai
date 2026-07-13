@@ -10,7 +10,22 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
-from app.domain.models import AnalysisMode, CaseIndicator, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
+from app.domain.models import (
+    AbnormalFlag,
+    AnalysisMode,
+    CaseIndicator,
+    ChronicFoodSensitivityReport,
+    GutFunctionReport,
+    GutMicrobiomeReport,
+    IndicatorStatus,
+    ProductRule,
+    Questionnaire,
+    ReferenceRange,
+    SourceSpan,
+    SpecialtyMetric,
+    SpecialtyReviewStatus,
+    UploadedFile,
+)
 from app.providers.local import GroundedDraftComposer
 from app.providers.base import DraftCompositionResult
 
@@ -18,10 +33,11 @@ from app.providers.base import DraftCompositionResult
 class StubLLMProvider:
     def compose(self, draft_input):
         return DraftCompositionResult(
-            selected_sku_ids=["sku_not_in_catalog", "sku_vitamin_d3_k"],
+            selected_sku_ids=["sku_not_in_catalog", "sku_vitamin_d3_k", "sku_blood_sugar_complex"],
             product_reason_overrides={
                 "sku_not_in_catalog": "This should be ignored.",
                 "sku_vitamin_d3_k": "结合骨骼支持与本地证据 product:sku_vitamin_d3_k 进入候选推荐",
+                "sku_blood_sugar_complex": "结合已校对血糖指标，作为待审核的代谢支持候选。",
             },
             rationale=["模型仅在本地候选和证据范围内辅助排序。"],
             lifestyle_actions=["Maintain a consistent sleep routine and follow the plan."],
@@ -109,6 +125,177 @@ class RecommendationServiceTests(unittest.TestCase):
         self.container.case_service.submit_questionnaire(case.id, questionnaire)
         return case
 
+    def _prepare_specialty_case(self, report):
+        case = self.container.case_service.create_case(
+            customer_name="专用报告测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        uploaded = UploadedFile(
+            id=report.file_id,
+            case_id=case.id,
+            filename="specialty-report.pdf",
+            content_type="application/pdf",
+            size_bytes=100,
+            storage_uri="memory://specialty-report.pdf",
+        )
+        self.container.case_service.add_uploaded_file(case.id, uploaded)
+        self.container.case_service.attach_parse_results(
+            case.id,
+            uploaded.id,
+            extracted_text="专用报告原文不应在校对前进入推荐。",
+            parse_confidence=report.confidence,
+            source_spans=[],
+            lab_items=[],
+            specialty_reports=[report],
+        )
+        return case
+
+    def _review_specialty_case(self, case_id: str, report) -> None:
+        self.container.case_service.review_parsing(
+            case_id,
+            reviewer_id="reviewer-specialty",
+            file_updates=[
+                {
+                    "file_id": report.file_id,
+                    "corrected_text": "结构化结果已核对。",
+                    "missing_fields": [],
+                }
+            ],
+            normalized_lab_items=[],
+            specialty_reports=[report],
+            missing_fields=[],
+            review_notes="已核对",
+        )
+
+    def test_specialty_reports_do_not_enter_context_before_review(self) -> None:
+        report = GutMicrobiomeReport(
+            id="microbiome-pending",
+            file_id="file_microbiome_pending",
+            confidence=0.92,
+            review_status=SpecialtyReviewStatus.pending_review,
+            needs_manual_review=True,
+            summary_lines=["肠道健康评分：70"],
+            health_score=70,
+            diversity_index=2.6,
+            detected_genera_count=80,
+            dominant_genus="拟杆菌属",
+            enterotype="高碳水型",
+        )
+        case = self._prepare_specialty_case(report)
+
+        context = self.container.recommendation_service._build_context(
+            self.container.case_service.get_case(case.id)
+        )
+
+        self.assertFalse(context.microbiome_background)
+        self.assertEqual(context.specialty_summary_lines, [])
+
+    def test_microbiome_is_weak_background_and_does_not_select_antimicrobial(self) -> None:
+        report = GutMicrobiomeReport(
+            id="microbiome-reviewed",
+            file_id="file_microbiome_reviewed",
+            confidence=0.95,
+            review_status=SpecialtyReviewStatus.pending_review,
+            needs_manual_review=True,
+            summary_lines=["肠道健康评分：70", "菌群多样性：2.6（正常）"],
+            health_score=70,
+            diversity_index=2.6,
+            detected_genera_count=80,
+            dominant_genus="拟杆菌属",
+            enterotype="高碳水型",
+            prominent_risks=["代谢风险"],
+        )
+        case = self._prepare_specialty_case(report)
+        self._review_specialty_case(case.id, report)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertNotIn("sku_herbal_antimicrobial", {item.sku_id for item in draft.recommended_skus})
+        self.assertIn("专用报告校对结果", draft.report_sections)
+        self.assertIn("不单独用于选择营养素", " ".join(draft.report_sections["核心结论与健康画像"]))
+
+    def test_food_sensitivity_guides_diet_without_triggering_supplement(self) -> None:
+        report = ChronicFoodSensitivityReport(
+            id="food-reviewed",
+            file_id="file_food_reviewed",
+            confidence=0.96,
+            review_status=SpecialtyReviewStatus.pending_review,
+            needs_manual_review=True,
+            summary_lines=["轻度：牛奶、蛋白", "中度：无", "重度：无"],
+            mild_foods=["牛奶", "蛋白"],
+            interpretations=["轻度结果建议进行有期限的饮食观察。"],
+        )
+        case = self._prepare_specialty_case(report)
+        self._review_specialty_case(case.id, report)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        lifestyle = " ".join(draft.report_sections["生活方式干预处方"])
+
+        self.assertIn("牛奶、蛋白", lifestyle)
+        self.assertIn("不等同于 IgE 食物过敏", lifestyle)
+        self.assertEqual(draft.recommended_skus, [])
+
+    def test_reviewed_gut_function_builds_signal_and_calprotectin_red_flag(self) -> None:
+        report = GutFunctionReport(
+            id="gut-function-reviewed",
+            file_id="file_gut_function_reviewed",
+            confidence=0.97,
+            review_status=SpecialtyReviewStatus.pending_review,
+            needs_manual_review=True,
+            summary_lines=["解连蛋白：85 ng/mL（偏高）", "钙卫蛋白：180 mg/kg（偏高）"],
+            metrics=[
+                SpecialtyMetric(
+                    code="zonulin",
+                    name="解连蛋白 Zonulin",
+                    value=85,
+                    raw_value="85",
+                    unit="ng/mL",
+                    ref_range=ReferenceRange(upper=60, raw="<60"),
+                    abnormal_flag=AbnormalFlag.high,
+                    confidence=0.97,
+                    source_span=SourceSpan(
+                        file_id="file_gut_function_reviewed",
+                        file_name="specialty-report.pdf",
+                        page=2,
+                        snippet="Zonulin 85 ng/mL <60",
+                    ),
+                ),
+                SpecialtyMetric(
+                    code="fecal_calprotectin",
+                    name="钙卫蛋白",
+                    value=180,
+                    raw_value="180",
+                    unit="mg/kg",
+                    ref_range=ReferenceRange(upper=60, raw="<60"),
+                    abnormal_flag=AbnormalFlag.high,
+                    confidence=0.97,
+                    source_span=SourceSpan(
+                        file_id="file_gut_function_reviewed",
+                        file_name="specialty-report.pdf",
+                        page=2,
+                        snippet="Calprotectin 180 mg/kg <60",
+                    ),
+                ),
+            ],
+        )
+        case = self._prepare_specialty_case(report)
+        self._review_specialty_case(case.id, report)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        serialized = " ".join(
+            [
+                *draft.red_flags,
+                *draft.report_sections["后续检查建议"],
+                *draft.report_sections["随访计划"],
+            ]
+        )
+
+        self.assertIn("钙卫蛋白", serialized)
+        self.assertIn("不能仅据此升级营养素方案", serialized)
+        self.assertNotIn("sku_disabled_probiotic", {item.sku_id for item in draft.recommended_skus})
+
     def test_generates_grounded_recommendations_with_catalog_only(self) -> None:
         case = self._prepare_case(
             "25-OH维生素D 18 ng/mL 30-100\n空腹血糖 6.2 mmol/L 3.9-5.6\nhs-CRP 4.2 mg/L 0-3",
@@ -134,11 +321,21 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertFalse(draft.abstain_reason)
         self.assertTrue(recommended_ids)
         self.assertTrue(recommended_ids.issubset(catalog_ids))
-        self.assertIn("sku_vitamin_d3_k", recommended_ids)
+        self.assertNotIn("sku_vitamin_d3_k", recommended_ids)
         self.assertTrue(all(item.warnings for item in draft.recommended_skus))
         self.assertTrue(
             any("注意/禁忌：" in item for item in draft.report_sections.get("首月营养素干预方案", []))
         )
+
+    def test_unreviewed_dosage_candidates_do_not_override_catalog_or_auto_add_manual_products(self) -> None:
+        service = self.container.recommendation_service
+        products = {item.sku_id: item for item in service._list_products(enabled_only=True)}
+
+        self.assertEqual(service._first_month_dosage(products["sku_fish_oil_rtg"]), "每日 1 粒，随含脂肪餐食用。")
+        self.assertEqual(service._first_month_dosage(products["sku_magnesium_glycinate"]), "每日 1 粒，晚间或放松场景下使用。")
+        self.assertFalse(service._is_auto_draft_product(products["sku_dhea"]))
+        self.assertFalse(service._is_auto_draft_product(products["sku_vitamin_d3_k"]))
+        self.assertFalse(service._is_auto_draft_product(products["sku_female_hormone_balance"]))
 
     def test_product_safety_matrix_blocks_clear_contraindications(self) -> None:
         case = self._prepare_case(
@@ -815,12 +1012,18 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertNotIn("免疫系统/甲状腺", analysis_text)
         self.assertNotIn("消化系统/肠道", analysis_text)
 
-    def test_first_month_dosage_rules_override_default_product_dosage(self) -> None:
+    def test_first_month_dosage_uses_reviewed_matrix_or_catalog_fallback(self) -> None:
         fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")
         glutathione_support = self.container.repository.get_product("sku_amino_acid_detox")
 
-        self.assertIn("每日 4 粒", self.container.recommendation_service._first_month_dosage(fish_oil))
-        self.assertIn("每日 2 粒", self.container.recommendation_service._first_month_dosage(glutathione_support))
+        self.assertEqual(
+            self.container.recommendation_service._first_month_dosage(fish_oil),
+            fish_oil.dosage_rule,
+        )
+        self.assertEqual(
+            self.container.recommendation_service._first_month_dosage(glutathione_support),
+            glutathione_support.dosage_rule,
+        )
 
     def test_product_tag_matrix_prioritizes_precise_liver_detox_products(self) -> None:
         case = self._prepare_case(
@@ -1186,11 +1389,12 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
         self.assertFalse(draft.abstain_reason)
-        self.assertEqual([item.sku_id for item in draft.recommended_skus], ["sku_vitamin_d3_k"])
+        self.assertEqual([item.sku_id for item in draft.recommended_skus], ["sku_blood_sugar_complex"])
+        self.assertNotIn("sku_vitamin_d3_k", {item.sku_id for item in draft.recommended_skus})
         self.assertIn("结合", draft.recommended_skus[0].reason)
         self.assertNotIn("product:sku_", draft.recommended_skus[0].reason)
         self.assertTrue(draft.evidence_details)
-        self.assertTrue(any("VD3+K" in item for item in draft.evidence_details))
+        self.assertTrue(any("血糖" in item for item in draft.evidence_details))
         self.assertTrue(all(any("\u4e00" <= ch <= "\u9fff" for ch in item) for item in draft.lifestyle_actions))
         self.assertEqual(draft.model_version, "remote:test-model")
         self.assertIn("核心结论与健康画像", draft.report_sections)

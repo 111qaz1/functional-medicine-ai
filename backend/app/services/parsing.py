@@ -4,8 +4,15 @@ import json
 import re
 from pathlib import Path
 
-from app.domain.models import AbnormalFlag, ExtractedLabItem, ReferenceRange, SourceSpan
+from app.domain.models import (
+    AbnormalFlag,
+    ExtractedLabItem,
+    ReferenceRange,
+    SourceSpan,
+    SpecialtyReportResult,
+)
 from app.providers.base import OCRExtraction, OCRProvider
+from app.services.specialty_reports import SpecialtyReportParser
 
 
 def _clean_token(value: str | None) -> str:
@@ -846,14 +853,60 @@ class LabNormalizationService:
 
 
 class DocumentParsingService:
-    def __init__(self, *, ocr_provider: OCRProvider, normalization_service: LabNormalizationService) -> None:
+    def __init__(
+        self,
+        *,
+        ocr_provider: OCRProvider,
+        normalization_service: LabNormalizationService,
+        specialty_report_parser: SpecialtyReportParser | None = None,
+    ) -> None:
         self.ocr_provider = ocr_provider
         self.normalization_service = normalization_service
+        self.specialty_report_parser = specialty_report_parser or SpecialtyReportParser()
 
     def extract_text(self, *, filename: str, content_type: str, content: bytes) -> OCRExtraction:
         return self.ocr_provider.extract(filename=filename, content_type=content_type, content=content)
 
-    def parse(self, *, filename: str, content_type: str, content: bytes) -> tuple[OCRExtraction, list[ExtractedLabItem]]:
+    def parse(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        file_id: str | None = None,
+    ) -> tuple[OCRExtraction, list[ExtractedLabItem]]:
         extraction = self.extract_text(filename=filename, content_type=content_type, content=content)
+        if file_id:
+            extraction = extraction.model_copy(
+                update={
+                    "spans": [
+                        span.model_copy(update={"file_id": file_id})
+                        for span in extraction.spans
+                    ]
+                }
+            )
         lab_items = self.normalization_service.normalize(spans=extraction.spans)
         return extraction, lab_items
+
+    def parse_with_specialty_reports(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        file_id: str,
+    ) -> tuple[OCRExtraction, list[ExtractedLabItem], list[SpecialtyReportResult]]:
+        extraction, lab_items = self.parse(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            file_id=file_id,
+        )
+        specialty_reports = self.specialty_report_parser.parse(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            extraction=extraction,
+            file_id=file_id,
+        )
+        return extraction, lab_items, specialty_reports

@@ -30,7 +30,9 @@ import {
   ExtractedLabItem,
   ManualIndicatorInput,
   Questionnaire,
-  RuleScope
+  RuleScope,
+  SpecialtyMetric,
+  SpecialtyReportResult
 } from "../lib/types";
 import { SectionCard } from "./section-card";
 import { StatusPillLocal } from "./status-pill-local";
@@ -38,6 +40,21 @@ import { StatusPillLocal } from "./status-pill-local";
 function splitCsv(value: string) {
   return value
     .split(/[,\n，；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function optionalNumber(value: string) {
+  if (!value.trim()) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -861,6 +878,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [clinicalSummaryHint, setClinicalSummaryHint] = useState<string | null>(null);
   const [clinicalSummaryImageProgress, setClinicalSummaryImageProgress] = useState<ClinicalSummaryImageImportProgress[]>([]);
   const [labItemsEditor, setLabItemsEditor] = useState("[]");
+  const [specialtyReports, setSpecialtyReports] = useState<SpecialtyReportResult[]>([]);
   const [manualIndicatorEdits, setManualIndicatorEdits] = useState<ManualIndicatorEdit[]>([]);
   const [parsingMissingFieldsText, setParsingMissingFieldsText] = useState("");
   const [parsingReviewNotes, setParsingReviewNotes] = useState("");
@@ -872,6 +890,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [assistantMessages, setAssistantMessages] = useState<AssistantChatMessage[]>([]);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantBusy, setAssistantBusy] = useState(false);
+  const [showWorkflowGuide, setShowWorkflowGuide] = useState(false);
 
   function applyCasePayload(nextPayload: CaseDetailResponse) {
     const nextExcludedSkuIds = loadExcludedSkuIds(nextPayload);
@@ -880,6 +899,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     setQuestionnaire(nextPayload.case.questionnaire ?? DEFAULT_FORM);
     setClinicalSummaryText(nextPayload.case.clinical_summary_text ?? "");
     setLabItemsEditor(stringifyLabItems(nextPayload.case.extracted_lab_items));
+    setSpecialtyReports(nextPayload.case.specialty_reports ?? []);
     setManualIndicatorEdits((nextPayload.case.manual_indicators ?? []).map((item) => createManualIndicatorEdit(item)));
     setParsingMissingFieldsText(nextPayload.case.parsing_missing_fields.join(", "));
     setParsingReviewNotes(nextPayload.case.parsing_review_notes ?? "");
@@ -910,6 +930,38 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             )
           ]
     );
+  }
+
+  function dismissWorkflowGuide() {
+    window.localStorage.setItem("fm-doctor-workflow-guide-dismissed-v1", "1");
+    setShowWorkflowGuide(false);
+  }
+
+  function updateSpecialtyReport(
+    reportIndex: number,
+    updater: (report: SpecialtyReportResult) => SpecialtyReportResult
+  ) {
+    setSpecialtyReports((current) =>
+      current.map((report, index) => (index === reportIndex ? updater(report) : report))
+    );
+  }
+
+  function updateGutMetric(
+    reportIndex: number,
+    metricIndex: number,
+    updates: Partial<SpecialtyMetric>
+  ) {
+    updateSpecialtyReport(reportIndex, (report) => {
+      if (report.report_type !== "gut_function") {
+        return report;
+      }
+      return {
+        ...report,
+        metrics: report.metrics.map((metric, index) =>
+          index === metricIndex ? { ...metric, ...updates } : metric
+        )
+      };
+    });
   }
 
   useEffect(() => {
@@ -982,6 +1034,10 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   useEffect(() => {
     void refresh({ showLoading: true });
   }, [caseId]);
+
+  useEffect(() => {
+    setShowWorkflowGuide(window.localStorage.getItem("fm-doctor-workflow-guide-dismissed-v1") !== "1");
+  }, []);
 
   useEffect(() => {
     async function loadCurrentDoctor() {
@@ -1180,6 +1236,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         }));
       await saveParsingReview(caseId, {
         reviewer_id: reviewerId,
+        expected_revision: payload.case.parsing_revision,
         files: payload.case.files.map((file) => ({
           file_id: file.id,
           corrected_text: fileEdits[file.id]?.correctedText ?? file.corrected_text ?? file.raw_extracted_text ?? "",
@@ -1187,6 +1244,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         })),
         normalized_lab_items: parsedItems,
         manual_indicators: manualIndicators,
+        specialty_reports: specialtyReports,
         missing_fields: splitCsv(parsingMissingFieldsText),
         review_notes: parsingReviewNotes || null
       });
@@ -1674,8 +1732,51 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             {caseRecord.analysis_mode === "llm_primary" ? "大模型优先，本地知识辅助" : "本地知识优先"}
           </p>
         </div>
-        <StatusPillLocal status={caseRecord.status} />
+        <div className="workbench-hero-actions">
+          <button
+            type="button"
+            className="workflow-help-button"
+            title="查看医生操作流程"
+            aria-label="查看医生操作流程"
+            onClick={() => setShowWorkflowGuide(true)}
+          >
+            ?
+          </button>
+          <StatusPillLocal status={caseRecord.status} />
+        </div>
       </div>
+
+      {showWorkflowGuide ? (
+        <section className="workflow-guide" aria-label="医生操作流程">
+          <div className="workflow-guide__head">
+            <div>
+              <strong>医生操作流程</strong>
+              <p className="muted">最终发布仍由内部工作台审核完成。</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={dismissWorkflowGuide}>
+              知道了
+            </button>
+          </div>
+          <ol className="workflow-steps">
+            {[
+              ["1", "进入病例", "确认病例与顾问信息"],
+              ["2", "上传资料", "病例报告与 MSQ 问卷"],
+              ["3", "解析校对", "核对指标与专用报告"],
+              ["4", "生成草案", "查看系统分析与候选产品"],
+              ["5", "调整方案", "修改产品顺序、剂量与理由"],
+              ["6", "审核发布", "确认正文后导出 PDF"]
+            ].map(([step, title, detail]) => (
+              <li key={step}>
+                <span>{step}</span>
+                <div>
+                  <strong>{title}</strong>
+                  <small>{detail}</small>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
       {error ? <p className="error-text">{error}</p> : null}
 
@@ -2181,6 +2282,237 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
               </label>
             ))}
 
+            {specialtyReports.length > 0 ? (
+              <div className="specialty-review-panel">
+                <div>
+                  <strong>专用报告结构化校对</strong>
+                  <p className="muted">只有保存校对后的结果才会进入系统分析、RAG 查询和营养素排序。</p>
+                </div>
+                {specialtyReports.map((report, reportIndex) => (
+                  <article className="specialty-report-card" key={report.id}>
+                    <div className="specialty-report-card__head">
+                      <strong>
+                        {report.report_type === "chronic_food_sensitivity"
+                          ? "慢性食物敏感"
+                          : report.report_type === "gut_function"
+                            ? "肠道功能健康评估"
+                            : "肠道菌群"}
+                      </strong>
+                      <span className="chip chip--muted">置信度 {Math.round(report.confidence * 100)}%</span>
+                    </div>
+                    {report.warnings.length > 0 ? (
+                      <p className="warning-box">{report.warnings.join("；")}</p>
+                    ) : null}
+
+                    {report.report_type === "chronic_food_sensitivity" ? (
+                      <div className="stack">
+                        <div className="grid-two">
+                          {([
+                            ["轻度食物", "mild_foods"],
+                            ["中度食物", "moderate_foods"],
+                            ["重度食物", "high_foods"]
+                          ] as const).map(([label, field]) => (
+                            <label className="field" key={field}>
+                              <span>{label}</span>
+                              <input
+                                value={report[field].join("、")}
+                                onChange={(event) =>
+                                  updateSpecialtyReport(reportIndex, (current) =>
+                                    current.report_type === "chronic_food_sensitivity"
+                                      ? { ...current, [field]: splitCsv(event.target.value) }
+                                      : current
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <label className="field">
+                          <span>原报告固定解读（每行一条）</span>
+                          <textarea
+                            rows={5}
+                            value={report.interpretations.join("\n")}
+                            onChange={(event) =>
+                              updateSpecialtyReport(reportIndex, (current) =>
+                                current.report_type === "chronic_food_sensitivity"
+                                  ? { ...current, interpretations: splitLines(event.target.value) }
+                                  : current
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+
+                    {report.report_type === "gut_function" ? (
+                      <div className="stack">
+                        {report.metrics.map((metric, metricIndex) => (
+                          <div className="specialty-metric-row" key={metric.code}>
+                            <strong>{metric.name}</strong>
+                            <label className="field">
+                              <span>结果</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={metric.value ?? ""}
+                                onChange={(event) =>
+                                  updateGutMetric(reportIndex, metricIndex, {
+                                    value: optionalNumber(event.target.value),
+                                    raw_value: event.target.value || null
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>单位</span>
+                              <input
+                                value={metric.unit ?? ""}
+                                onChange={(event) => updateGutMetric(reportIndex, metricIndex, { unit: event.target.value || null })}
+                              />
+                            </label>
+                            <label className="field">
+                              <span>参考下限</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={metric.ref_range.lower ?? ""}
+                                onChange={(event) =>
+                                  updateGutMetric(reportIndex, metricIndex, {
+                                    ref_range: { ...metric.ref_range, lower: optionalNumber(event.target.value) }
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>参考上限</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={metric.ref_range.upper ?? ""}
+                                onChange={(event) =>
+                                  updateGutMetric(reportIndex, metricIndex, {
+                                    ref_range: { ...metric.ref_range, upper: optionalNumber(event.target.value) }
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>判断</span>
+                              <select
+                                value={metric.abnormal_flag}
+                                onChange={(event) =>
+                                  updateGutMetric(reportIndex, metricIndex, {
+                                    abnormal_flag: event.target.value as SpecialtyMetric["abnormal_flag"]
+                                  })
+                                }
+                              >
+                                <option value="normal">正常</option>
+                                <option value="high">偏高</option>
+                                <option value="low">偏低</option>
+                                <option value="unknown">待核对</option>
+                              </select>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {report.report_type === "gut_microbiome" ? (
+                      <div className="stack">
+                        <div className="grid-two">
+                          <label className="field">
+                            <span>健康评分</span>
+                            <input
+                              type="number"
+                              step="any"
+                              value={report.health_score ?? ""}
+                              onChange={(event) =>
+                                updateSpecialtyReport(reportIndex, (current) =>
+                                  current.report_type === "gut_microbiome"
+                                    ? { ...current, health_score: optionalNumber(event.target.value) }
+                                    : current
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="field">
+                            <span>多样性指数</span>
+                            <input
+                              type="number"
+                              step="any"
+                              value={report.diversity_index ?? ""}
+                              onChange={(event) =>
+                                updateSpecialtyReport(reportIndex, (current) =>
+                                  current.report_type === "gut_microbiome"
+                                    ? { ...current, diversity_index: optionalNumber(event.target.value) }
+                                    : current
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="field">
+                            <span>菌属数量</span>
+                            <input
+                              type="number"
+                              value={report.detected_genera_count ?? ""}
+                              onChange={(event) =>
+                                updateSpecialtyReport(reportIndex, (current) =>
+                                  current.report_type === "gut_microbiome"
+                                    ? { ...current, detected_genera_count: optionalNumber(event.target.value) }
+                                    : current
+                                )
+                              }
+                            />
+                          </label>
+                          {([
+                            ["优势菌属", "dominant_genus"],
+                            ["稳定性", "stability"],
+                            ["多样性判断", "diversity_status"],
+                            ["肠型", "enterotype"]
+                          ] as const).map(([label, field]) => (
+                            <label className="field" key={field}>
+                              <span>{label}</span>
+                              <input
+                                value={report[field] ?? ""}
+                                onChange={(event) =>
+                                  updateSpecialtyReport(reportIndex, (current) =>
+                                    current.report_type === "gut_microbiome"
+                                      ? { ...current, [field]: event.target.value || null }
+                                      : current
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        {([
+                          ["异常/偏高菌属", "harmful_or_elevated_genera"],
+                          ["不足有益菌属", "low_beneficial_genera"],
+                          ["风险分类", "risk_categories"],
+                          ["重点风险", "prominent_risks"],
+                          ["营养影响", "nutrient_impacts"]
+                        ] as const).map(([label, field]) => (
+                          <label className="field" key={field}>
+                            <span>{label}</span>
+                            <input
+                              value={report[field].join("、")}
+                              onChange={(event) =>
+                                updateSpecialtyReport(reportIndex, (current) =>
+                                  current.report_type === "gut_microbiome"
+                                    ? { ...current, [field]: splitCsv(event.target.value) }
+                                    : current
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
             <label className="field">
               <span>标准化指标 JSON</span>
               <textarea
@@ -2280,6 +2612,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
 
             <p className="muted">
               当前校对状态：{caseRecord.parsing_review_completed ? "已完成" : "未完成"}。
+              版本 {caseRecord.parsing_revision}。
               {caseRecord.parsing_reviewed_by ? ` 最近校对人 ${caseRecord.parsing_reviewed_by}` : ""}
             </p>
           </div>
@@ -2334,8 +2667,12 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
               <>
                 <div className="draft-meta">
                   <strong>草案状态：{latestDraft.status}</strong>
-                  <span>置信度 {Math.round(latestDraft.confidence * 100)}%</span>
+                  <span>版本 {latestDraft.revision} · 置信度 {Math.round(latestDraft.confidence * 100)}%</span>
                 </div>
+
+                <p className="info-note">
+                  待审阶段可调整产品顺序、删除或添加已启用产品、修改剂量与医生理由；安全警告、禁忌和证据由服务端维护，不能被客户端删除。
+                </p>
 
                 {latestDraft.abstain_reason ? <p className="warning-box">{latestDraft.abstain_reason}</p> : null}
 

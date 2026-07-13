@@ -8,7 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft, SourceSpan
+from app.domain.models import (
+    AuditLog,
+    ClinicianRule,
+    ClinicianRuleAction,
+    DraftRecommendationItem,
+    DraftStatus,
+    ProductRule,
+    RecommendationDraft,
+    SourceSpan,
+    SpecialtyReviewStatus,
+    utc_now,
+)
 from app.providers.base import DraftCompositionInput, LLMProvider, VectorStoreProvider
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
@@ -32,6 +43,10 @@ class RecommendationContext:
     msq_system_scores: dict[str, int]
     clinical_summary_text: str
     summary_nutrient_hints: list[str]
+    gut_function_marker_codes: set[str]
+    microbiome_background: bool
+    food_sensitivity_reported: bool
+    specialty_summary_lines: list[str]
 
 
 @dataclass
@@ -121,6 +136,7 @@ class RecommendationService:
         self.object_store = None
         self.product_tag_profiles = self._load_product_tag_profiles()
         self.product_safety_profiles = self._load_product_safety_profiles()
+        self.product_dosage_profiles = self._load_product_dosage_profiles()
 
     def _load_product_tag_profiles(self) -> dict[str, ProductTagProfile]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_tag_matrix.json"
@@ -184,6 +200,26 @@ class RecommendationService:
             }
         return profiles
 
+    def _load_product_dosage_profiles(self) -> dict[str, dict]:
+        matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_dosage_matrix.json"
+        if not matrix_path.exists():
+            return {}
+        try:
+            payload = json.loads(matrix_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {
+            str(item.get("sku_id") or "").strip(): item
+            for item in payload.get("products", [])
+            if str(item.get("sku_id") or "").strip()
+        }
+
+    def _is_auto_draft_product(self, product: ProductRule) -> bool:
+        profile = self.product_dosage_profiles.get(product.sku_id, {})
+        if profile.get("manual_confirmation_required"):
+            return False
+        return profile.get("auto_draft_enabled", True) is not False
+
     def _list_products(self, *, enabled_only: bool = True) -> list[ProductRule]:
         return [
             self._apply_product_safety_profile(product)
@@ -216,6 +252,7 @@ class RecommendationService:
         case_summary = self._build_case_summary(case, customer_name=customer_name)
         key_lab_highlights = self._build_key_lab_highlights(case)
         report_guidance = self._extract_report_guidance(case)
+        specialty_report_section = self._build_specialty_report_section(case)
         anti_aging_findings = self._extract_anti_aging_findings(case, context)
         priority_findings = self._prioritized_system_findings(
             context,
@@ -348,6 +385,7 @@ class RecommendationService:
             "病例摘要": case_summary,
             "核心结论与健康画像": health_portrait,
             "异常指标汇总": key_lab_highlights,
+            "专用报告校对结果": specialty_report_section,
             "原报告小结与建议": report_guidance,
             "功能医学系统失衡分析": system_analysis,
             "风险提示": list(dict.fromkeys(red_flags + contraindications)),
@@ -369,6 +407,8 @@ class RecommendationService:
         }
         if not report_guidance:
             report_sections.pop("原报告小结与建议", None)
+        if not specialty_report_section:
+            report_sections.pop("专用报告校对结果", None)
         report_sections = self._apply_report_section_overrides(
             report_sections,
             composition.section_overrides,
@@ -412,6 +452,124 @@ class RecommendationService:
         )
         return draft
 
+    def update_draft_nutrition_recommendations(
+        self,
+        draft_id: str,
+        *,
+        expected_revision: int,
+        recommendations: list[dict],
+        actor_id: str,
+        edit_reason: str | None = None,
+    ) -> RecommendationDraft:
+        draft = self.repository.get_draft(draft_id)
+        if not draft:
+            raise KeyError("Draft not found")
+        if draft.status != DraftStatus.pending_review or self.repository.get_review_decision(draft_id):
+            raise ValueError("draft_not_editable")
+        if expected_revision != draft.revision:
+            raise ValueError("draft_revision_conflict")
+        if len(recommendations) > 12:
+            raise ValueError("too_many_recommendations")
+
+        case = self.case_service.get_case(draft.case_id)
+        context = self._build_context(case)
+        products = {item.sku_id: item for item in self._list_products(enabled_only=True)}
+        existing_by_sku = {item.sku_id: item for item in draft.recommended_skus}
+        updated_items: list[DraftRecommendationItem] = []
+        seen_skus: set[str] = set()
+
+        for payload in recommendations:
+            sku_id = str(payload.get("sku_id") or "").strip()
+            if not sku_id or sku_id in seen_skus:
+                raise ValueError("duplicate_or_empty_sku")
+            seen_skus.add(sku_id)
+            product = products.get(sku_id)
+            if not product:
+                raise ValueError(f"product_not_found_or_disabled:{sku_id}")
+
+            exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
+            if exclusion_matches:
+                raise ValueError(f"product_contraindicated:{sku_id}")
+
+            dosage = self._validate_doctor_dosage(str(payload.get("dosage") or ""))
+            reason = self._validate_doctor_reason(str(payload.get("reason") or ""))
+            previous = existing_by_sku.get(sku_id)
+            evidence_ids = list(previous.evidence_ids) if previous else [f"product:{sku_id}", "signal:doctor_case_edit"]
+            evidence_details = (
+                list(previous.evidence_details)
+                if previous
+                else ["医生在待审草案中明确加入，并由服务端重新执行产品目录、禁忌和病例安全校验。"]
+            )
+            warnings = self._product_safety_warnings(product)
+            dosage_profile = self.product_dosage_profiles.get(sku_id, {})
+            if dosage_profile.get("manual_confirmation_required"):
+                warnings = list(dict.fromkeys(["该产品必须由医生逐例确认后方可发布。", *warnings]))
+            updated_items.append(
+                DraftRecommendationItem(
+                    sku_id=sku_id,
+                    display_name=product.display_name,
+                    dosage=dosage,
+                    reason=reason,
+                    evidence_ids=evidence_ids,
+                    evidence_details=evidence_details,
+                    warnings=warnings,
+                )
+            )
+
+        old_order = [item.sku_id for item in draft.recommended_skus]
+        new_order = [item.sku_id for item in updated_items]
+        old_dosages = {item.sku_id: item.dosage for item in draft.recommended_skus}
+        report_sections = dict(draft.report_sections)
+        report_sections["首月营养素干预方案"] = self._build_first_month_protocol(updated_items)
+        updated = draft.model_copy(
+            update={
+                "recommended_skus": updated_items,
+                "report_sections": report_sections,
+                "updated_at": utc_now(),
+                "revision": draft.revision + 1,
+                "last_edited_by": actor_id,
+                "last_edit_reason": (edit_reason or "").strip()[:300] or None,
+            }
+        )
+        self.repository.save_draft(updated)
+        self.repository.add_audit_log(
+            AuditLog(
+                id=f"audit_{uuid.uuid4().hex[:12]}",
+                entity_type="draft",
+                entity_id=draft.id,
+                action="nutrition_draft_edited",
+                actor_id=actor_id,
+                payload={
+                    "previous_revision": draft.revision,
+                    "revision": updated.revision,
+                    "added_skus": [sku_id for sku_id in new_order if sku_id not in old_order],
+                    "removed_skus": [sku_id for sku_id in old_order if sku_id not in new_order],
+                    "order_changed": old_order != new_order,
+                    "dosage_changed_skus": [
+                        item.sku_id
+                        for item in updated_items
+                        if old_dosages.get(item.sku_id) not in (None, item.dosage)
+                    ],
+                    "has_edit_reason": bool((edit_reason or "").strip()),
+                },
+            )
+        )
+        return updated
+
+    def _validate_doctor_dosage(self, value: str) -> str:
+        dosage = re.sub(r"\s+", " ", value).strip()
+        if not dosage or len(dosage) > 200:
+            raise ValueError("invalid_dosage")
+        if any(term in dosage.lower() for term in ("注射", "静脉", "停药", "减药", "加药", "处方药")):
+            raise ValueError("invalid_dosage")
+        return dosage
+
+    def _validate_doctor_reason(self, value: str) -> str:
+        reason = self._sanitize_reason_text(re.sub(r"\s+", " ", value).strip())
+        if not reason or len(reason) > 500:
+            raise ValueError("invalid_doctor_reason")
+        return reason
+
     def _build_context(self, case) -> RecommendationContext:
         markers_by_code: dict[str, list] = {}
         for item in case.extracted_lab_items:
@@ -419,6 +577,34 @@ class RecommendationService:
                 continue
             markers_by_code.setdefault(item.marker_code, []).append(item)
         self._augment_markers_from_case_indicators(case, markers_by_code)
+
+        reviewed_specialty_reports = self._reviewed_specialty_reports(case)
+        gut_function_marker_codes: set[str] = set()
+        specialty_summary_lines: list[str] = []
+        microbiome_background = False
+        report_food_sensitivities: set[str] = set()
+        for report in reviewed_specialty_reports:
+            specialty_summary_lines.extend(report.summary_lines)
+            if report.report_type == "gut_function":
+                for metric in report.metrics:
+                    gut_function_marker_codes.add(metric.code)
+                    markers_by_code.setdefault(metric.code, []).append(
+                        SimpleNamespace(
+                            marker_code=metric.code,
+                            marker_name=metric.name,
+                            value=metric.value,
+                            normalized_value=metric.value,
+                            unit=metric.unit,
+                            abnormal_flag=metric.abnormal_flag,
+                            source_span=metric.source_span,
+                        )
+                    )
+            elif report.report_type == "gut_microbiome":
+                microbiome_background = True
+            elif report.report_type == "chronic_food_sensitivity":
+                report_food_sensitivities.update(report.mild_foods)
+                report_food_sensitivities.update(report.moderate_foods)
+                report_food_sensitivities.update(report.high_foods)
 
         questionnaire = case.questionnaire
         chief_concerns = {self._normalize(text) for text in (questionnaire.chief_concerns if questionnaire else [])}
@@ -431,6 +617,7 @@ class RecommendationService:
         food_sensitivities = {
             self._normalize(text) for text in (questionnaire.food_sensitivities if questionnaire else [])
         }
+        food_sensitivities.update(self._normalize(text) for text in report_food_sensitivities)
         msq_system_scores = dict(questionnaire.msq_system_scores) if questionnaire else {}
         clinical_summary_text = (case.clinical_summary_text or "").strip()
         normalized_clinical_summary = self._normalize(clinical_summary_text)
@@ -498,6 +685,9 @@ class RecommendationService:
             )
         ):
             lifestyle_tags.add("metabolic_support")
+
+        if gut_function_marker_codes:
+            lifestyle_tags.add("gut_support")
         if any(
             term in normalized_clinical_summary
             for term in (
@@ -524,7 +714,20 @@ class RecommendationService:
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
             summary_nutrient_hints=summary_nutrient_hints,
+            gut_function_marker_codes=gut_function_marker_codes,
+            microbiome_background=microbiome_background,
+            food_sensitivity_reported=bool(report_food_sensitivities),
+            specialty_summary_lines=list(dict.fromkeys(specialty_summary_lines))[:24],
         )
+
+    def _reviewed_specialty_reports(self, case) -> list:
+        if not case.parsing_review_completed:
+            return []
+        return [
+            report
+            for report in getattr(case, "specialty_reports", [])
+            if report.review_status == SpecialtyReviewStatus.reviewed and not report.needs_manual_review
+        ]
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
         normalized = re.sub(r"\s+", "", snippet or "").strip()
@@ -640,6 +843,27 @@ class RecommendationService:
         ]
         return " ".join(part for part in parts if part).strip()
 
+    def _specialty_rag_query_terms(self, context: RecommendationContext) -> list[str]:
+        marker_labels = {
+            "anti_gliadin_siga": "麦胶蛋白抗体 肠黏膜免疫",
+            "anti_httg_siga": "组织转麸胺酶抗体 肠黏膜免疫",
+            "secretory_iga": "分泌型免疫球蛋白 sIgA 肠黏膜免疫",
+            "fecal_calprotectin": "粪便钙卫蛋白 肠道炎症 临床复核",
+            "zonulin": "解连蛋白 Zonulin 肠屏障通透性",
+            "beta_glucuronidase": "β-葡萄糖醛酸酶 肠道代谢",
+            "pancreatic_elastase": "胰弹性蛋白酶 消化功能",
+        }
+        terms = [
+            marker_labels[marker_code]
+            for marker_code in sorted(context.gut_function_marker_codes)
+            if marker_code in marker_labels
+        ]
+        if context.microbiome_background:
+            terms.append("肠道菌群多样性 饮食多样性 生活方式")
+        if context.food_sensitivity_reported:
+            terms.append("慢性食物敏感 IgG 饮食观察 不等同IgE过敏")
+        return terms
+
     def _evaluate_red_flags(self, context: RecommendationContext, age: int | None) -> list[str]:
         red_flags: list[str] = []
         if age is not None and age < 18:
@@ -670,6 +894,10 @@ class RecommendationService:
                     red_flags.append("炎症指标显著升高，需先排查急性风险。")
                 if item.marker_code == "alt" and value >= 120:
                     red_flags.append("肝功能指标明显异常，需要人工审核。")
+                if item.marker_code == "fecal_calprotectin" and item.abnormal_flag.value == "high":
+                    red_flags.append(
+                        "粪便钙卫蛋白高于该报告参考范围，需优先结合症状由医生排查肠道炎症；不能仅据此升级营养素方案。"
+                    )
 
         return list(dict.fromkeys(red_flags))
 
@@ -770,12 +998,21 @@ class RecommendationService:
         normalized = re.sub(r"[|｜:：,，;；。()（）\[\]【】]", "", normalized)
         return normalized
 
-    def _build_reviewed_report_text(self, case) -> str:
+    def _build_reviewed_report_text(self, case, *, include_specialty: bool = True) -> str:
         chunks: list[str] = []
+        reviewed_specialty_reports = self._reviewed_specialty_reports(case)
+        specialty_file_ids = {report.file_id for report in getattr(case, "specialty_reports", [])}
         for uploaded in case.files:
+            if uploaded.id in specialty_file_ids:
+                continue
             text = (uploaded.corrected_text or uploaded.raw_extracted_text or "").strip()
             if text:
                 chunks.append(f"[{uploaded.filename}]\n{text}")
+        if include_specialty:
+            for report in reviewed_specialty_reports:
+                lines = self._specialty_report_public_lines(report)
+                if lines:
+                    chunks.append(f"[{self._specialty_report_label(report.report_type)}（已校对）]\n" + "\n".join(lines))
         if case.clinical_summary_text:
             chunks.append(f"[病例总结诊断]\n{case.clinical_summary_text.strip()}")
         return "\n\n".join(chunks).strip()[:12000]
@@ -813,12 +1050,22 @@ class RecommendationService:
             "clinical_summary_text": case.clinical_summary_text,
             "summary_nutrient_hints": context.summary_nutrient_hints,
             "report_guidance": report_guidance or [],
+            "specialty_reports": [
+                {
+                    "report_type": report.report_type,
+                    "summary": self._specialty_report_public_lines(report),
+                }
+                for report in self._reviewed_specialty_reports(case)
+            ],
         }
 
     def _extract_report_guidance(self, case) -> list[str]:
         guidance: list[str] = []
         guidance.extend(self._extract_manual_summary_guidance(case.clinical_summary_text))
+        specialty_file_ids = {report.file_id for report in getattr(case, "specialty_reports", [])}
         for uploaded in case.files:
+            if uploaded.id in specialty_file_ids:
+                continue
             text = (uploaded.corrected_text or uploaded.raw_extracted_text or "").strip()
             if not text:
                 continue
@@ -829,7 +1076,47 @@ class RecommendationService:
             guidance.extend(self._extract_summary_opinion_lines(lines))
             guidance.extend(self._extract_expert_advice_sections(lines))
 
+        for report in self._reviewed_specialty_reports(case):
+            guidance.extend(self._specialty_report_public_lines(report))
+
         return list(dict.fromkeys(item for item in guidance if item))[:12]
+
+    def _specialty_report_label(self, report_type: str) -> str:
+        return {
+            "chronic_food_sensitivity": "慢性食物敏感报告",
+            "gut_function": "肠道功能健康评估",
+            "gut_microbiome": "肠道菌群报告",
+        }.get(report_type, "专用报告")
+
+    def _specialty_report_public_lines(self, report) -> list[str]:
+        if report.report_type == "chronic_food_sensitivity":
+            lines = [
+                "慢性食物敏感结果仅作为饮食观察线索，不等同于 IgE 介导的食物过敏诊断。",
+                *report.summary_lines,
+            ]
+            if report.interpretations:
+                lines.append("原报告解读：" + " ".join(report.interpretations[:3]))
+            return list(dict.fromkeys(lines))[:6]
+
+        if report.report_type == "gut_function":
+            lines = ["肠道功能指标：" + "；".join(report.summary_lines[:7])]
+            if report.recommendations:
+                lines.append("原报告建议：" + " ".join(report.recommendations[:3]))
+            return lines
+
+        lines = list(report.summary_lines[:8])
+        if report.prominent_risks:
+            lines.append("报告提示的风险方向仅作弱背景参考：" + "、".join(report.prominent_risks[:5]))
+        if report.summary_recommendation:
+            lines.append("原报告建议：" + report.summary_recommendation)
+        return lines[:10]
+
+    def _build_specialty_report_section(self, case) -> list[str]:
+        lines: list[str] = []
+        for report in self._reviewed_specialty_reports(case):
+            lines.append(f"### {self._specialty_report_label(report.report_type)}")
+            lines.extend(self._specialty_report_public_lines(report))
+        return list(dict.fromkeys(lines))[:24]
 
     def _extract_manual_summary_guidance(self, summary_text: str | None) -> list[str]:
         if not summary_text:
@@ -1116,13 +1403,15 @@ class RecommendationService:
                     None,
                     [
                         self._build_query(case, context, support_profiles),
-                        self._build_reviewed_report_text(case),
+                        self._build_reviewed_report_text(case, include_specialty=False),
                     ],
                 )
             )
         )
 
         for product in self._list_products(enabled_only=True):
+            if not self._is_auto_draft_product(product):
+                continue
             exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
             if exclusion_matches:
                 contraindications.extend([f"{product.display_name} 被排除: {rule}" for rule in exclusion_matches])
@@ -1236,6 +1525,8 @@ class RecommendationService:
         products = self._list_products(enabled_only=True)
 
         for product in products:
+            if not self._is_auto_draft_product(product):
+                continue
             exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
             if exclusion_matches:
                 contraindications.extend([f"{product.display_name} 被排除: {rule}" for rule in exclusion_matches])
@@ -1388,6 +1679,32 @@ class RecommendationService:
                     match_terms=("抗炎支持", "抗氧化", "恢复支持", "鱼油", "白藜芦醇", "维生素C"),
                     query_terms=("炎症支持", "抗炎支持", "恢复支持", "抗氧化"),
                     marker_codes=("hs_crp",),
+                )
+            )
+
+        gut_barrier_markers = {
+            "anti_gliadin_siga",
+            "anti_httg_siga",
+            "secretory_iga",
+            "zonulin",
+        }
+        if any(
+            marker_code in context.gut_function_marker_codes
+            and any(
+                item.abnormal_flag.value in {"high", "low"}
+                for item in context.markers_by_code.get(marker_code, [])
+            )
+            for marker_code in gut_barrier_markers
+        ):
+            profiles.append(
+                SupportProfile(
+                    profile_id="gut_barrier_support",
+                    title="肠黏膜与屏障支持",
+                    weight=0.8,
+                    preferred_categories=("gut_mucosal_support",),
+                    match_terms=("肠黏膜", "屏障", "黏膜修复", "锌肌肽"),
+                    query_terms=("肠黏膜屏障", "Zonulin", "sIgA", "黏膜免疫"),
+                    marker_codes=tuple(sorted(gut_barrier_markers)),
                 )
             )
 
@@ -1780,12 +2097,38 @@ class RecommendationService:
             gut_score += 28
         if "outside_dining" in context.lifestyle_tags:
             gut_score += 10
+        abnormal_gut_markers = {
+            marker_code
+            for marker_code in context.gut_function_marker_codes
+            if any(
+                item.abnormal_flag.value in {"high", "low"}
+                for item in context.markers_by_code.get(marker_code, [])
+            )
+        }
+        gut_score += min(len(abnormal_gut_markers), 3) * 12
+        if context.microbiome_background:
+            gut_score += 10
+
+        gut_axes: list[str] = []
+        if abnormal_gut_markers & {"anti_gliadin_siga", "anti_httg_siga", "secretory_iga", "zonulin"}:
+            gut_axes.append("gut_mucosa")
+        if abnormal_gut_markers & {"beta_glucuronidase", "pancreatic_elastase"}:
+            gut_axes.append("digestive_enzyme")
+        if self._text_has_any(combined_text, "油腻不耐受", "胆汁", "胆囊"):
+            gut_axes.append("gut_bile")
+        if not context.gut_function_marker_codes and not context.microbiome_background and gut_score:
+            gut_axes.extend(("gut_bile", "gut_mucosa", "digestive_enzyme"))
         add_finding(
             system_id="gut_digestive",
             base_title="消化系统/肠道",
-            body="腹胀、排便波动、油腻不耐受、胃酸/消化或菌群线索提示消化道执行力会影响整体方案效果；建议先观察触发食物、排便规律、膳食纤维、蛋白质消化和油脂耐受。",
+            body=(
+                "已校对的肠道功能指标用于判断炎症、屏障、黏膜免疫和消化功能方向；菌群疾病风险仅作为弱背景，"
+                "不能单独确定营养素。建议结合症状、排便趋势、膳食结构和临床复核逐步验证。"
+                if context.gut_function_marker_codes or context.microbiome_background
+                else "腹胀、排便波动、油腻不耐受、胃酸/消化线索提示消化道执行力会影响整体方案效果；建议先观察触发食物、排便规律、膳食纤维、蛋白质消化和油脂耐受。"
+            ),
             score=gut_score,
-            axes=("gut_bile", "gut_microbiome", "gut_mucosa", "digestive_enzyme"),
+            axes=tuple(dict.fromkeys(gut_axes)),
         )
 
         neuro_sleep_score = 0.0
@@ -2404,6 +2747,7 @@ class RecommendationService:
                 self._build_query(case, context, support_profiles),
                 " ".join(key_lab_highlights[:6]),
                 " ".join(report_guidance[:4]),
+                " ".join(self._specialty_rag_query_terms(context)),
             )
             if part
         ).strip()
@@ -2474,6 +2818,16 @@ class RecommendationService:
             queries.append(f"{lab_context} 生活方式 睡眠 压力 运动 饮食 久坐 恢复")
         if guidance_context and guidance_context not in base_query:
             queries.append(f"{guidance_context} 功能医学 报告解释")
+        specialty_terms: list[str] = []
+        for report in self._reviewed_specialty_reports(case):
+            if report.report_type == "gut_function":
+                specialty_terms.extend(metric.name for metric in report.metrics)
+            elif report.report_type == "gut_microbiome":
+                specialty_terms.extend(("肠道菌群多样性", "肠型", "优势菌属", "饮食多样性"))
+            elif report.report_type == "chronic_food_sensitivity":
+                specialty_terms.extend(("慢性食物敏感", "IgG", "饮食观察", "食物重新引入"))
+        if specialty_terms:
+            queries.append(f"{' '.join(list(dict.fromkeys(specialty_terms))[:12])} 功能医学 指标解释 复查 生活方式")
 
         deduped = []
         seen = set()
@@ -2959,6 +3313,12 @@ class RecommendationService:
                 portrait.append(f"其次需要同步跟进：{next_titles}。")
         if "gut_support" in context.lifestyle_tags:
             portrait.append("问卷与症状提示肠道与消化支持可能参与当前问题表现。")
+        if context.gut_function_marker_codes:
+            portrait.append("已校对的肠道功能健康评估已纳入本次系统分析，异常结果仍需结合临床症状确认。")
+        if context.microbiome_background:
+            portrait.append("已校对的肠道菌群结果作为饮食与生活方式背景参考，不单独用于选择营养素。")
+        if context.food_sensitivity_reported:
+            portrait.append("慢性食物敏感结果用于制定阶段性饮食观察，不等同于 IgE 食物过敏诊断。")
         if "stress_support" in context.lifestyle_tags or "sleep_recovery" in context.lifestyle_tags:
             portrait.append("睡眠恢复和压力调节是当前方案中的基础优先级。")
         if "sedentary_risk" in context.lifestyle_tags:
@@ -3003,7 +3363,7 @@ class RecommendationService:
         if self._has_marker(context, "ferritin", "low") and "iron_repletion" not in priority_system_ids:
             analysis.append("铁储备/造血支持（重点跟进）：铁蛋白偏低提示储备不足，可能与疲劳、恢复差、头晕或注意力下降有关。")
 
-        if "gut_support" in context.lifestyle_tags or questionnaire and questionnaire.food_sensitivities:
+        if "gut_support" in context.lifestyle_tags or context.food_sensitivity_reported or questionnaire and questionnaire.food_sensitivities:
             if "gut_digestive" not in priority_system_ids:
                 analysis.append("消化系统/肠道（重点跟进）：腹胀、排便波动、食物敏感或外食偏多时，往往需要先处理消化道负担和饮食触发因素。")
 
@@ -3069,14 +3429,11 @@ class RecommendationService:
         return formatted
 
     def _first_month_dosage(self, product: ProductRule) -> str:
-        first_month_rules = {
-            "sku_liver_detox_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；连续 4 周后根据肝胆指标和胃肠耐受调整。",
-            "sku_amino_acid_detox": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；用于首月二阶段解毒支持，需结合肝肾功能人工确认。",
-            "sku_thyroid_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒；若正在使用甲状腺药物，需与药物错开并人工确认。",
-            "sku_fish_oil_rtg": "每日 4 粒，早餐 2 粒、午餐 2 粒，随含脂肪餐食用；如有出血风险或抗凝药物需人工确认。",
-            "sku_magnesium_glycinate": "每日 4 粒，睡前 30-60 分钟使用；若出现腹泻、肾功能异常或正在补镁需人工确认。",
-        }
-        return first_month_rules.get(product.sku_id, product.dosage_rule)
+        profile = self.product_dosage_profiles.get(product.sku_id, {})
+        reviewed_dosage = str(profile.get("baseline_dosage_candidate") or "").strip()
+        if profile.get("review_status") == "reviewed" and reviewed_dosage:
+            return reviewed_dosage
+        return product.dosage_rule
 
     def _first_month_focus_summary(self, recommended_items: list[DraftRecommendationItem]) -> str:
         focus_rules = [
@@ -3174,6 +3531,24 @@ class RecommendationService:
             prescription.append(f"外食策略：当前外食频率为 {questionnaire.dining_out_frequency}，建议先把外食控制在可计划场景，优先选择清蒸/炖煮、足量蛋白和蔬菜。")
         if questionnaire and questionnaire.food_sensitivities:
             prescription.append(f"触发食物观察：已记录食物敏感为 {'、'.join(questionnaire.food_sensitivities[:4])}，建议先做4周回避和症状记录。")
+        for report in self._reviewed_specialty_reports(case):
+            if report.report_type == "chronic_food_sensitivity":
+                foods = [*report.high_foods, *report.moderate_foods, *report.mild_foods]
+                if foods:
+                    prescription.append(
+                        f"慢性食物敏感观察：可优先围绕 {'、'.join(foods[:8])} 做有期限的饮食与症状记录；"
+                        "该结果不等同于 IgE 食物过敏，长期回避或重新引入方案需由医生确认。"
+                    )
+            elif report.report_type == "gut_microbiome":
+                prescription.append(
+                    "菌群结果应用：将已校对的菌群多样性和优势菌属作为饮食多样性、膳食纤维耐受与排便趋势的背景，"
+                    "不依据疾病风险评分自行加用产品。"
+                )
+            elif report.report_type == "gut_function":
+                prescription.append(
+                    "肠道功能结果应用：围绕已确认的炎症、屏障、黏膜免疫或消化功能异常记录症状变化；"
+                    "若钙卫蛋白升高或出现便血、发热、持续腹痛，应优先临床评估。"
+                )
         if questionnaire and questionnaire.supplement_use:
             prescription.append("补剂执行：现有补充剂不要和新方案一次性全部叠加，先确认名称、剂量、服用时间和耐受性。")
         prescription.extend(lifestyle_actions)
@@ -3214,6 +3589,10 @@ class RecommendationService:
             items.append("2-3个月完善：25(OH)D、hs-CRP 或其他炎症相关指标，用于确认免疫与抗炎支持是否需要调整。")
         if self._has_gut_or_bile_pattern(context):
             items.append("可选功能医学检测：若腹胀、便秘、腹泻或食物反应持续，可做肠道菌群/消化吸收/食物不耐受评估，用于细化饮食和肠道策略。")
+        if self._has_marker(context, "fecal_calprotectin", "high"):
+            items.append("临床优先复核：粪便钙卫蛋白已高于报告参考范围，建议结合消化道症状由医生判断复查节奏及是否需要进一步临床检查。")
+        elif context.gut_function_marker_codes:
+            items.append("肠道功能随访：按原报告参考范围复核异常的屏障、黏膜免疫或消化功能指标，并与症状和排便趋势同步记录。")
         if self._has_neuro_sleep_pattern(context):
             items.append("可选功能医学检测：若睡眠、疲劳和压力恢复仍明显，可考虑皮质醇节律、营养缺口或线粒体相关评估。")
         if anti_aging_findings:
@@ -3261,7 +3640,11 @@ class RecommendationService:
         ]
         if self._has_thyroid_pattern(context):
             plan.append("如存在甲状腺相关异常，优先跟踪甲状腺症状、复查节奏与药物/营养素使用间隔。")
-        return plan[:4]
+        if self._has_marker(context, "fecal_calprotectin", "high"):
+            plan.append("肠道炎症复核：不要等待常规营养随访周期，如有持续腹痛、发热、便血或体重下降，应及时临床就诊。")
+        elif context.gut_function_marker_codes or context.microbiome_background:
+            plan.append("肠道随访：同步记录排便、腹胀、食物反应和饮食多样性，复查时以症状与已确认指标趋势共同判断。")
+        return plan[:5]
 
     def _build_ninety_day_roadmap(
         self,

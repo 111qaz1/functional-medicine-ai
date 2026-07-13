@@ -274,7 +274,7 @@
       "precision_level": "precise",
       "primary_axes": ["gut_mucosa"],
       "secondary_axes": ["digestive_enzyme", "immune"],
-      "marker_tags": [],
+      "marker_tags": ["zonulin:high", "anti_gliadin_siga:high", "anti_httg_siga:high", "secretory_iga:low"],
       "symptom_tags": ["胃部不适", "胃痛", "胃黏膜", "腹痛", "胃炎"],
       "condition_tags": [],
       "goal_tags": ["胃黏膜支持", "消化支持"],

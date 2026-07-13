@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,6 +78,12 @@ class ReviewStatus(str, Enum):
     pending = "pending"
 
 
+class SpecialtyReviewStatus(str, Enum):
+    pending_review = "pending_review"
+    reviewed = "reviewed"
+    needs_review = "needs_review"
+
+
 class ClinicianRuleAction(str, Enum):
     boost = "boost"
     avoid = "avoid"
@@ -125,6 +131,69 @@ class CaseIndicator(StrictModel):
     status: IndicatorStatus = IndicatorStatus.info
     category: str = "case_text"
     source_span: SourceSpan
+
+
+class SpecialtyMetric(StrictModel):
+    code: str
+    name: str
+    value: float | None = None
+    raw_value: str | None = None
+    unit: str | None = None
+    ref_range: ReferenceRange = Field(default_factory=ReferenceRange)
+    abnormal_flag: AbnormalFlag = AbnormalFlag.unknown
+    interpretation: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_span: SourceSpan
+
+
+class SpecialtyReportBase(StrictModel):
+    id: str
+    file_id: str
+    review_status: SpecialtyReviewStatus = SpecialtyReviewStatus.pending_review
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_pages: list[int] = Field(default_factory=list)
+    needs_manual_review: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    summary_lines: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class ChronicFoodSensitivityReport(SpecialtyReportBase):
+    report_type: Literal["chronic_food_sensitivity"] = "chronic_food_sensitivity"
+    mild_foods: list[str] = Field(default_factory=list)
+    moderate_foods: list[str] = Field(default_factory=list)
+    high_foods: list[str] = Field(default_factory=list)
+    interpretations: list[str] = Field(default_factory=list)
+
+
+class GutFunctionReport(SpecialtyReportBase):
+    report_type: Literal["gut_function"] = "gut_function"
+    metrics: list[SpecialtyMetric] = Field(default_factory=list)
+    interpretations: list[str] = Field(default_factory=list)
+
+
+class GutMicrobiomeReport(SpecialtyReportBase):
+    report_type: Literal["gut_microbiome"] = "gut_microbiome"
+    health_score: float | None = None
+    diversity_index: float | None = None
+    diversity_reference: ReferenceRange = Field(default_factory=ReferenceRange)
+    detected_genera_count: int | None = None
+    dominant_genus: str | None = None
+    stability: str | None = None
+    diversity_status: str | None = None
+    enterotype: str | None = None
+    harmful_or_elevated_genera: list[str] = Field(default_factory=list)
+    low_beneficial_genera: list[str] = Field(default_factory=list)
+    risk_categories: list[str] = Field(default_factory=list)
+    prominent_risks: list[str] = Field(default_factory=list)
+    nutrient_impacts: list[str] = Field(default_factory=list)
+    summary_recommendation: str | None = None
+
+
+SpecialtyReportResult = Annotated[
+    ChronicFoodSensitivityReport | GutFunctionReport | GutMicrobiomeReport,
+    Field(discriminator="report_type"),
+]
 
 
 class ConsentRecord(StrictModel):
@@ -201,6 +270,7 @@ class CaseRecord(StrictModel):
     questionnaire: Questionnaire | None = None
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[CaseIndicator] = Field(default_factory=list)
+    specialty_reports: list[SpecialtyReportResult] = Field(default_factory=list)
     draft_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     parsing_review_completed: bool = False
@@ -208,6 +278,7 @@ class CaseRecord(StrictModel):
     parsing_reviewed_by: str | None = None
     parsing_missing_fields: list[str] = Field(default_factory=list)
     parsing_review_notes: str | None = None
+    parsing_revision: int = 0
 
 
 class KnowledgeStatement(StrictModel):
@@ -316,6 +387,10 @@ class RecommendationDraft(StrictModel):
     prompt_version: str
     rule_version: str
     generated_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    revision: int = 1
+    last_edited_by: str | None = None
+    last_edit_reason: str | None = None
 
 
 class ReviewDecision(StrictModel):

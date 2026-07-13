@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 import time
 import uuid
@@ -10,9 +11,16 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.models import AnalysisMode, DoctorAccount, UploadedFile, WorkspaceScope
+from app.domain.models import (
+    AnalysisMode,
+    DoctorAccount,
+    ExtractedLabItem,
+    SpecialtyReportResult,
+    UploadedFile,
+    WorkspaceScope,
+)
 from app.services.prescription_advice import PrescriptionAdviceService
 
 
@@ -20,6 +28,10 @@ router = APIRouter(prefix="/api/v1", tags=["external-api"])
 bearer_scheme = HTTPBearer(auto_error=False)
 EXTERNAL_TRUST_SECRET_ENV = "FM_EXTERNAL_TRUST_SHARED_SECRET"
 EXTERNAL_TRUST_MAX_SKEW_SECONDS = 300
+
+
+class ExternalStrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ExternalTokenRequest(BaseModel):
@@ -59,6 +71,7 @@ class ExternalAttachmentResult(BaseModel):
     attachment_type: str
     status: str
     lab_item_count: int = 0
+    specialty_report_count: int = 0
     parse_warnings: list[str] = Field(default_factory=list)
 
 
@@ -83,6 +96,8 @@ class ExternalNutritionRecommendationResponse(BaseModel):
     status: str
     manual_review_required: bool
     confidence: float
+    revision: int
+    editable_fields: list[str] = Field(default_factory=list)
     recommendations: list[ExternalNutritionRecommendation] = Field(default_factory=list)
     contraindications: list[str] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
@@ -100,6 +115,54 @@ class ExternalReportDownloadResponse(BaseModel):
     draft_id: str
     filename: str
     download_url: str
+
+
+class ExternalParsingFile(BaseModel):
+    file_id: str
+    filename: str
+    parse_status: str
+    parse_confidence: float
+    corrected_text: str | None = None
+    needs_manual_review: bool
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class ExternalParsingReviewResponse(BaseModel):
+    case_id: str
+    revision: int
+    review_completed: bool
+    files: list[ExternalParsingFile] = Field(default_factory=list)
+    normalized_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
+    specialty_reports: list[SpecialtyReportResult] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    editable_fields: list[str] = Field(default_factory=list)
+
+
+class ExternalParsingFileUpdate(ExternalStrictModel):
+    file_id: str = Field(min_length=1)
+    corrected_text: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class ExternalParsingReviewRequest(ExternalStrictModel):
+    expected_revision: int = Field(ge=0)
+    files: list[ExternalParsingFileUpdate]
+    normalized_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
+    specialty_reports: list[SpecialtyReportResult] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    review_notes: str | None = Field(default=None, max_length=1000)
+
+
+class ExternalNutritionRecommendationPatchItem(ExternalStrictModel):
+    sku_id: str = Field(min_length=1, max_length=100)
+    dosage: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ExternalNutritionRecommendationPatchRequest(ExternalStrictModel):
+    expected_revision: int = Field(ge=1)
+    recommendations: list[ExternalNutritionRecommendationPatchItem] = Field(max_length=12)
+    edit_reason: str | None = Field(default=None, max_length=300)
 
 
 def _container(request: Request):
@@ -193,10 +256,120 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
         status=getattr(draft.status, "value", str(draft.status)),
         manual_review_required=draft.manual_review_required,
         confidence=draft.confidence,
+        revision=draft.revision,
+        editable_fields=(
+            ["recommendations.order", "recommendations.sku_id", "recommendations.dosage", "recommendations.reason"]
+            if getattr(draft.status, "value", str(draft.status)) == "pending_review"
+            and not container.repository.get_review_decision(draft.id)
+            else []
+        ),
         recommendations=recommendations,
         contraindications=draft.contraindications,
         missing_info=draft.missing_info,
     )
+
+
+def _parsing_review_response(case) -> ExternalParsingReviewResponse:
+    return ExternalParsingReviewResponse(
+        case_id=case.id,
+        revision=case.parsing_revision,
+        review_completed=case.parsing_review_completed,
+        files=[
+            ExternalParsingFile(
+                file_id=item.id,
+                filename=item.filename,
+                parse_status=getattr(item.parse_status, "value", str(item.parse_status)),
+                parse_confidence=item.parse_confidence,
+                corrected_text=item.corrected_text,
+                needs_manual_review=item.needs_manual_review,
+                missing_fields=item.missing_fields,
+            )
+            for item in case.files
+        ],
+        normalized_lab_items=case.extracted_lab_items,
+        specialty_reports=case.specialty_reports,
+        missing_fields=case.parsing_missing_fields,
+        editable_fields=[
+            "files.corrected_text",
+            "normalized_lab_items",
+            "specialty_reports",
+            "missing_fields",
+            "review_notes",
+        ],
+    )
+
+
+def _finite_or_none(value: float | None) -> bool:
+    return value is None or math.isfinite(value)
+
+
+def _validate_external_parsing_review(container, case, payload: ExternalParsingReviewRequest) -> None:
+    valid_file_ids = {item.id for item in case.files}
+    update_file_ids = {item.file_id for item in payload.files}
+    if update_file_ids != valid_file_ids or len(update_file_ids) != len(payload.files):
+        raise HTTPException(status_code=422, detail="files must contain each case attachment exactly once")
+
+    markers_by_code = {
+        str(item.get("code") or ""): item
+        for item in container.parsing_service.normalization_service.markers
+    }
+    for item in payload.normalized_lab_items:
+        if item.marker_code not in markers_by_code:
+            raise HTTPException(status_code=422, detail=f"Unknown marker_code: {item.marker_code}")
+        if item.source_span.file_id not in valid_file_ids:
+            raise HTTPException(status_code=422, detail="Lab item source does not belong to this case")
+        values = (
+            item.value,
+            item.normalized_value,
+            item.ref_range.lower,
+            item.ref_range.upper,
+        )
+        if not all(_finite_or_none(value) for value in values):
+            raise HTTPException(status_code=422, detail=f"Non-finite value for marker: {item.marker_code}")
+        if (
+            item.ref_range.lower is not None
+            and item.ref_range.upper is not None
+            and item.ref_range.lower > item.ref_range.upper
+        ):
+            raise HTTPException(status_code=422, detail=f"Invalid reference range for marker: {item.marker_code}")
+        expected_unit = str(markers_by_code[item.marker_code].get("normalized_unit") or "").strip()
+        if expected_unit and item.normalized_unit and item.normalized_unit != expected_unit:
+            raise HTTPException(status_code=422, detail=f"Invalid normalized unit for marker: {item.marker_code}")
+
+    original_reports = {report.id: report for report in case.specialty_reports}
+    submitted_report_ids = {report.id for report in payload.specialty_reports}
+    if submitted_report_ids != set(original_reports) or len(submitted_report_ids) != len(payload.specialty_reports):
+        raise HTTPException(status_code=422, detail="specialty_reports must contain each parsed report exactly once")
+
+    report_ids: set[str] = set()
+    for report in payload.specialty_reports:
+        if report.id in report_ids:
+            raise HTTPException(status_code=422, detail="Duplicate specialty report id")
+        report_ids.add(report.id)
+        original = original_reports[report.id]
+        if report.report_type != original.report_type or report.file_id != original.file_id:
+            raise HTTPException(status_code=422, detail="Specialty report identity does not match parsed source")
+        if report.file_id not in valid_file_ids:
+            raise HTTPException(status_code=422, detail="Specialty report source does not belong to this case")
+        original_metric_codes = [metric.code for metric in getattr(original, "metrics", [])]
+        submitted_metric_codes = [metric.code for metric in getattr(report, "metrics", [])]
+        if (
+            len(set(submitted_metric_codes)) != len(submitted_metric_codes)
+            or set(submitted_metric_codes) != set(original_metric_codes)
+        ):
+            raise HTTPException(status_code=422, detail="Specialty metric codes do not match parsed report")
+        for metric in getattr(report, "metrics", []):
+            if metric.source_span.file_id != report.file_id:
+                raise HTTPException(status_code=422, detail="Specialty metric source does not match its report")
+            values = (metric.value, metric.ref_range.lower, metric.ref_range.upper)
+            if not all(_finite_or_none(value) for value in values):
+                raise HTTPException(status_code=422, detail=f"Non-finite specialty metric: {metric.code}")
+            if (
+                metric.ref_range.lower is not None
+                and metric.ref_range.upper is not None
+                and metric.ref_range.lower > metric.ref_range.upper
+            ):
+                raise HTTPException(status_code=422, detail=f"Invalid specialty reference range: {metric.code}")
 
 
 def _prescription_items_response(container, draft) -> ExternalPrescriptionItemsResponse:
@@ -297,14 +470,23 @@ async def upload_external_attachments(
             storage_uri=container.recommendation_service.object_store.save(filename, content),
         )
         case = container.case_service.add_uploaded_file(case.id, uploaded_file)
-        extraction, lab_items = container.parsing_service.parse(
+        extraction, lab_items, specialty_reports = container.parsing_service.parse_with_specialty_reports(
             filename=uploaded_file.filename,
             content_type=uploaded_file.content_type,
             content=content,
+            file_id=uploaded_file.id,
         )
         parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
             spans=extraction.spans,
             lab_items=lab_items,
+        )
+        parse_warnings = list(
+            dict.fromkeys(
+                [
+                    *parse_warnings,
+                    *(warning for report in specialty_reports for warning in report.warnings),
+                ]
+            )
         )
         case = container.case_service.attach_parse_results(
             case.id,
@@ -314,6 +496,7 @@ async def upload_external_attachments(
             source_spans=extraction.spans,
             lab_items=lab_items,
             parse_warnings=parse_warnings,
+            specialty_reports=specialty_reports,
         )
         parsed_file = next((item for item in case.files if item.id == uploaded_file.id), uploaded_file)
         results.append(
@@ -323,6 +506,7 @@ async def upload_external_attachments(
                 attachment_type=attachment_type,
                 status=getattr(parsed_file.parse_status, "value", str(parsed_file.parse_status)),
                 lab_item_count=len(lab_items),
+                specialty_report_count=len(specialty_reports),
                 parse_warnings=parse_warnings,
             )
         )
@@ -332,6 +516,43 @@ async def upload_external_attachments(
         status=getattr(case.status, "value", str(case.status)),
         results=results,
     )
+
+
+@router.get("/cases/{case_id}/parsing-review", response_model=ExternalParsingReviewResponse)
+def get_external_parsing_review(
+    case_id: str,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    case = _require_owned_case(_container(request), case_id, doctor)
+    return _parsing_review_response(case)
+
+
+@router.put("/cases/{case_id}/parsing-review", response_model=ExternalParsingReviewResponse)
+def save_external_parsing_review(
+    case_id: str,
+    payload: ExternalParsingReviewRequest,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    container = _container(request)
+    case = _require_owned_case(container, case_id, doctor)
+    _validate_external_parsing_review(container, case, payload)
+    try:
+        case = container.case_service.review_parsing(
+            case_id,
+            reviewer_id=doctor.id,
+            file_updates=[item.model_dump() for item in payload.files],
+            normalized_lab_items=payload.normalized_lab_items,
+            specialty_reports=payload.specialty_reports,
+            missing_fields=payload.missing_fields,
+            review_notes=payload.review_notes,
+            expected_revision=payload.expected_revision,
+        )
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "parsing_revision_conflict" else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return _parsing_review_response(case)
 
 
 @router.post("/cases/{case_id}/nutrition-recommendations", response_model=ExternalNutritionRecommendationResponse)
@@ -362,6 +583,42 @@ def get_latest_external_nutrition_recommendations(
     draft = container.repository.get_draft(case.draft_ids[-1])
     if not draft:
         raise HTTPException(status_code=404, detail="Latest draft not found")
+    return _nutrition_response(container, draft)
+
+
+@router.get("/drafts/{draft_id}/nutrition-recommendations", response_model=ExternalNutritionRecommendationResponse)
+def get_external_draft_nutrition_recommendations(
+    draft_id: str,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    container = _container(request)
+    _, draft = _require_owned_draft(container, draft_id, doctor)
+    return _nutrition_response(container, draft)
+
+
+@router.patch("/drafts/{draft_id}/nutrition-recommendations", response_model=ExternalNutritionRecommendationResponse)
+def patch_external_draft_nutrition_recommendations(
+    draft_id: str,
+    payload: ExternalNutritionRecommendationPatchRequest,
+    request: Request,
+    doctor: DoctorAccount = Depends(_require_external_doctor),
+):
+    container = _container(request)
+    _require_owned_draft(container, draft_id, doctor)
+    try:
+        draft = container.recommendation_service.update_draft_nutrition_recommendations(
+            draft_id,
+            expected_revision=payload.expected_revision,
+            recommendations=[item.model_dump() for item in payload.recommendations],
+            actor_id=doctor.id,
+            edit_reason=payload.edit_reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        status_code = 409 if str(exc) in {"draft_revision_conflict", "draft_not_editable"} else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return _nutrition_response(container, draft)
 
 

@@ -280,7 +280,19 @@ Content-Type: multipart/form-data
 
 `case` 用于上传体检报告、检验报告、病例资料；`questionnaire` 用于上传已填写问卷。
 
-### 7.4 生成营养推荐草案
+支持专用识别的报告包括慢性食物敏感、肠道功能健康评估和肠道菌群。自动识别结果必须先通过解析校对接口保存，才能进入推荐上下文。
+
+### 7.4 读取与保存解析校对
+
+```http
+GET /api/v1/cases/{case_id}/parsing-review
+PUT /api/v1/cases/{case_id}/parsing-review
+Authorization: Bearer <access_token>
+```
+
+读取响应包含 `revision`、文件解析结果、标准化指标、专用报告结果和缺失项。保存时提交 `expected_revision`；版本过期返回 `409 parsing_revision_conflict`。医生身份由 Bearer Token 确定，不能由请求正文指定。
+
+### 7.5 生成营养推荐草案
 
 ```http
 POST /api/v1/cases/{case_id}/nutrition-recommendations
@@ -292,20 +304,34 @@ Authorization: Bearer <access_token>
 - `draft_id`
 - `manual_review_required`
 - `confidence`
+- `revision`
+- `editable_fields`
 - `recommendations`
 - `contraindications`
 - `missing_info`
 
 该接口只生成草案，不自动发布最终报告。草案需人工审核后发布。
 
-### 7.5 获取最近一次推荐草案
+### 7.6 获取最近一次推荐草案
 
 ```http
 GET /api/v1/cases/{case_id}/nutrition-recommendations/latest
 Authorization: Bearer <access_token>
 ```
 
-### 7.6 获取处方信息
+### 7.7 读取与修改待审营养素草案
+
+```http
+GET /api/v1/drafts/{draft_id}/nutrition-recommendations
+PATCH /api/v1/drafts/{draft_id}/nutrition-recommendations
+Authorization: Bearer <access_token>
+```
+
+PATCH 可修改产品顺序、删除或添加已启用产品、调整剂量和医生理由。请求必须携带 `expected_revision`。警告、禁忌和证据字段由服务端维护，客户端不能提交或删除。已发布草案禁止修改，最终发布仍由内部工作台完成。
+
+完整字段字典和错误码见 `docs/肠道报告识别与外部编辑接口.md`。
+
+### 7.8 获取处方信息
 
 ```http
 GET /api/v1/drafts/{draft_id}/prescription-items
@@ -334,7 +360,7 @@ Authorization: Bearer <access_token>
 - 最终审核报告和 PDF 会在“首月营养素干预方案”之后展示“总医嘱说明”。
 - 医生只能读取自己病例下的草案。
 
-### 7.7 获取报告下载地址
+### 7.9 获取报告下载地址
 
 ```http
 GET /api/v1/drafts/{draft_id}/report-download
@@ -343,7 +369,7 @@ Authorization: Bearer <access_token>
 
 已审核发布的草案返回下载地址。未审核草案返回 `409`。
 
-### 7.8 下载 PDF 报告
+### 7.10 下载 PDF 报告
 
 ```http
 GET /api/v1/drafts/{draft_id}/report.pdf
@@ -407,6 +433,7 @@ npx newman run postman/external_api.postman_collection.json -e postman/external_
 处理：
 
 - 确认 `.env` 中 `NEXT_PUBLIC_API_BASE_URL` 是浏览器可访问的后端地址。
+- 使用自定义 `FRONTEND_PORT` 时，Compose 会把该端口传给后端 CORS 允许列表；修改后需重启后端。
 - 修改该变量后重新构建前端镜像。
 
 ### 大模型不可用

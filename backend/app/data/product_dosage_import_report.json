@@ -1,0 +1,159 @@
+{
+  "generated_on": "2026-07-11",
+  "source_product_count": 31,
+  "mapped_product_count": 29,
+  "pending_review_count": 29,
+  "conflict_count": 27,
+  "conflicts": [
+    {
+      "sku_id": "sku_super_anti_inflammatory",
+      "catalog_fallback": "每日 1 粒，随餐使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_magnesium_glycinate",
+      "catalog_fallback": "每日 1 粒，晚间或放松场景下使用。",
+      "source_baseline_candidate": "每日 1 粒，随餐服用(早餐或午餐后)。"
+    },
+    {
+      "sku_id": "sku_blood_sugar_complex",
+      "catalog_fallback": "每日 1 粒，早餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，随餐服用(早餐后)。"
+    },
+    {
+      "sku_id": "sku_weight_support",
+      "catalog_fallback": "每日 1 粒，白天随餐使用。",
+      "source_baseline_candidate": "每日 2 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_liposomal_vitamin_c_500",
+      "catalog_fallback": "每日 1 粒，餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后或空腹服用。"
+    },
+    {
+      "sku_id": "sku_mitochondrial_support",
+      "catalog_fallback": "每日 1 粒，早餐或午餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_ashwagandha_stress_balance",
+      "catalog_fallback": "每日 1 粒，傍晚或晚间使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后或下午服用。"
+    },
+    {
+      "sku_id": "sku_cardiac_support",
+      "catalog_fallback": "每日 1 粒，餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_sleep_support",
+      "catalog_fallback": "睡前 1 粒。",
+      "source_baseline_candidate": "每日 1 粒，睡前 30 分钟服用。"
+    },
+    {
+      "sku_id": "sku_thyroid_support",
+      "catalog_fallback": "每日 1 粒，早餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_fish_oil_rtg",
+      "catalog_fallback": "每日 1 粒，随含脂肪餐食用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_vitamin_d3_k",
+      "catalog_fallback": "每日 1 粒，随餐使用。",
+      "source_baseline_candidate": "每周 3 粒，随餐服用。"
+    },
+    {
+      "sku_id": "sku_selenium_vitamin_e",
+      "catalog_fallback": "每日 1 粒，随餐使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_neuro_cognitive",
+      "catalog_fallback": "每日 1 粒，白天使用。",
+      "source_baseline_candidate": "每日 2 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_coq10",
+      "catalog_fallback": "每日 1 粒，随餐使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_plant_multi_mineral",
+      "catalog_fallback": "每日 1 粒，早餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_stomach_acid_support",
+      "catalog_fallback": "随正餐使用，每次 1 粒。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_dhea",
+      "catalog_fallback": "仅在人工确认后使用，默认每日 1 粒。",
+      "source_baseline_candidate": "每日 1 粒(25mg)，随餐服用。"
+    },
+    {
+      "sku_id": "sku_polaprezinc",
+      "catalog_fallback": "每日 1 粒，餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，餐后服用。"
+    },
+    {
+      "sku_id": "sku_bile_flow_support",
+      "catalog_fallback": "每日 1 粒，随主餐使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_zinc_complex",
+      "catalog_fallback": "每日 1 粒，餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后服用。"
+    },
+    {
+      "sku_id": "sku_immune_support",
+      "catalog_fallback": "每日 1 粒，餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_herbal_antimicrobial",
+      "catalog_fallback": "每日 1 粒，随餐或按顾问建议使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_liver_detox_support",
+      "catalog_fallback": "每日 1 粒，早餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_b_complex",
+      "catalog_fallback": "每日 1 粒，早餐后使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    },
+    {
+      "sku_id": "sku_trans_resveratrol",
+      "catalog_fallback": "每日 1 粒，白天随餐使用。",
+      "source_baseline_candidate": "每日 1 粒，早餐后服用。"
+    },
+    {
+      "sku_id": "sku_female_hormone_balance",
+      "catalog_fallback": "仅在顾问确认后使用，通常每日 1 粒。",
+      "source_baseline_candidate": "每日 1 粒，早餐后随餐服用。"
+    }
+  ],
+  "missing_source_dosage_skus": [
+    "sku_amino_acid_detox"
+  ],
+  "unmapped_source_sequences": [],
+  "disabled_source_products": [
+    {
+      "source_sequence": 25,
+      "source_name": "综合消化酶"
+    },
+    {
+      "source_sequence": 26,
+      "source_name": "复合益生菌"
+    }
+  ],
+  "activation_note": "逐项人工确认后，将对应 review_status 改为 reviewed；服务仅使用 reviewed 的基础剂量。"
+}

@@ -324,6 +324,161 @@ class ExternalApiTests(unittest.TestCase):
         for forbidden in ("关联度", "命中产品标签", "RAG内部审查", "product:", "治疗", "治愈", "疗效"):
             self.assertNotIn(forbidden, serialized)
 
+    def test_external_parsing_review_uses_server_identity_and_revision_lock(self) -> None:
+        token = self._external_token(self.client, "doctor-parse", "解析医生")
+        created = self.client.post(
+            "/api/v1/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_name": "解析接口测试"},
+        )
+        case_id = created.json()["case_id"]
+        uploaded = self.client.post(
+            f"/api/v1/cases/{case_id}/attachments",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"files": ("labs.txt", "空腹血糖 6.2 mmol/L 3.9-5.6", "text/plain")},
+            data={"attachment_type": "case"},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+
+        review = self.client.get(
+            f"/api/v1/cases/{case_id}/parsing-review",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(review.status_code, 200, review.text)
+        body = review.json()
+        self.assertFalse(body["review_completed"])
+        payload = {
+            "expected_revision": body["revision"],
+            "files": [
+                {
+                    "file_id": item["file_id"],
+                    "corrected_text": item["corrected_text"],
+                    "missing_fields": item["missing_fields"],
+                }
+                for item in body["files"]
+            ],
+            "normalized_lab_items": body["normalized_lab_items"],
+            "specialty_reports": body["specialty_reports"],
+            "missing_fields": [],
+            "review_notes": "已核对",
+        }
+        fabricated = dict(payload)
+        fabricated["specialty_reports"] = [
+            {
+                "id": "specialty_fabricated",
+                "file_id": body["files"][0]["file_id"],
+                "report_type": "gut_microbiome",
+            }
+        ]
+        fabricated_response = self.client.put(
+            f"/api/v1/cases/{case_id}/parsing-review",
+            headers={"Authorization": f"Bearer {token}"},
+            json=fabricated,
+        )
+        self.assertEqual(fabricated_response.status_code, 422, fabricated_response.text)
+
+        saved = self.client.put(
+            f"/api/v1/cases/{case_id}/parsing-review",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()["review_completed"])
+        self.assertEqual(saved.json()["revision"], body["revision"] + 1)
+        stored_case = self.container.case_service.get_case(case_id)
+        self.assertEqual(stored_case.parsing_reviewed_by, stored_case.owner_doctor_id)
+
+        stale = self.client.put(
+            f"/api/v1/cases/{case_id}/parsing-review",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+
+    def test_external_draft_edit_rebuilds_safety_fields_and_locks_revision(self) -> None:
+        token, _, generated = self._external_case_with_draft(
+            doctor_id="doctor-edit",
+            doctor_name="草案编辑医生",
+        )
+        draft_id = generated["draft_id"]
+        current = self.client.get(
+            f"/api/v1/drafts/{draft_id}/nutrition-recommendations",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(current.status_code, 200, current.text)
+        body = current.json()
+        first = body["recommendations"][0]
+
+        tampered = self.client.patch(
+            f"/api/v1/drafts/{draft_id}/nutrition-recommendations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "expected_revision": body["revision"],
+                "recommendations": [
+                    {
+                        "sku_id": first["sku_id"],
+                        "dosage": "每日 1 粒，随餐服用。",
+                        "reason": "医生结合已校对指标后保留。",
+                        "warnings": [],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(tampered.status_code, 422, tampered.text)
+
+        edited = self.client.patch(
+            f"/api/v1/drafts/{draft_id}/nutrition-recommendations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "expected_revision": body["revision"],
+                "recommendations": [
+                    {
+                        "sku_id": first["sku_id"],
+                        "dosage": "每日 1 粒，随餐服用。",
+                        "reason": "医生结合已校对指标、用药和耐受情况后保留。",
+                    }
+                ],
+                "edit_reason": "调整顺序与基础剂量",
+            },
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        edited_body = edited.json()
+        self.assertEqual(edited_body["revision"], body["revision"] + 1)
+        self.assertEqual(len(edited_body["recommendations"]), 1)
+        self.assertTrue(edited_body["recommendations"][0]["warnings"])
+
+        stale = self.client.patch(
+            f"/api/v1/drafts/{draft_id}/nutrition-recommendations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "expected_revision": body["revision"],
+                "recommendations": [
+                    {
+                        "sku_id": first["sku_id"],
+                        "dosage": "每日 1 粒。",
+                        "reason": "过期修改不得覆盖新版本。",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+
+        illegal = self.client.patch(
+            f"/api/v1/drafts/{draft_id}/nutrition-recommendations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "expected_revision": edited_body["revision"],
+                "recommendations": [
+                    {
+                        "sku_id": "sku_disabled_probiotic",
+                        "dosage": "每日 1 粒。",
+                        "reason": "不得添加禁用或目录外产品。",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(illegal.status_code, 422, illegal.text)
+
 
 if __name__ == "__main__":
     unittest.main()

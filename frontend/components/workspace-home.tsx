@@ -156,18 +156,27 @@ export function WorkspaceHome() {
           )}
 
           <div className="hero__stats">
-            <Link href="/products" className="hero__stat hero__stat--link">
-              <strong>SKU</strong>
-              <span>产品规则</span>
-            </Link>
-            <Link href="/assistant" className="hero__stat hero__stat--link">
-              <strong>AI</strong>
-              <span>智慧助手</span>
-            </Link>
-            <Link href="/llm-config" className="hero__stat hero__stat--link">
-              <strong>模型</strong>
-              <span>API 配置</span>
-            </Link>
+            {doctor?.role === "admin" ? (
+              <>
+                <Link href="/products" className="hero__stat hero__stat--link">
+                  <strong>SKU</strong>
+                  <span>产品规则</span>
+                </Link>
+                <Link href="/assistant" className="hero__stat hero__stat--link">
+                  <strong>AI</strong>
+                  <span>智慧助手规则</span>
+                </Link>
+                <Link href="/llm-config" className="hero__stat hero__stat--link">
+                  <strong>模型</strong>
+                  <span>API 配置</span>
+                </Link>
+              </>
+            ) : (
+              <div className="hero__stat">
+                <strong>安全</strong>
+                <span>管理员配置已锁定</span>
+              </div>
+            )}
           </div>
         </aside>
       </header>

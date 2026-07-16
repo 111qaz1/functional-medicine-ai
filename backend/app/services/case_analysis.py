@@ -579,7 +579,9 @@ class CaseAnalysisService:
             self._assemble_and_validate(case, analysis)
             analysis.status = AnalysisStatus.ready_for_review
             return self._save(analysis)
-        except (httpx.HTTPError, ValidationError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        except Exception as exc:
+            # Every background failure must become a terminal state. Otherwise an
+            # unexpected parser/provider exception leaves the UI polling forever.
             analysis.status = AnalysisStatus.failed
             analysis.error_code = self._error_code(exc)
             analysis.error_message = str(exc)[:500]

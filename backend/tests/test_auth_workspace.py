@@ -236,6 +236,49 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(self.container.repository.list_clinician_rules(), [])
 
+    def test_admin_configuration_and_rule_mutations_are_protected(self) -> None:
+        self._register(self.client_a, "admin-user")
+        self._register(self.client_b, "doctor-user")
+
+        self.assertEqual(self.public_client.get("/system/llm-config").status_code, 401)
+        self.assertEqual(self.client_b.get("/system/llm-config").status_code, 403)
+        self.assertEqual(self.client_b.delete("/assistant/rules/not-found").status_code, 403)
+        self.assertEqual(self.client_a.get("/system/llm-config").status_code, 200)
+
+        changed = self.client_a.post(
+            "/auth/password",
+            json={"current_password": "secret123", "new_password": "new-secret-456"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.client_a.post("/auth/logout")
+        self.assertEqual(
+            self.client_a.post("/auth/login", json={"username": "admin-user", "password": "secret123"}).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client_a.post("/auth/login", json={"username": "admin-user", "password": "new-secret-456"}).status_code,
+            200,
+        )
+
+    def test_upload_response_reports_preparse_success(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "上传反馈病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+
+        uploaded = self.public_client.post(
+            f"/cases/{case_id}/files",
+            files={"file": ("lab.txt", "患者检验报告\n维生素D 18 ng/mL 参考范围 30-100", "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        operation = uploaded.json()["operation"]
+        self.assertTrue(operation["success"])
+        self.assertEqual(operation["stage"], "upload_preflight")
+        self.assertTrue(operation["parsing_succeeded"])
+        self.assertEqual(operation["progress_percent"], 100)
+
     def test_parsing_review_manual_indicator_is_persisted_and_displayed(self) -> None:
         created = self.public_client.post(
             "/cases",

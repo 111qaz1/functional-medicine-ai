@@ -1,0 +1,17 @@
+services:
+  backend:
+    env_file:
+      - path: E:/medicine-ai/functional-medicine-ai/.env
+        required: true
+    volumes:
+      - type: bind
+        source: E:/medicine-ai/functional-medicine-ai-deploy/.runtime
+        target: /app/.runtime
+      - type: bind
+        source: E:/medicine-ai/functional-medicine-ai-deploy/knowledge
+        target: /app/knowledge
+        read_only: true
+      - type: bind
+        source: E:/medicine-ai/functional-medicine-ai/bge-m3
+        target: /models/bge-m3
+        read_only: true

@@ -66,6 +66,85 @@ export interface UploadedFile {
   parse_status: FileParseStatus;
   needs_manual_review: boolean;
   missing_fields: string[];
+  content_sha256?: string | null;
+  intake_status: "uploaded" | "suspected_irrelevant" | "invalid";
+  page_count: number;
+  page_texts: Array<{ page: number; text: string }>;
+  is_scanned: boolean;
+  precheck_warning?: string | null;
+  validation_error?: string | null;
+}
+
+export type AnalysisStatus =
+  | "queued"
+  | "preparing"
+  | "analyzing_documents"
+  | "synthesizing"
+  | "validating"
+  | "ready_for_review"
+  | "reviewed"
+  | "stale"
+  | "failed";
+
+export interface AbnormalFinding {
+  id: string;
+  name: string;
+  result_text?: string | null;
+  raw_value?: string | null;
+  unit?: string | null;
+  reference_range?: string | null;
+  abnormal_flag: string;
+  interpretation?: string | null;
+  source_file_id: string;
+  source_file_name: string;
+  source_page: number;
+  source_text: string;
+  confidence: number;
+  evidence_status: "verified_text" | "needs_review" | "visual_model_only";
+  evidence_notes: string[];
+}
+
+export interface ChronicFoodSensitivityResult {
+  source_file_id: string;
+  source_file_name: string;
+  source_page: number;
+  mild_foods: string[];
+  moderate_foods: string[];
+  high_foods: string[];
+  interpretations: string[];
+  valid: boolean;
+  warning?: string | null;
+}
+
+export interface CaseAnalysis {
+  id: string;
+  case_id: string;
+  version: number;
+  status: AnalysisStatus;
+  snapshot_hash: string;
+  file_ids: string[];
+  model_version: string;
+  prompt_version: string;
+  progress_current: number;
+  progress_total: number;
+  current_file_name?: string | null;
+  case_summary?: string | null;
+  reviewed_case_summary?: string | null;
+  system_findings: string[];
+  reviewed_system_findings: string[];
+  abnormal_findings: AbnormalFinding[];
+  reviewed_abnormal_findings: AbnormalFinding[];
+  questionnaire?: Questionnaire | null;
+  food_sensitivity?: ChronicFoodSensitivityResult | null;
+  ignored_files: string[];
+  warnings: string[];
+  error_code?: string | null;
+  error_message?: string | null;
+  reviewed_by?: string | null;
+  revision: number;
+  draft_id?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Questionnaire {
@@ -121,6 +200,7 @@ export interface CaseRecord {
   parsing_reviewed_by?: string | null;
   parsing_missing_fields: string[];
   parsing_review_notes?: string | null;
+  latest_analysis_id?: string | null;
 }
 
 export interface DraftRecommendationItem {
@@ -155,6 +235,17 @@ export interface RecommendationDraft {
   prompt_version: string;
   rule_version: string;
   generated_at: string;
+  source_analysis_id?: string | null;
+  source_analysis_revision?: number | null;
+  source_snapshot_hash?: string | null;
+}
+
+export interface ReviewAndGenerateResponse {
+  analysis: CaseAnalysis;
+  review_saved: boolean;
+  draft_generated: boolean;
+  draft?: RecommendationDraft | null;
+  generation_error?: string | null;
 }
 
 export interface ReviewDecision {

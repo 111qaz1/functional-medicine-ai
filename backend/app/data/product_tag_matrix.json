@@ -60,30 +60,16 @@
     {
       "sku_id": "sku_liposomal_vitamin_c_500",
       "sequence": "5",
-      "product_name": "脂质体维生素C500",
-      "precision_level": "general_support",
-      "primary_axes": ["immune"],
-      "secondary_axes": ["inflammation", "antioxidant"],
-      "marker_tags": ["hs_crp:high"],
-      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "炎症"],
-      "condition_tags": [],
-      "goal_tags": ["免疫支持", "抗氧化", "恢复支持"],
-      "lifestyle_tags": [],
-      "mechanism_tags": ["维生素C", "抗氧化", "胶原", "免疫"]
-    },
-    {
-      "sku_id": "sku_liposomal_vitamin_c_300",
-      "sequence": "5",
       "product_name": "脂质体维生素C",
       "precision_level": "general_support",
       "primary_axes": ["immune"],
       "secondary_axes": ["inflammation", "antioxidant", "iron_repletion"],
       "marker_tags": ["hs_crp:high", "ferritin:low", "serum_iron:low"],
-      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "缺铁"],
+      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "炎症", "缺铁"],
       "condition_tags": [],
-      "goal_tags": ["基础抗氧化", "恢复支持", "免疫支持"],
+      "goal_tags": ["免疫支持", "抗氧化", "基础抗氧化", "恢复支持"],
       "lifestyle_tags": [],
-      "mechanism_tags": ["维生素C", "抗氧化", "铁吸收"]
+      "mechanism_tags": ["维生素C", "抗氧化", "胶原", "免疫", "铁吸收"]
     },
     {
       "sku_id": "sku_mitochondrial_support",

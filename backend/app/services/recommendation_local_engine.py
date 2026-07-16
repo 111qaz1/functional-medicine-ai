@@ -222,7 +222,7 @@ class RecommendationService:
             report_guidance=report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
-        red_flags = self._evaluate_red_flags(context, case.questionnaire.age if case.questionnaire else None)
+        risk_notices = self._evaluate_risk_notices(context, case.questionnaire.age if case.questionnaire else None)
         missing_info = self._collect_missing_info(case)
         reviewed_report_text = self._build_reviewed_report_text(case)
         structured_case_context = self._build_structured_case_context(case, context, support_profiles, report_guidance)
@@ -261,7 +261,7 @@ class RecommendationService:
             support_profiles=support_profiles,
             key_lab_highlights=key_lab_highlights,
             report_guidance=report_guidance,
-            red_flags=red_flags,
+            red_flags=[],
             contraindications=contraindications,
         )
         composition = self.llm_provider.compose(
@@ -273,7 +273,7 @@ class RecommendationService:
                 candidate_products=ranked_products,
                 knowledge_hits=knowledge_hits,
                 product_evidence_map=product_evidence_map,
-                red_flags=red_flags,
+                red_flags=[],
                 contraindications=contraindications,
                 missing_info=missing_info,
                 rag_hits=[hit.to_prompt_dict() for hit in rag_hits],
@@ -289,7 +289,8 @@ class RecommendationService:
             composition.selected_sku_ids,
             product_evidence_map,
         )
-        if not composition.abstain_reason:
+        effective_abstain_reason = composition.abstain_reason if not ranked_products else None
+        if not effective_abstain_reason:
             for product in selected_products:
                 evidence_ids = product_evidence_map.get(product.sku_id, [])[:4]
                 default_reason = self._build_product_reason(product, evidence_ids)
@@ -327,7 +328,7 @@ class RecommendationService:
             case,
             context,
             key_lab_highlights,
-            red_flags,
+            risk_notices,
             report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
@@ -350,7 +351,7 @@ class RecommendationService:
             "异常指标汇总": key_lab_highlights,
             "原报告小结与建议": report_guidance,
             "功能医学系统失衡分析": system_analysis,
-            "风险提示": list(dict.fromkeys(red_flags + contraindications)),
+            "风险提示": list(dict.fromkeys(risk_notices + contraindications)),
             "首月营养素干预方案": first_month_protocol,
             "生活方式干预处方": lifestyle_focus,
             "后续检查建议": test_recommendations,
@@ -379,7 +380,7 @@ class RecommendationService:
         draft = RecommendationDraft(
             id=f"draft_{uuid.uuid4().hex[:12]}",
             case_id=case_id,
-            status=DraftStatus.abstained if composition.abstain_reason else DraftStatus.pending_review,
+            status=DraftStatus.abstained if effective_abstain_reason else DraftStatus.pending_review,
             case_summary=case_summary,
             key_lab_highlights=key_lab_highlights,
             recommended_skus=recommended_items,
@@ -390,9 +391,9 @@ class RecommendationService:
             contraindications=list(dict.fromkeys(contraindications)),
             missing_info=missing_info,
             confidence=composition.confidence,
-            abstain_reason=composition.abstain_reason,
+            abstain_reason=effective_abstain_reason,
             manual_review_required=True,
-            red_flags=red_flags,
+            red_flags=[],
             report_sections=report_sections,
             model_version=self.model_version,
             prompt_version=self.prompt_version,
@@ -407,7 +408,15 @@ class RecommendationService:
                 entity_id=draft.id,
                 action="draft_generated",
                 actor_id=requested_by,
-                payload=draft.model_dump(mode="json"),
+                payload={
+                    "case_id": case_id,
+                    "draft_id": draft.id,
+                    "status": draft.status.value,
+                    "recommended_sku_count": len(draft.recommended_skus),
+                    "model_version": draft.model_version,
+                    "prompt_version": draft.prompt_version,
+                    "rule_version": draft.rule_version,
+                },
             )
         )
         return draft
@@ -432,7 +441,15 @@ class RecommendationService:
             self._normalize(text) for text in (questionnaire.food_sensitivities if questionnaire else [])
         }
         msq_system_scores = dict(questionnaire.msq_system_scores) if questionnaire else {}
-        clinical_summary_text = (case.clinical_summary_text or "").strip()
+        summary_parts = [(case.clinical_summary_text or "").strip()]
+        latest_analysis = self.repository.get_latest_case_analysis(case.id)
+        if latest_analysis and getattr(latest_analysis.status, "value", latest_analysis.status) == "reviewed":
+            model_summary = (latest_analysis.reviewed_case_summary or "").strip()
+            if model_summary:
+                summary_parts.append(f"模型综合病例总结：{model_summary}")
+            if latest_analysis.reviewed_system_findings:
+                summary_parts.append("模型综合系统分析：" + "；".join(latest_analysis.reviewed_system_findings))
+        clinical_summary_text = "\n".join(item for item in summary_parts if item)
         normalized_clinical_summary = self._normalize(clinical_summary_text)
         summary_nutrient_hints = self._extract_summary_nutrient_hints(clinical_summary_text)
 
@@ -640,38 +657,38 @@ class RecommendationService:
         ]
         return " ".join(part for part in parts if part).strip()
 
-    def _evaluate_red_flags(self, context: RecommendationContext, age: int | None) -> list[str]:
-        red_flags: list[str] = []
+    def _evaluate_risk_notices(self, context: RecommendationContext, age: int | None) -> list[str]:
+        risk_notices: list[str] = []
         if age is not None and age < 18:
-            red_flags.append("未成年案例需要人工审核后再给出建议。")
+            risk_notices.append("未成年案例需要医生重点审核营养素种类与剂量。")
         if context.pregnancy:
-            red_flags.append("孕期或哺乳期需要人工审核。")
+            risk_notices.append("孕期或哺乳期需要医生重点审核营养素种类与剂量。")
         if any(
             term in condition
             for condition in context.conditions
             for term in ("癌", "肾衰", "肝硬化", "renal", "cancer")
         ):
-            red_flags.append("既往疾病提示高风险，需要人工审核。")
+            risk_notices.append("既往疾病提示需要医生重点审核产品适用性。")
         if any(
             term in medication
             for medication in context.medications
             for term in ("华法林", "warfarin", "胰岛素", "insulin")
         ):
-            red_flags.append("当前用药与营养素之间可能存在相互作用。")
+            risk_notices.append("当前用药与营养素之间可能存在相互作用，需要医生重点审核。")
 
         for items in context.markers_by_code.values():
             for item in items:
                 value = item.normalized_value or item.value or 0
                 if item.marker_code == "fasting_glucose" and value >= 7.0:
-                    red_flags.append("空腹血糖达到高风险阈值，需要优先人工评估。")
+                    risk_notices.append("空腹血糖达到重点关注阈值，营养素草案需结合临床情况审核。")
                 if item.marker_code == "hba1c" and value >= 6.5:
-                    red_flags.append("糖化血红蛋白达到高风险阈值，需要优先人工评估。")
+                    risk_notices.append("糖化血红蛋白达到重点关注阈值，营养素草案需结合临床情况审核。")
                 if item.marker_code == "hs_crp" and value >= 10:
-                    red_flags.append("炎症指标显著升高，需先排查急性风险。")
+                    risk_notices.append("炎症指标显著升高，营养素草案需结合急性风险审核。")
                 if item.marker_code == "alt" and value >= 120:
-                    red_flags.append("肝功能指标明显异常，需要人工审核。")
+                    risk_notices.append("肝功能指标明显异常，营养素草案需由医生重点审核。")
 
-        return list(dict.fromkeys(red_flags))
+        return list(dict.fromkeys(risk_notices))
 
     def _collect_missing_info(self, case) -> list[str]:
         missing: list[str] = []
@@ -2926,7 +2943,7 @@ class RecommendationService:
         case,
         context: RecommendationContext,
         key_lab_highlights: list[str],
-        red_flags: list[str],
+        risk_notices: list[str],
         report_guidance: list[str] | None = None,
         anti_aging_findings: list[str] | None = None,
     ) -> list[str]:
@@ -2963,7 +2980,7 @@ class RecommendationService:
             portrait.append("睡眠恢复和压力调节是当前方案中的基础优先级。")
         if "sedentary_risk" in context.lifestyle_tags:
             portrait.append("久坐与活动不足提示代谢和能量系统需要同步重建。")
-        if red_flags:
+        if risk_notices:
             portrait.append("当前存在需要人工优先复核的风险信号，最终建议以顾问审核为准。")
         elif key_lab_highlights:
             portrait.append("当前草案以异常指标、症状负担与已审核知识命中为主线进行整理。")

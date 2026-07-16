@@ -35,6 +35,37 @@ class QuestionnaireImportService:
         "荷尔蒙及性功": ["其他"],
         "慢性疲劳症": ["能量/活动", "头部"],
     }
+    _TEMPLATE_MARKERS = (
+        "症状评估",
+        "级别序号症状描述从来没有",
+        "您希望以何种方式来促进健康",
+        "您的睡眠质量如何",
+        "您日常三餐主要食用",
+    )
+
+    def matches_template(self, *, filename: str, content_type: str, content: bytes) -> bool:
+        """Recognize the fixed MSQ form from its content, never from filename alone."""
+        suffix = Path(filename).suffix.lower()
+        try:
+            if suffix in self._DOCX_SUFFIXES:
+                paragraphs, tables = self._extract_docx_structure(content)
+                text = " ".join(
+                    [*paragraphs, *(cell for table in tables for row in table for cell in row)]
+                )
+            elif suffix in self._PDF_SUFFIXES:
+                text = self._extract_pdf_text(content)
+            else:
+                return False
+        except ValueError:
+            return False
+
+        compact = re.sub(r"\s+", "", text)
+        marker_count = sum(marker in compact for marker in self._TEMPLATE_MARKERS)
+        has_symptom_matrix = (
+            "级别序号症状描述从来没有" in compact
+            or ("症状评估" in compact and all(score in compact for score in ("0", "1", "2", "3", "4")))
+        )
+        return has_symptom_matrix and marker_count >= 2
 
     def parse(self, *, filename: str, content_type: str, content: bytes) -> Questionnaire:
         suffix = Path(filename).suffix.lower()

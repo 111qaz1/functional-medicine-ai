@@ -140,6 +140,55 @@ class RecommendationServiceTests(unittest.TestCase):
             any("注意/禁忌：" in item for item in draft.report_sections.get("首月营养素干预方案", []))
         )
 
+    def test_liposomal_vitamin_c_legacy_sku_is_removed_after_migration(self) -> None:
+        enabled_ids = {product.sku_id for product in self.container.repository.list_products()}
+        canonical = self.container.repository.get_product("sku_liposomal_vitamin_c_500")
+        legacy = self.container.repository.get_product("sku_liposomal_vitamin_c_300")
+
+        self.assertIn("sku_liposomal_vitamin_c_500", enabled_ids)
+        self.assertNotIn("sku_liposomal_vitamin_c_300", enabled_ids)
+        self.assertEqual(canonical.display_name, "脂质体维生素C")
+        self.assertIsNone(legacy)
+
+    def test_product_sku_migration_rewrites_existing_draft_references(self) -> None:
+        case = self._prepare_case(
+            "hs-CRP 4.2 mg/L 0-3",
+            Questionnaire(
+                age=34,
+                sex="female",
+                symptoms=["恢复慢"],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                goals=["免疫支持"],
+            ),
+        )
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        legacy_item = draft.recommended_skus[0].model_copy(
+            update={
+                "sku_id": "sku_liposomal_vitamin_c_300",
+                "display_name": "脂质体维生素C",
+            }
+        )
+        self.container.repository.save_draft(
+            draft.model_copy(
+                update={
+                    "recommended_skus": [legacy_item],
+                    "evidence_ids": ["product:sku_liposomal_vitamin_c_300"],
+                }
+            )
+        )
+
+        changed = self.container.repository.migrate_product_sku(
+            "sku_liposomal_vitamin_c_300",
+            "sku_liposomal_vitamin_c_500",
+        )
+        migrated = self.container.repository.get_draft(draft.id)
+
+        self.assertGreaterEqual(changed, 1)
+        self.assertEqual(migrated.recommended_skus[0].sku_id, "sku_liposomal_vitamin_c_500")
+        self.assertEqual(migrated.evidence_ids, ["product:sku_liposomal_vitamin_c_500"])
+
     def test_product_safety_matrix_blocks_clear_contraindications(self) -> None:
         case = self._prepare_case(
             "hs-CRP 5.2 mg/L 0-3",
@@ -661,7 +710,7 @@ class RecommendationServiceTests(unittest.TestCase):
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
 
         self.assertFalse(draft.abstain_reason)
-        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_300"} & recommended_ids)
+        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
 
     def test_generates_report_from_manual_clinical_summary_without_questionnaire(self) -> None:
         case = self.container.case_service.create_case(
@@ -994,7 +1043,7 @@ class RecommendationServiceTests(unittest.TestCase):
 
     def test_signal_scoring_still_recommends_for_iron_case_without_explicit_marker_rule(self) -> None:
         multi = self.container.repository.get_product("sku_plant_multi_mineral")
-        vitamin_c = self.container.repository.get_product("sku_liposomal_vitamin_c_300")
+        vitamin_c = self.container.repository.get_product("sku_liposomal_vitamin_c_500")
         self.container.repository.save_product(
             multi.model_copy(
                 update={
@@ -1052,7 +1101,7 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertFalse(draft.abstain_reason)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
-        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_300"} & recommended_ids)
+        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
         self.assertTrue(any("signal:" in evidence_id for evidence_id in draft.evidence_ids))
 
     def test_generates_lipid_recommendations_from_case_indicators_when_lab_items_missing(self) -> None:
@@ -1143,9 +1192,9 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertFalse(draft.abstain_reason)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
-        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_300"} & recommended_ids)
+        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
 
-    def test_abstains_when_red_flags_are_triggered(self) -> None:
+    def test_risk_notices_do_not_block_nutrition_recommendations(self) -> None:
         case = self._prepare_case(
             "空腹血糖 7.8 mmol/L 3.9-5.6\nALT 132 U/L 0-40",
             Questionnaire(
@@ -1161,9 +1210,10 @@ class RecommendationServiceTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
-        self.assertTrue(draft.abstain_reason)
-        self.assertEqual(draft.recommended_skus, [])
-        self.assertTrue(draft.red_flags)
+        self.assertFalse(draft.abstain_reason)
+        self.assertTrue(draft.recommended_skus)
+        self.assertEqual(draft.red_flags, [])
+        self.assertTrue(draft.report_sections["风险提示"])
 
     def test_remote_llm_output_is_filtered_to_local_catalog(self) -> None:
         self.container.recommendation_service.llm_provider = StubLLMProvider()

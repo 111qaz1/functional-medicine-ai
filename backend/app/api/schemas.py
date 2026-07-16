@@ -6,10 +6,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.domain.models import (
+    AbnormalFinding,
     AnalysisMode,
     AuditLog,
     CaseIndicator,
     CaseRecord,
+    CaseAnalysis,
     ClinicianRule,
     ClinicianRuleAction,
     ConsentRecord,
@@ -38,6 +40,10 @@ class CreateCaseRequest(BaseModel):
 
 class GenerateDraftRequest(BaseModel):
     requested_by: str = "system"
+
+
+class StartAnalysisRequest(BaseModel):
+    third_party_processing_confirmed: bool = False
 
 
 class ApproveDraftRequest(BaseModel):
@@ -70,6 +76,20 @@ class ParsingReviewRequest(BaseModel):
 
 class ClinicalSummaryUpdateRequest(BaseModel):
     clinical_summary_text: str | None = None
+
+
+class ReviewAndGenerateRequest(BaseModel):
+    reviewer_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=1)
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+
+
+class ReviewAndGenerateResponse(BaseModel):
+    analysis: CaseAnalysis
+    review_saved: bool = True
+    draft_generated: bool = False
+    draft: RecommendationDraft | None = None
+    generation_error: str | None = None
 
 
 class CaseSummaryResponse(BaseModel):

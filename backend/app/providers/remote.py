@@ -269,8 +269,6 @@ class OpenAICompatibleGroundedComposer:
             return self.fallback.compose(draft_input)
 
     def _should_use_local_only(self, draft_input: DraftCompositionInput) -> bool:
-        if draft_input.red_flags:
-            return True
         if any("人工解析校对" in item for item in draft_input.missing_info):
             return True
         if not draft_input.candidate_products:
@@ -627,7 +625,7 @@ class OpenAICompatibleGroundedComposer:
         abstain_reason = payload.abstain_reason.strip()[:280] if payload.abstain_reason else None
         if abstain_reason and self._looks_like_non_abstain_reason(abstain_reason):
             abstain_reason = None
-        if abstain_reason:
+        if abstain_reason and not draft_input.candidate_products:
             if draft_input.analysis_mode == "llm_primary":
                 return DraftCompositionResult(
                     selected_sku_ids=[],
@@ -639,6 +637,7 @@ class OpenAICompatibleGroundedComposer:
                     abstain_reason=abstain_reason,
                 )
             return self.fallback.compose(draft_input)
+        abstain_reason = None
 
         return DraftCompositionResult(
             selected_sku_ids=selected_sku_ids,

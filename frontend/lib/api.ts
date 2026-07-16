@@ -5,6 +5,8 @@ import {
   AuthMeResponse,
   AuthResponse,
   CaseDetailResponse,
+  CaseAnalysis,
+  AbnormalFinding,
   CaseSummary,
   ClinicalSummaryImageImportResult,
   ClinicianRule,
@@ -14,6 +16,7 @@ import {
   Questionnaire,
   RecommendationDraft,
   ReviewDecision,
+  ReviewAndGenerateResponse,
   RuleScope,
   WorkspaceScope
 } from "./types";
@@ -125,6 +128,43 @@ export async function uploadCaseFile(caseId: string, file: File) {
     method: "POST",
     body: formData
   });
+}
+
+export async function deleteCaseFile(caseId: string, fileId: string) {
+  return apiFetch<CaseDetailResponse>(`/cases/${caseId}/files/${fileId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function startCaseAnalysis(caseId: string, thirdPartyProcessingConfirmed: boolean) {
+  return apiFetch<CaseAnalysis>(`/cases/${caseId}/analyses`, {
+    method: "POST",
+    body: JSON.stringify({ third_party_processing_confirmed: thirdPartyProcessingConfirmed })
+  });
+}
+
+export async function fetchLatestCaseAnalysis(caseId: string) {
+  return apiFetch<CaseAnalysis>(`/cases/${caseId}/analyses/latest`);
+}
+
+export async function reviewAndGenerate(
+  caseId: string,
+  analysisId: string,
+  reviewerId: string,
+  expectedRevision: number,
+  abnormalFindings: AbnormalFinding[]
+) {
+  return apiFetch<ReviewAndGenerateResponse>(
+    `/cases/${caseId}/analyses/${analysisId}:review-and-generate`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reviewer_id: reviewerId,
+        expected_revision: expectedRevision,
+        abnormal_findings: abnormalFindings
+      })
+    }
+  );
 }
 
 export async function reparseCaseFile(caseId: string, fileId: string) {

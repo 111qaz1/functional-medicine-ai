@@ -19,6 +19,8 @@ from app.services.assistant_rules import ClinicianRuleService
 from app.services.assistant_chat import CaseAssistantService
 from app.services.auth import AuthService
 from app.services.case_service import CaseService
+from app.services.case_analysis import CaseAnalysisService, OpenAICompatibleCaseAnalysisProvider
+from app.services.document_intake import DocumentIntakeService
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.ingestion import KnowledgeIngestionService
 from app.services.parsing import DocumentParsingService, LabNormalizationService
@@ -76,6 +78,22 @@ def load_products(settings: AppSettings) -> list[ProductRule]:
             )
         )
     return enriched
+
+
+def apply_product_catalog_migrations(repository: LocalRepository, products: list[ProductRule]) -> None:
+    """Apply explicit SKU identity corrections without overwriting unrelated clinician edits."""
+    products_by_id = {product.sku_id: product for product in products}
+    sku_migrations = {
+        "sku_liposomal_vitamin_c_300": "sku_liposomal_vitamin_c_500",
+    }
+    for legacy_sku_id, canonical_sku_id in sku_migrations.items():
+        canonical_product = products_by_id.get(canonical_sku_id)
+        if not canonical_product:
+            raise ValueError(
+                f"Product migration {legacy_sku_id!r} references unknown canonical SKU {canonical_sku_id!r}"
+            )
+        repository.save_product(canonical_product)
+        repository.migrate_product_sku(legacy_sku_id, canonical_sku_id)
 
 
 def load_knowledge(settings: AppSettings) -> list[KnowledgeStatement]:
@@ -148,6 +166,8 @@ class ApplicationContainer:
     settings: AppSettings
     repository: LocalRepository
     case_service: CaseService
+    document_intake_service: DocumentIntakeService
+    case_analysis_service: CaseAnalysisService
     indicator_service: CaseIndicatorService
     parsing_service: DocumentParsingService
     questionnaire_import_service: QuestionnaireImportService
@@ -162,11 +182,13 @@ class ApplicationContainer:
 def build_container(settings: AppSettings | None = None) -> ApplicationContainer:
     settings = settings or load_settings()
     repository = LocalRepository(settings.sqlite_path)
+    repository.mark_active_analyses_interrupted()
     ingestion_service = KnowledgeIngestionService(JsonKnowledgeImporter())
     knowledge = load_knowledge(settings)
     products = load_products(settings)
     manifest_entries = ingestion_service.build_manifest(settings.knowledge_root)
     repository.seed(knowledge=knowledge, products=products, manifest_entries=manifest_entries)
+    apply_product_catalog_migrations(repository, products)
 
     vector_store = InMemoryVectorStore()
     vector_store.index([item for item in knowledge if item.review_status.value == "reviewed"])
@@ -200,6 +222,30 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         prompt_version=prompt_version,
     )
     recommendation_service.object_store = LocalObjectStore(settings.upload_dir)
+    document_intake_service = DocumentIntakeService(
+        max_upload_bytes=settings.max_upload_bytes,
+        max_pdf_pages=settings.max_pdf_pages,
+    )
+    case_analysis_provider = None
+    if settings.llm_base_url and settings.llm_api_key and settings.llm_model:
+        case_analysis_provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            api_style=settings.llm_api_style,
+            timeout_seconds=max(settings.llm_timeout_seconds, 90.0),
+            temperature=min(settings.llm_temperature, 0.1),
+        )
+    case_analysis_service = CaseAnalysisService(
+        repository=repository,
+        case_service=case_service,
+        recommendation_service=recommendation_service,
+        provider=case_analysis_provider,
+        model_version=settings.llm_model or "unconfigured",
+        prompt_version="case-analysis-v2-zh-msq-hybrid",
+        questionnaire_import_service=questionnaire_import_service,
+        worker_count=settings.analysis_worker_count,
+    )
     review_service = ReviewService(
         repository,
         case_service,
@@ -225,6 +271,8 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         settings=settings,
         repository=repository,
         case_service=case_service,
+        document_intake_service=document_intake_service,
+        case_analysis_service=case_analysis_service,
         indicator_service=indicator_service,
         parsing_service=parsing_service,
         questionnaire_import_service=questionnaire_import_service,

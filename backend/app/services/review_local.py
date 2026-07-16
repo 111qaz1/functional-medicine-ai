@@ -44,14 +44,19 @@ class ReviewService:
             raise KeyError(f"Draft {draft_id} not found")
 
         case = self.case_service.get_case(draft.case_id)
-        draft.status = DraftStatus.approved
         effective_draft = self._draft_with_filtered_recommendations(draft, edits)
+        if not effective_draft.recommended_skus:
+            raise ValueError("至少保留一项营养素推荐后才能审核发布。")
+        draft.status = DraftStatus.approved
         report = self._select_publishable_report(effective_draft, case, publishable_summary)
         report = self._remove_excluded_nutrition_lines(report, draft, edits)
         report = self._ensure_prescription_advice_section(
             report,
             effective_draft,
-            replace_existing=self._is_manual_publishable_summary(publishable_summary),
+            replace_existing=(
+                self._is_manual_publishable_summary(publishable_summary)
+                and not effective_draft.source_analysis_id
+            ),
         )
         report = self._normalize_customer_visible_report_text(report)
         pdf_path = self.pdf_exporter.export(
@@ -69,9 +74,8 @@ class ReviewService:
                 action="draft_approved",
                 actor_id=reviewer_id,
                 payload={
-                    "edits": edits,
-                    "publishable_summary": report,
-                    "pdf_report_path": str(pdf_path),
+                    "excluded_sku_ids": sorted(self._excluded_sku_ids(edits)),
+                    "pdf_generated": True,
                 },
             )
         )
@@ -929,6 +933,32 @@ class ReviewService:
     def _render_report(self, draft, case) -> str:
         lines = ["# 功能医学综合分析与首月干预方案", ""]
         sections = draft.report_sections or {}
+        if draft.source_analysis_id:
+            nutrition_plan = self._nutrition_plan_with_safety(
+                draft,
+                sections.get("首月营养素干预方案"),
+            )
+            total_advice = self._as_list(sections.get("总医嘱说明"))
+            prescription_advice = self._prescription_medical_advice(draft)
+            if prescription_advice:
+                total_advice = list(dict.fromkeys([*total_advice, prescription_advice]))
+            ordered_sections = [
+                ("异常指标汇总", sections.get("异常指标汇总")),
+                ("慢性食物敏感检测结果", sections.get("慢性食物敏感检测结果")),
+                ("功能医学系统失衡分析", sections.get("功能医学系统失衡分析")),
+                ("生活方式干预", sections.get("生活方式干预")),
+                ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
+                ("总医嘱说明", total_advice),
+            ]
+            for title, content in ordered_sections:
+                items = self._as_list(content)
+                if not items:
+                    continue
+                lines.append(f"## {title}")
+                lines.extend(f"- {item}" for item in items)
+                lines.append("")
+            return "\n".join(lines).strip()
+
         abnormal_indicators = self._abnormal_indicators(case)
         nutrition_plan = self._nutrition_plan_with_safety(
             draft,

@@ -522,6 +522,82 @@ textarea {
   background: rgba(255, 252, 247, 0.88);
 }
 
+.case-synthesis-text {
+  white-space: pre-line;
+  line-height: 1.75;
+}
+
+.abnormal-finding-list {
+  display: grid;
+  gap: 10px;
+}
+
+.abnormal-finding-card {
+  border: 1px solid rgba(182, 64, 44, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 252, 247, 0.88);
+  overflow: hidden;
+}
+
+.abnormal-finding-card__summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px 12px;
+}
+
+.abnormal-finding-card__name,
+.abnormal-finding-card__result {
+  color: var(--danger);
+}
+
+.abnormal-finding-card__name {
+  display: block;
+  line-height: 1.45;
+}
+
+.abnormal-finding-card__result {
+  margin: 5px 0 0;
+  line-height: 1.55;
+}
+
+.abnormal-finding-card__editor,
+.abnormal-finding-card__evidence {
+  border-top: 1px solid rgba(36, 52, 42, 0.08);
+}
+
+.abnormal-finding-card__editor > summary,
+.abnormal-finding-card__evidence > summary {
+  padding: 11px 16px;
+  color: var(--accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.abnormal-finding-card__editor > summary:hover,
+.abnormal-finding-card__evidence > summary:hover {
+  background: rgba(15, 118, 110, 0.04);
+}
+
+.abnormal-finding-card__editor-body,
+.abnormal-finding-card__evidence-body {
+  display: grid;
+  gap: 14px;
+  padding: 4px 16px 16px;
+}
+
+.abnormal-finding-card__evidence {
+  border: 1px solid rgba(36, 52, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(85, 99, 91, 0.035);
+  overflow: hidden;
+}
+
+.abnormal-finding-card__evidence-body {
+  padding-top: 8px;
+}
+
 .auth-tabs {
   display: flex;
   gap: 8px;

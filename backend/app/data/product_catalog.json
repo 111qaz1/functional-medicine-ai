@@ -181,12 +181,13 @@
   },
   {
     "sku_id": "sku_liposomal_vitamin_c_500",
-    "display_name": "脂质体维生素C500",
+    "display_name": "脂质体维生素C",
     "category": "antioxidant_support",
     "source_refs": [
-      "25款粒子配方规格.xls#05脂质体维生素C500"
+      "25款粒子配方规格.xls#05脂质体维生素C500",
+      "20251208 8款产品的配方规格书.xlsx#配方8-脂质体维生素C"
     ],
-    "formula_summary": "高剂量脂质体维生素 C 联合柑橘生物类黄酮的抗氧化支持配方。",
+    "formula_summary": "脂质体包裹维生素 C 联合柑橘生物类黄酮的抗氧化与免疫支持配方。",
     "core_ingredients": [
       "脂质体维生素C",
       "柑橘生物类黄酮"
@@ -194,7 +195,8 @@
     "candidate_use_cases": [
       "免疫支持",
       "抗氧化",
-      "恢复支持"
+      "恢复支持",
+      "维生素C补充"
     ],
     "contraindications": [
       "草酸钙结石高风险人群需人工复核"
@@ -204,6 +206,10 @@
     "indications": [
       "goal:免疫支持",
       "goal:抗氧化",
+      "goal:基础抗氧化",
+      "goal:恢复支持",
+      "marker:ferritin:low",
+      "marker:serum_iron:low",
       "marker:hs_crp:high"
     ],
     "exclusions": [],
@@ -215,7 +221,7 @@
       "胃肠敏感或结石风险人群需控制总量。"
     ],
     "lifestyle_tags": [],
-    "priority": 24
+    "priority": 32
   },
   {
     "sku_id": "sku_mitochondrial_support",
@@ -1264,43 +1270,5 @@
     ],
     "lifestyle_tags": [],
     "priority": 25
-  },
-  {
-    "sku_id": "sku_liposomal_vitamin_c_300",
-    "display_name": "脂质体维生素C",
-    "category": "antioxidant_support",
-    "source_refs": [
-      "20251208 8款产品的配方规格书.xlsx#配方8-脂质体维生素C"
-    ],
-    "formula_summary": "中剂量脂质体维生素 C 配合柑橘生物类黄酮的基础抗氧化支持配方。",
-    "core_ingredients": [
-      "脂质体维生素C",
-      "柑橘生物类黄酮"
-    ],
-    "candidate_use_cases": [
-      "基础抗氧化",
-      "恢复支持",
-      "维生素C补充"
-    ],
-    "contraindications": [
-      "高草酸风险人群需人工复核"
-    ],
-    "enabled": true,
-    "merge_status": null,
-    "indications": [
-      "goal:基础抗氧化",
-      "goal:恢复支持",
-      "marker:hs_crp:high"
-    ],
-    "exclusions": [],
-    "dosage_rule": "每日 1 粒，餐后使用。",
-    "interaction_rule": [
-      "与高剂量铁剂并用需结合个案评估。"
-    ],
-    "warning_text": [
-      "结石风险高的人群需控制总维生素 C 摄入。"
-    ],
-    "lifestyle_tags": [],
-    "priority": 32
   }
 ]

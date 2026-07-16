@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-05-customer-report-products",
+  "version": "2026-07-16-customer-report-products-v2",
   "source_note": "Derived from local customer report product introduction sheet. Original workbook is not stored in Git.",
   "ignored_products": [
     "综合消化酶",
@@ -36,9 +36,9 @@
     },
     "sku_liposomal_vitamin_c_500": {
       "sequence": "5",
-      "product_name": "脂质体维生素C500",
+      "product_name": "脂质体维生素C",
       "english_name": "Liposomal Vitamin C",
-      "description": "脂质体维生素C500（Liposomal Vitamin C）支持免疫强化与抗氧化抗衰。该配方提供425mg高活性脂质体包裹维生素C及柑橘生物类黄酮复合物，旨在提升细胞内维C浓度并增强自由基清除能力与胶原合成效率，突破传统VC吸收局限，适合免疫力低下与皮肤抗衰人群日常补充。",
+      "description": "脂质体维生素C（Liposomal Vitamin C）支持免疫强化与抗氧化抗衰。该配方提供425mg高活性脂质体包裹维生素C及柑橘生物类黄酮复合物，旨在提升细胞内维C浓度并增强自由基清除能力与胶原合成效率，突破传统VC吸收局限，适合免疫力低下与皮肤抗衰人群日常补充。",
       "sku_id": "sku_liposomal_vitamin_c_500"
     },
     "sku_mitochondrial_support": {

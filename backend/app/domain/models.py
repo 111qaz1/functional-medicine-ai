@@ -72,6 +72,30 @@ class FileParseStatus(str, Enum):
     failed = "failed"
 
 
+class FileIntakeStatus(str, Enum):
+    uploaded = "uploaded"
+    suspected_irrelevant = "suspected_irrelevant"
+    invalid = "invalid"
+
+
+class AnalysisStatus(str, Enum):
+    queued = "queued"
+    preparing = "preparing"
+    analyzing_documents = "analyzing_documents"
+    synthesizing = "synthesizing"
+    validating = "validating"
+    ready_for_review = "ready_for_review"
+    reviewed = "reviewed"
+    stale = "stale"
+    failed = "failed"
+
+
+class EvidenceStatus(str, Enum):
+    verified_text = "verified_text"
+    needs_review = "needs_review"
+    visual_model_only = "visual_model_only"
+
+
 class ReviewStatus(str, Enum):
     reviewed = "reviewed"
     reference_only = "reference_only"
@@ -125,6 +149,87 @@ class CaseIndicator(StrictModel):
     status: IndicatorStatus = IndicatorStatus.info
     category: str = "case_text"
     source_span: SourceSpan
+
+
+class PageText(StrictModel):
+    page: int
+    text: str
+
+
+class AbnormalFinding(StrictModel):
+    id: str
+    name: str
+    result_text: str | None = None
+    raw_value: str | None = None
+    unit: str | None = None
+    reference_range: str | None = None
+    abnormal_flag: str = "unknown"
+    interpretation: str | None = None
+    source_file_id: str
+    source_file_name: str
+    source_page: int
+    source_text: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_status: EvidenceStatus = EvidenceStatus.needs_review
+    evidence_notes: list[str] = Field(default_factory=list)
+
+
+class ChronicFoodSensitivityResult(StrictModel):
+    source_file_id: str
+    source_file_name: str
+    source_page: int = 1
+    mild_foods: list[str] = Field(default_factory=list)
+    moderate_foods: list[str] = Field(default_factory=list)
+    high_foods: list[str] = Field(default_factory=list)
+    interpretations: list[str] = Field(default_factory=list)
+    valid: bool = False
+    warning: str | None = None
+
+
+class DocumentAnalysisResult(StrictModel):
+    file_id: str
+    file_name: str
+    report_type: str = "unknown_medical"
+    medical_content: bool = True
+    summary: str | None = None
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    system_findings: list[str] = Field(default_factory=list)
+    questionnaire: dict[str, Any] | None = None
+    food_sensitivity: ChronicFoodSensitivityResult | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CaseAnalysis(StrictModel):
+    id: str
+    case_id: str
+    version: int = 1
+    status: AnalysisStatus = AnalysisStatus.queued
+    snapshot_hash: str
+    file_ids: list[str] = Field(default_factory=list)
+    model_version: str
+    prompt_version: str = "case-analysis-v1"
+    progress_current: int = 0
+    progress_total: int = 0
+    current_file_name: str | None = None
+    document_results: list[DocumentAnalysisResult] = Field(default_factory=list)
+    case_summary: str | None = None
+    reviewed_case_summary: str | None = None
+    system_findings: list[str] = Field(default_factory=list)
+    reviewed_system_findings: list[str] = Field(default_factory=list)
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    reviewed_abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    questionnaire: Questionnaire | None = None
+    food_sensitivity: ChronicFoodSensitivityResult | None = None
+    ignored_files: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    revision: int = 1
+    draft_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ConsentRecord(StrictModel):
@@ -182,6 +287,13 @@ class UploadedFile(StrictModel):
     parse_status: FileParseStatus = FileParseStatus.pending
     needs_manual_review: bool = True
     missing_fields: list[str] = Field(default_factory=list)
+    content_sha256: str | None = None
+    intake_status: FileIntakeStatus = FileIntakeStatus.uploaded
+    page_count: int = 0
+    page_texts: list[PageText] = Field(default_factory=list)
+    is_scanned: bool = False
+    precheck_warning: str | None = None
+    validation_error: str | None = None
 
 
 class CaseRecord(StrictModel):
@@ -208,6 +320,10 @@ class CaseRecord(StrictModel):
     parsing_reviewed_by: str | None = None
     parsing_missing_fields: list[str] = Field(default_factory=list)
     parsing_review_notes: str | None = None
+    latest_analysis_id: str | None = None
+    # Read-only compatibility with records written by the abandoned PR #13.
+    specialty_reports: list[dict[str, Any]] = Field(default_factory=list)
+    parsing_revision: int = 0
 
 
 class KnowledgeStatement(StrictModel):
@@ -316,6 +432,14 @@ class RecommendationDraft(StrictModel):
     prompt_version: str
     rule_version: str
     generated_at: datetime = Field(default_factory=utc_now)
+    source_analysis_id: str | None = None
+    source_analysis_revision: int | None = None
+    source_snapshot_hash: str | None = None
+    # Read-only compatibility with drafts written by the abandoned PR #13.
+    updated_at: datetime | None = None
+    revision: int = 1
+    last_edited_by: str | None = None
+    last_edit_reason: str | None = None
 
 
 class ReviewDecision(StrictModel):

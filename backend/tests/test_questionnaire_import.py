@@ -141,6 +141,13 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
             content=content,
         )
 
+        self.assertTrue(
+            service.matches_template(
+                filename="renamed-upload.docx",
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                content=content,
+            )
+        )
         self.assertEqual(questionnaire.age, 34)
         self.assertEqual(questionnaire.sex, "female")
         self.assertIn("甲减", questionnaire.known_conditions)
@@ -154,6 +161,7 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
         self.assertEqual(questionnaire.supplement_use, "无营养补充剂")
         self.assertEqual(questionnaire.exercise_frequency, "无规律运动")
         self.assertIn("便秘", questionnaire.symptoms)
+        self.assertNotIn("慢性咳嗽", questionnaire.symptoms)
         self.assertEqual(questionnaire.bowel_habits, "便秘、腹泻")
         self.assertEqual(questionnaire.msq_system_scores.get("消化道"), 1)
         self.assertEqual(questionnaire.msq_system_scores.get("关节/肌肉"), 1)

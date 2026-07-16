@@ -41,6 +41,9 @@ class AppSettings:
     rag_enabled: bool = True
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
+    max_upload_bytes: int = 50 * 1024 * 1024
+    max_pdf_pages: int = 200
+    analysis_worker_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,9 @@ def load_settings() -> AppSettings:
         "no",
         "off",
     }
+    max_upload_bytes = int(float(os.getenv("FM_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
+    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "200"))
+    analysis_worker_count = max(1, int(os.getenv("FM_ANALYSIS_WORKERS", "1")))
 
     return AppSettings(
         project_root=project_root,
@@ -127,6 +133,9 @@ def load_settings() -> AppSettings:
         rag_enabled=rag_enabled,
         rag_index_dir=rag_index_dir,
         rag_llm_fusion_enabled=rag_llm_fusion_enabled,
+        max_upload_bytes=max_upload_bytes,
+        max_pdf_pages=max_pdf_pages,
+        analysis_worker_count=analysis_worker_count,
     )
 
 

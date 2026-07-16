@@ -103,11 +103,11 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertNotIn("关联度", items[0])
         self.assertNotIn("命中产品标签", items[0])
 
-    def test_unmapped_sku_uses_confirmed_fallback_sequence(self) -> None:
+    def test_canonical_vitamin_c_sku_uses_confirmed_report_profile(self) -> None:
         rows = self.exporter._nutrition_table_rows(
             [
                 SimpleNamespace(
-                    sku_id="sku_liposomal_vitamin_c_300",
+                    sku_id="sku_liposomal_vitamin_c_500",
                     display_name="脂质体维生素C",
                     dosage="每日 1 粒，餐后使用。",
                     reason="用于基础抗氧化支持。",
@@ -116,8 +116,9 @@ class PdfReportExporterTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(rows[0]["sequence"], "待确认")
+        self.assertEqual(rows[0]["sequence"], "5")
         self.assertEqual(rows[0]["product_name"], "脂质体维生素C")
+        self.assertIn("425mg", rows[0]["effect"])
 
     def test_warning_text_does_not_stack_sentence_and_semicolon_marks(self) -> None:
         formatted = self.exporter._format_warning_text(

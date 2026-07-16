@@ -102,20 +102,6 @@
       "exclusion_rules": []
     },
     {
-      "sku_id": "sku_liposomal_vitamin_c_300",
-      "source_sequence": "5",
-      "source_product_name": "脂质体维生素C",
-      "contraindications": [],
-      "cautions": [
-        "肾结石病史者高剂量慎用。",
-        "血色病/铁过载患者慎用。",
-        "G6PD缺乏症患者高剂量慎用。",
-        "一般人群常规剂量安全，高剂量可能引起胃肠不适或腹泻。"
-      ],
-      "interaction_warnings": [],
-      "exclusion_rules": []
-    },
-    {
       "sku_id": "sku_mitochondrial_support",
       "source_sequence": "6",
       "source_product_name": "线粒体支持",

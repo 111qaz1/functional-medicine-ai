@@ -246,7 +246,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("血脂异常的分型", safe_hits[0].excerpt)
         self.assertNotIn("续表", safe_hits[0].excerpt)
 
-    def test_red_flags_and_contraindications_still_take_priority_over_rag(self) -> None:
+    def test_risk_notices_do_not_block_draft_and_unsafe_rag_is_still_filtered(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
             [
                 rag_hit(
@@ -272,12 +272,13 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         serialized_sections = json.dumps(draft.report_sections, ensure_ascii=False)
 
-        self.assertTrue(draft.abstain_reason)
-        self.assertEqual(draft.recommended_skus, [])
-        self.assertIn("孕期或哺乳期需要人工审核", " ".join(draft.red_flags))
+        self.assertFalse(draft.abstain_reason)
+        self.assertTrue(draft.recommended_skus)
+        self.assertEqual(draft.red_flags, [])
+        self.assertIn("孕期或哺乳期需要医生重点审核", " ".join(draft.report_sections["风险提示"]))
         self.assertNotIn("主动排毒", serialized_sections)
         self.assertNotIn("间歇性禁食", serialized_sections)
-        self.assertIn("skipped_due_to_red_flags", serialized_sections)
+        self.assertNotIn("skipped_due_to_red_flags", serialized_sections)
 
     def test_manual_publishable_summary_preserves_doctor_confirmed_text(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(

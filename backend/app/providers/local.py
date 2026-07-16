@@ -722,16 +722,6 @@ class GroundedDraftComposer:
     """Local deterministic composer used when no external LLM is configured."""
 
     def compose(self, draft_input: DraftCompositionInput) -> DraftCompositionResult:
-        if draft_input.red_flags:
-            return DraftCompositionResult(
-                rationale=[f"案例触发人工升级规则: {flag}" for flag in draft_input.red_flags],
-                lifestyle_actions=[
-                    "在人工审核完成前，先暂停自动给出补充剂结论，优先确认高风险指标与既往病史。",
-                ],
-                confidence=0.12,
-                abstain_reason="触发红旗风险，系统已切换为严格拒答并等待人工审核。",
-            )
-
         if not draft_input.candidate_products:
             return DraftCompositionResult(
                 rationale=["本地知识和产品规则未形成足够证据，暂不输出营养素推荐。"],

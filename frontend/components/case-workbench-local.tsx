@@ -5,11 +5,11 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import {
   approveDraft,
+  downloadPdfReport,
   deleteCaseFile,
   fetchCase,
   fetchCurrentUser,
   fetchLatestCaseAnalysis,
-  getPdfReportUrl,
   reviewAndGenerate,
   startCaseAnalysis,
   updateClinicalSummary,
@@ -23,6 +23,8 @@ import {
 } from "../lib/types";
 import { SectionCard } from "./section-card";
 import { StatusPillLocal } from "./status-pill-local";
+import { OperationProgress, OperationProgressState } from "./operation-progress";
+import { MarkdownEditor, MarkdownViewMode } from "./markdown-editor";
 
 const ACTIVE_ANALYSIS = new Set(["queued", "preparing", "analyzing_documents", "synthesizing", "validating"]);
 
@@ -72,6 +74,24 @@ function findingResultLabel(finding: AbnormalFinding) {
     || "已发现异常";
 }
 
+function analysisProgressPercent(analysis: CaseAnalysis) {
+  if (analysis.status === "queued") return 5;
+  if (analysis.status === "preparing") return 12;
+  if (analysis.status === "analyzing_documents") {
+    return 18 + Math.round((analysis.progress_current / Math.max(analysis.progress_total, 1)) * 58);
+  }
+  if (analysis.status === "synthesizing") return 82;
+  if (analysis.status === "validating") return 94;
+  return 100;
+}
+
+function analysisStageDetail(analysis: CaseAnalysis) {
+  const label = ANALYSIS_LABELS[analysis.status] ?? analysis.status;
+  if (analysis.current_file_name) return `${label}：${analysis.current_file_name}`;
+  if (analysis.status === "analyzing_documents") return `${label}（${analysis.progress_current}/${analysis.progress_total}）`;
+  return label;
+}
+
 export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [payload, setPayload] = useState<CaseDetailResponse | null>(null);
   const [analysis, setAnalysis] = useState<CaseAnalysis | null>(null);
@@ -80,6 +100,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [clinicalSummary, setClinicalSummary] = useState("");
   const [publishableSummary, setPublishableSummary] = useState("");
   const [publishableEditorExpanded, setPublishableEditorExpanded] = useState(false);
+  const [publishableEditorMode, setPublishableEditorMode] = useState<MarkdownViewMode>("split");
   const [excludedSkuIds, setExcludedSkuIds] = useState<string[]>([]);
   const [thirdPartyConfirmed, setThirdPartyConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -88,6 +109,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [reviewActionNotice, setReviewActionNotice] = useState<string | null>(null);
+  const [operation, setOperation] = useState<OperationProgressState | null>(null);
 
   async function loadCase() {
     const next = await fetchCase(caseId);
@@ -152,15 +174,61 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
 
   useEffect(() => {
     if (!analysis || !ACTIVE_ANALYSIS.has(analysis.status)) return;
-    const timer = window.setInterval(() => {
-      void loadLatestAnalysis()
+    let stopped = false;
+    let inFlight = false;
+    async function poll() {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      await loadLatestAnalysis()
         .then((next) => {
           if (next && !ACTIVE_ANALYSIS.has(next.status)) void loadCase();
         })
-        .catch((err) => setError(err instanceof Error ? err.message : "读取分析进度失败"));
-    }, 1800);
-    return () => window.clearInterval(timer);
+        .catch((err) => setError(err instanceof Error ? err.message : "读取分析进度失败"))
+        .finally(() => { inFlight = false; });
+    }
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1800);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
   }, [analysis?.id, analysis?.status]);
+
+  useEffect(() => {
+    if (!analysis) return;
+    setOperation((current) => {
+      const isActive = ACTIVE_ANALYSIS.has(analysis.status);
+      if (current?.placement !== "analysis" && !isActive) return current;
+      if (isActive) {
+        return {
+          placement: "analysis",
+          title: "综合病例分析",
+          stage: analysisStageDetail(analysis),
+          percent: analysisProgressPercent(analysis),
+          status: "running"
+        };
+      }
+      if (analysis.status === "ready_for_review" || analysis.status === "reviewed") {
+        return {
+          placement: "analysis",
+          title: "综合病例分析",
+          stage: "综合分析已完成，可以开始医生校对。",
+          percent: 100,
+          status: "success"
+        };
+      }
+      if (analysis.status === "failed" || analysis.status === "stale") {
+        return {
+          placement: "analysis",
+          title: "综合病例分析",
+          stage: analysis.error_message || ANALYSIS_LABELS[analysis.status],
+          percent: 100,
+          status: "error"
+        };
+      }
+      return current;
+    });
+  }, [analysis?.status, analysis?.progress_current, analysis?.progress_total, analysis?.current_file_name, analysis?.error_message]);
 
   const validFiles = useMemo(
     () => payload?.case.files.filter((file) => file.intake_status !== "invalid") ?? [],
@@ -172,14 +240,32 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     if (!files.length) return;
     try {
       setBusy(true);
-      setNotice(`正在对 ${files.length} 份资料执行格式、页数、哈希和文本层预检。`);
-      for (const file of files) await uploadCaseFile(caseId, file);
+      setOperation({ placement: "upload", title: "上传并预解析资料", stage: `准备处理 ${files.length} 份文件`, percent: 0, status: "running" });
+      let latestOperation: CaseDetailResponse["operation"] = null;
+      for (const [index, file] of files.entries()) {
+        latestOperation = await uploadCaseFile(caseId, file, (filePercent) => {
+          const percent = ((index + filePercent / 100) / files.length) * 100;
+          setOperation({
+            placement: "upload",
+            title: "上传并预解析资料",
+            stage: `正在处理第 ${index + 1}/${files.length} 份：${file.name}`,
+            percent,
+            status: "running"
+          });
+        }).then((response) => response.operation ?? null);
+        if (latestOperation && !latestOperation.success) {
+          throw new Error(latestOperation.message);
+        }
+      }
       await loadCase();
       await loadLatestAnalysis({ quiet404: true });
+      setOperation({ placement: "upload", title: "上传并预解析资料", stage: "全部资料已上传；可继续开始综合分析。", percent: 100, status: "success" });
       setNotice("资料已上传。上传阶段未调用大模型，也未生成任何指标或草案。");
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "上传失败");
+      const message = err instanceof Error ? err.message : "上传失败";
+      setError(message);
+      setOperation({ placement: "upload", title: "上传并预解析资料", stage: message, percent: 100, status: "error" });
     } finally {
       setBusy(false);
       event.target.value = "";
@@ -217,13 +303,17 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   async function handleStartAnalysis() {
     try {
       setBusy(true);
+      setOperation({ placement: "analysis", title: "综合病例分析", stage: "正在创建分析任务……", percent: 5, status: "running" });
       const next = await startCaseAnalysis(caseId, thirdPartyConfirmed);
       setAnalysis(next);
       setFindings([]);
       setNotice("综合分析任务已创建，可留在页面查看逐文件进度。");
+      setOperation({ placement: "analysis", title: "综合病例分析", stage: "任务已创建，正在读取后端状态……", percent: 8, status: "running" });
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法开始综合分析");
+      const message = err instanceof Error ? err.message : "无法开始综合分析";
+      setError(message);
+      setOperation({ placement: "analysis", title: "综合病例分析", stage: message, percent: 100, status: "error" });
     } finally {
       setBusy(false);
     }
@@ -267,8 +357,21 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setReviewActionNotice(null);
       return;
     }
+    let progressTimer: number | null = null;
     try {
       setBusy(true);
+      const stages = [
+        [12, "保存医生校对"],
+        [35, "整理结构化病例上下文"],
+        [62, "匹配营养素与安全规则"],
+        [82, "生成可审核草案"]
+      ] as const;
+      let stageIndex = 0;
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: stages[0][1], percent: stages[0][0], status: "running" });
+      progressTimer = window.setInterval(() => {
+        const nextStage = stages[Math.min(++stageIndex, stages.length - 1)];
+        setOperation({ placement: "draft", title: "生成结构化草案", stage: nextStage[1], percent: nextStage[0], status: "running" });
+      }, 1400);
       setReviewActionError(null);
       setReviewActionNotice("正在保存医生校对并生成营养素草案，请稍候……");
       const result = await reviewAndGenerate(
@@ -284,19 +387,23 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         const message = "异常校对已保存，营养素草案已生成并进入待审核状态。";
         setNotice(message);
         setReviewActionNotice(message);
+        setOperation({ placement: "draft", title: "生成结构化草案", stage: "结构化草案已生成，等待医生审核。", percent: 100, status: "success" });
       } else {
         const message = `校对已保存，草案生成失败：${result.generation_error ?? "未知错误"}。可直接重试，不会重新读取 PDF。`;
         setNotice(message);
         setReviewActionError(message);
         setReviewActionNotice(null);
+        setOperation({ placement: "draft", title: "生成结构化草案", stage: message, percent: 100, status: "error" });
       }
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "保存校对并生成草案失败";
       setError(message);
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: message, percent: 100, status: "error" });
       setReviewActionError(message);
       setReviewActionNotice(null);
     } finally {
+      if (progressTimer !== null) window.clearInterval(progressTimer);
       setBusy(false);
     }
   }
@@ -311,12 +418,33 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     }
     try {
       setBusy(true);
+      setOperation({ placement: "report", title: "审核并生成报告", stage: "正在保存审核结果并生成报告文件……", percent: 55, status: "running" });
       await approveDraft(draft.id, reviewerId, publishableSummary, { excluded_sku_ids: excludedSkuIds });
       await loadCase();
       setNotice("报告已审核发布，PDF 已可下载。");
+      setOperation({ placement: "report", title: "审核并生成报告", stage: "报告已发布，可下载 PDF。", percent: 100, status: "success" });
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "审核发布失败");
+      const message = err instanceof Error ? err.message : "审核发布失败";
+      setError(message);
+      setOperation({ placement: "report", title: "审核并生成报告", stage: message, percent: 100, status: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDownloadReport(draftId: string) {
+    try {
+      setBusy(true);
+      setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在生成并下载报告文件……", percent: 12, status: "running" });
+      await downloadPdfReport(draftId, (percent) => {
+        setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在下载报告文件……", percent: Math.max(12, percent), status: "running" });
+      });
+      setOperation({ placement: "report", title: "导出 PDF 报告", stage: "PDF 已下载。", percent: 100, status: "success" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "报告下载失败";
+      setError(message);
+      setOperation({ placement: "report", title: "导出 PDF 报告", stage: message, percent: 100, status: "error" });
     } finally {
       setBusy(false);
     }
@@ -339,6 +467,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const includedRecommendationCount = latestDraft
     ? latestDraft.recommended_skus.filter((item) => !excludedSkuIds.includes(item.sku_id)).length
     : 0;
+  const workflowStep = payload.review_decision ? 5 : latestDraft ? 4 : analysis && ["ready_for_review", "reviewed"].includes(analysis.status) ? 3 : analysis ? 2 : caseRecord.files.length ? 1 : 0;
 
   return (
     <div className="workbench">
@@ -356,8 +485,16 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       {error ? <p className="error-text">{error}</p> : null}
       {notice ? <div className="info-note"><strong>提示</strong><p className="muted">{notice}</p></div> : null}
 
+      <nav className="workflow-steps" aria-label="病例处理流程">
+        {["资料上传", "综合分析", "医生校对", "草案编辑", "审核发布"].map((label, index) => (
+          <div className={`workflow-step${workflowStep >= index + 1 ? " workflow-step--done" : ""}${workflowStep === index ? " workflow-step--active" : ""}`} key={label}>
+            <span>{workflowStep > index ? "✓" : index + 1}</span><strong>{label}</strong>
+          </div>
+        ))}
+      </nav>
+
       <div className="workbench-grid">
-        <SectionCard title="统一资料上传" subtitle="Unified intake">
+        <SectionCard title="资料上传与分析准备" subtitle="01 · Intake" tone="intake">
           <label className="upload-dropzone">
             <input
               type="file"
@@ -369,6 +506,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             <span>上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图</span>
             <small>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、PDF 200 页。</small>
           </label>
+          {operation?.placement === "upload" ? <OperationProgress operation={operation} /> : null}
           <div className="stack">
             {caseRecord.files.map((file) => (
               <div className="file-row" key={file.id}>
@@ -408,11 +546,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           <button type="button" className="primary-button" disabled={busy || !canStart || !thirdPartyConfirmed} onClick={() => void handleStartAnalysis()}>
             {analysis?.status === "failed" || analysis?.status === "stale" ? "重新开始综合分析" : "确认资料并开始综合分析"}
           </button>
-        </SectionCard>
-
-        <SectionCard title="综合分析进度" subtitle="Asynchronous analysis">
+          {operation?.placement === "analysis" ? <OperationProgress operation={operation} /> : null}
           {!analysis ? <p className="muted">确认资料后，这里会显示逐文件处理进度。</p> : (
-            <div className="stack">
+            <div className="analysis-status-panel">
               <div className="file-row">
                 <div>
                   <strong>{ANALYSIS_LABELS[analysis.status] ?? analysis.status}</strong>
@@ -420,6 +556,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </div>
                 <span className="indicator-status indicator-status--info">{analysis.progress_current}/{analysis.progress_total}</span>
               </div>
+              <progress className="analysis-progress" max={Math.max(analysis.progress_total, 1)} value={analysis.progress_current} />
               {analysis.current_file_name ? <p className="muted">正在处理：{analysis.current_file_name}</p> : null}
               {analysis.error_message ? <p className="error-text">{analysis.error_code}: {analysis.error_message}</p> : null}
               {analysis.warnings.map((warning, index) => <p className="muted" key={`${warning}-${index}`}>⚠ {warning}</p>)}
@@ -430,28 +567,28 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
 
         {analysis && ["ready_for_review", "reviewed"].includes(analysis.status) ? (
           <>
-            <SectionCard title="初步病例综合" subtitle="Model synthesis">
-              <div className="stack">
-                <div><strong>病例总结</strong><p className="case-synthesis-text">{analysis.reviewed_case_summary ?? analysis.case_summary ?? "暂无"}</p></div>
-                <div><strong>功能医学系统发现</strong>
+            <SectionCard title="初步病例综合" subtitle="02 · Model synthesis" tone="analysis">
+              <div className="synthesis-sections">
+                <section className="synthesis-block"><h3>病例总结</h3><p className="case-synthesis-text">{analysis.reviewed_case_summary ?? analysis.case_summary ?? "暂无"}</p></section>
+                <section className="synthesis-block"><h3>功能医学系统发现</h3>
                   <ul>{(analysis.reviewed_system_findings.length ? analysis.reviewed_system_findings : analysis.system_findings).map((item) => <li key={item}>{item}</li>)}</ul>
-                </div>
+                </section>
+                {analysis.questionnaire ? (
+                  <section className="synthesis-block synthesis-block--msq">
+                    <div className="synthesis-block__head"><h3>MSQ 摘要</h3><span>只读结构化结果</span></div>
+                    <div className="grid-two msq-summary-grid">
+                      <div><strong>主要诉求</strong><p className="muted">{analysis.questionnaire.chief_concerns.join("、") || "未识别"}</p></div>
+                      <div><strong>健康目标</strong><p className="muted">{analysis.questionnaire.goals.join("、") || "未识别"}</p></div>
+                      <div><strong>主要系统负担</strong><p className="muted">{Object.entries(analysis.questionnaire.msq_system_scores).sort(([, left], [, right]) => right - left).slice(0, 5).map(([key, value]) => `${key} ${value}`).join("；") || "未识别"}</p></div>
+                      <div><strong>有效症状</strong><p className="muted">{analysis.questionnaire.symptoms.length ? `共 ${analysis.questionnaire.symptoms.length} 项：${analysis.questionnaire.symptoms.slice(0, 8).join("、")}${analysis.questionnaire.symptoms.length > 8 ? "等" : ""}` : "未识别"}</p></div>
+                    </div>
+                    <p className="muted">MSQ 由固定模板结构化提取；扫描版由模型单次视觉识别兜底，不进入异常指标校对区。</p>
+                  </section>
+                ) : null}
               </div>
             </SectionCard>
 
-            {analysis.questionnaire ? (
-              <SectionCard title="MSQ 摘要" subtitle="Read-only questionnaire">
-                <div className="grid-two">
-                  <div><strong>主要诉求</strong><p className="muted">{analysis.questionnaire.chief_concerns.join("、") || "未识别"}</p></div>
-                  <div><strong>健康目标</strong><p className="muted">{analysis.questionnaire.goals.join("、") || "未识别"}</p></div>
-                  <div><strong>主要系统负担</strong><p className="muted">{Object.entries(analysis.questionnaire.msq_system_scores).sort(([, left], [, right]) => right - left).slice(0, 5).map(([key, value]) => `${key} ${value}`).join("；") || "未识别"}</p></div>
-                  <div><strong>有效症状</strong><p className="muted">{analysis.questionnaire.symptoms.length ? `共 ${analysis.questionnaire.symptoms.length} 项：${analysis.questionnaire.symptoms.slice(0, 8).join("、")}${analysis.questionnaire.symptoms.length > 8 ? "等" : ""}` : "未识别"}</p></div>
-                </div>
-                <p className="muted">MSQ 由固定模板结构化提取；扫描版由模型单次视觉识别兜底。仅供查看，不进入异常指标校对区。</p>
-              </SectionCard>
-            ) : null}
-
-            <SectionCard title="异常发现校对" subtitle="Numeric and non-numeric findings">
+            <SectionCard title="异常发现校对" subtitle="03 · Clinical review" tone="review">
               <label className="field"><span>校对医生</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} /></label>
               <div className="abnormal-finding-list">
                 {findings.map((finding, index) => (
@@ -502,16 +639,17 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 {reviewActionError ? <p className="error-text">{reviewActionError}</p> : null}
                 {reviewActionNotice ? <p className="muted">{reviewActionNotice}</p> : null}
               </div>
+              {operation?.placement === "draft" ? <OperationProgress operation={operation} /> : null}
             </SectionCard>
           </>
         ) : null}
 
         {latestDraft ? (
-          <SectionCard title="营养素草案审核与发布" subtitle="Existing review and publish flow">
+          <SectionCard title="营养素草案审核与发布" subtitle="04 · Draft and publish" tone="draft">
             <p className="muted">草案 {latestDraft.id} · 状态 {latestDraft.status} · 置信度 {Math.round(latestDraft.confidence * 100)}%</p>
-            <div className="stack">
+            <div className="draft-recommendation-list">
               {latestDraft.recommended_skus.map((item) => (
-                <label className="file-row" key={item.sku_id}>
+                <label className="draft-recommendation-card" key={item.sku_id}>
                   <div><strong>{item.display_name}</strong><p className="muted">{item.dosage} · {item.reason}</p></div>
                   <span><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</span>
                 </label>
@@ -535,22 +673,27 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </div>
               </div>
               <textarea
-                className="publishable-editor-textarea"
+                className="publishable-editor-textarea publishable-editor-textarea--legacy"
                 rows={18}
                 value={publishableSummary}
                 onChange={(event) => setPublishableSummary(event.target.value)}
                 aria-label="最终发布内容"
               />
+              <MarkdownEditor value={publishableSummary} onChange={setPublishableSummary} mode={publishableEditorMode} onModeChange={setPublishableEditorMode} />
             </div>
             <div className="button-row">
               <button type="button" className="primary-button" disabled={busy || Boolean(payload.review_decision) || includedRecommendationCount === 0} onClick={() => void handleApprove()}>{payload.review_decision ? "已审核发布" : "审核并发布"}</button>
-              {payload.review_decision ? <a className="secondary-button" href={getPdfReportUrl(latestDraft.id)} target="_blank" rel="noreferrer">下载 PDF</a> : null}
+              {payload.review_decision ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void handleDownloadReport(latestDraft.id)}>下载 PDF</button> : null}
             </div>
+            {operation?.placement === "report" ? <OperationProgress operation={operation} /> : null}
           </SectionCard>
         ) : null}
 
-        <SectionCard title="审计记录" subtitle="Audit trail">
-          <div className="stack">{payload.audit_logs.slice(0, 20).map((log) => <div className="file-row" key={log.id}><div><strong>{log.action}</strong><p className="muted">{log.actor_id} · {new Date(log.created_at).toLocaleString("zh-CN")}</p></div></div>)}</div>
+        <SectionCard title="审计记录" subtitle="05 · Audit trail" className="audit-section">
+          <details>
+            <summary>查看最近 {Math.min(payload.audit_logs.length, 20)} 条操作记录</summary>
+            <div className="stack audit-section__body">{payload.audit_logs.slice(0, 20).map((log) => <div className="file-row" key={log.id}><div><strong>{log.action}</strong><p className="muted">{log.actor_id} · {new Date(log.created_at).toLocaleString("zh-CN")}</p></div></div>)}</div>
+          </details>
         </SectionCard>
       </div>
 
@@ -578,11 +721,12 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
               </div>
             </div>
             <textarea
-              className="report-editor-dialog__textarea"
+              className="report-editor-dialog__textarea report-editor-dialog__textarea--legacy"
               value={publishableSummary}
               onChange={(event) => setPublishableSummary(event.target.value)}
               aria-label="放大编辑最终发布内容"
             />
+            <MarkdownEditor value={publishableSummary} onChange={setPublishableSummary} mode={publishableEditorMode} onModeChange={setPublishableEditorMode} expanded />
           </div>
         </div>
       ) : null}

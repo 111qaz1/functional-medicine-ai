@@ -118,6 +118,17 @@ class CaseDetailResponse(BaseModel):
     review_decision: ReviewDecision | None = None
     audit_logs: list[AuditLog] = Field(default_factory=list)
     matched_clinician_rules: list[ClinicianRule] = Field(default_factory=list)
+    operation: "ProcessingOperationResponse | None" = None
+
+
+class ProcessingOperationResponse(BaseModel):
+    success: bool
+    stage: str
+    status: str
+    progress_percent: int = Field(default=100, ge=0, le=100)
+    parsing_succeeded: bool | None = None
+    message: str
+    filename: str | None = None
 
 
 class ClinicalSummaryImageImportResponse(BaseModel):
@@ -257,6 +268,11 @@ class AuthRegisterRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class AuthResponse(BaseModel):

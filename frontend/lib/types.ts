@@ -292,6 +292,17 @@ export interface CaseDetailResponse {
   review_decision?: ReviewDecision | null;
   audit_logs: AuditLog[];
   matched_clinician_rules: ClinicianRule[];
+  operation?: ProcessingOperation | null;
+}
+
+export interface ProcessingOperation {
+  success: boolean;
+  stage: string;
+  status: "pending" | "succeeded" | "failed";
+  progress_percent: number;
+  parsing_succeeded?: boolean | null;
+  message: string;
+  filename?: string | null;
 }
 
 export interface ClinicalSummaryImageImportResult {

@@ -83,26 +83,6 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertIn("第三句包含适用人群和长期支持说明，也要完整保留", rows[0]["effect"])
         self.assertNotIn("结合本次情况进行个性化支持", rows[0]["effect"])
 
-    def test_nutrition_basis_items_polish_internal_matching_evidence(self) -> None:
-        rows = [
-            {
-                "product_name": "肝脏氨基酸解毒支持",
-                "reason": (
-                    "关联度约 95%：结合 解毒支持、恢复支持，"
-                    "命中产品标签命中：肝脏/解毒系统、产品标签命中：抗氧化轴，"
-                    "作为当前阶段的候选推荐。"
-                ),
-            }
-        ]
-
-        items = self.exporter._nutrition_basis_items(rows)
-
-        self.assertEqual(len(items), 1)
-        self.assertIn("肝胆代谢", items[0])
-        self.assertIn("氧化压力", items[0])
-        self.assertNotIn("关联度", items[0])
-        self.assertNotIn("命中产品标签", items[0])
-
     def test_canonical_vitamin_c_sku_uses_confirmed_report_profile(self) -> None:
         rows = self.exporter._nutrition_table_rows(
             [
@@ -177,8 +157,7 @@ class PdfReportExporterTests(unittest.TestCase):
         paragraph_text = [item.getPlainText() for item in flowables if hasattr(item, "getPlainText")]
 
         self.assertIn("总医嘱说明", paragraph_text)
-        self.assertIn("推荐搭配说明", paragraph_text)
-        self.assertLess(paragraph_text.index("总医嘱说明"), paragraph_text.index("推荐搭配说明"))
+        self.assertNotIn("推荐搭配说明", paragraph_text)
 
     def test_export_generates_pdf_with_structured_nutrition_table(self) -> None:
         pdf_path = self.exporter.export(

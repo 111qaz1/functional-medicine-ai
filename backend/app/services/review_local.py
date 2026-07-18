@@ -199,16 +199,33 @@ class ReviewService:
         *,
         replace_existing: bool = False,
     ) -> str:
-        advice = self._prescription_medical_advice(draft)
-        if not advice:
-            return report_text
-
         lines = (report_text or "").strip().splitlines()
         if not lines:
             return report_text
 
         section_title = "总医嘱说明"
         existing_start = self._section_start_index(lines, section_title)
+        if getattr(draft, "source_analysis_id", None):
+            if existing_start is not None and not replace_existing:
+                return report_text
+            local_items = self._as_list((getattr(draft, "report_sections", {}) or {}).get(section_title))
+            if not local_items:
+                return report_text
+            if existing_start is not None:
+                existing_end = self._section_end_index(lines, existing_start)
+                lines = lines[:existing_start] + lines[existing_end:]
+            section_lines = ["", f"## {section_title}", *[f"- {item}" for item in local_items], ""]
+            nutrition_start = self._first_section_start_index(
+                lines,
+                ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
+            )
+            insert_at = self._section_end_index(lines, nutrition_start) if nutrition_start is not None else len(lines)
+            return "\n".join(lines[:insert_at] + section_lines + lines[insert_at:]).strip()
+
+        advice = self._prescription_medical_advice(draft)
+        if not advice:
+            return report_text
+
         if existing_start is not None and not replace_existing:
             return report_text
         if existing_start is not None:
@@ -826,12 +843,12 @@ class ReviewService:
     def _append_rag_audit(self, draft, message: str) -> None:
         if not message:
             return
-        sections = draft.report_sections or {}
-        audit = list(sections.get("RAG内部审查", []) or [])
+        internal_audit = dict(getattr(draft, "internal_audit", {}) or {})
+        audit = list(internal_audit.get("rag", []) or [])
         if message not in audit:
             audit.append(message[:180])
-        sections["RAG内部审查"] = audit
-        draft.report_sections = sections
+        internal_audit["rag"] = audit
+        draft.internal_audit = internal_audit
 
     def _extract_report_section_items(self, report_text: str, title: str) -> list[str]:
         lines = report_text.splitlines()
@@ -939,10 +956,8 @@ class ReviewService:
                 sections.get("首月营养素干预方案"),
             )
             total_advice = self._as_list(sections.get("总医嘱说明"))
-            prescription_advice = self._prescription_medical_advice(draft)
-            if prescription_advice:
-                total_advice = list(dict.fromkeys([*total_advice, prescription_advice]))
             ordered_sections = [
+                ("核心结论与健康画像", sections.get("核心结论与健康画像")),
                 ("异常指标汇总", sections.get("异常指标汇总")),
                 ("慢性食物敏感检测结果", sections.get("慢性食物敏感检测结果")),
                 ("功能医学系统失衡分析", sections.get("功能医学系统失衡分析")),
@@ -955,7 +970,11 @@ class ReviewService:
                 if not items:
                     continue
                 lines.append(f"## {title}")
-                lines.extend(f"- {item}" for item in items)
+                for item in items:
+                    if self._is_report_subheading(item):
+                        lines.append(self._normalize_report_line(item))
+                    else:
+                        lines.append(f"- {item}")
                 lines.append("")
             return "\n".join(lines).strip()
 

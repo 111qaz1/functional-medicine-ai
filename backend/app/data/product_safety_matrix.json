@@ -1,11 +1,79 @@
 {
-  "version": "product-safety-matrix-v1-2026-06-26",
+  "version": "product-safety-matrix-v2-2026-07-18",
   "source_note": "Derived from customer-provided product contraindication summary. Original DOCX is not stored in Git.",
   "severity_policy": {
     "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
     "caution": "慎用/注意/需咨询医生/需监测；不阻断推荐，但必须进入医生审核和客户可见安全提示。",
     "interaction_warning": "涉及药物、手术或监测的相互作用提示；不默认阻断，除非 exclusion_rules 命中。"
   },
+  "rules": [
+    {
+      "rule_id": "case_bmi_low_excludes_weight_support",
+      "sku_ids": ["sku_weight_support"],
+      "action": "exclude",
+      "all_conditions": ["marker:bmi:low"],
+      "any_conditions": [],
+      "message": "BMI偏低或体重过轻，减重相关产品不适用于当前首月方案。",
+      "source_ref": "病例级产品选择冲突规则",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "glucose_medication_requires_review",
+      "sku_ids": ["sku_blood_sugar_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:降糖药", "med:胰岛素"],
+      "message": "正在使用降糖药或胰岛素，需结合血糖监测由医生确认后使用。",
+      "source_ref": "product_safety_matrix.interaction_warnings",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "thyroid_medication_requires_review",
+      "sku_ids": ["sku_thyroid_support", "sku_magnesium_glycinate", "sku_plant_multi_mineral"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:甲状腺素", "med:左甲状腺素"],
+      "message": "正在使用甲状腺相关药物，产品适用性和服用间隔需由医生确认。",
+      "source_ref": "product_safety_matrix.interaction_warnings",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "liver_condition_requires_review",
+      "sku_ids": ["sku_liver_detox_support", "sku_amino_acid_detox", "sku_bile_flow_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肝功能不全", "condition:肝病"],
+      "message": "已知肝功能异常或肝病，用于肝胆支持的产品必须由医生人工确认。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "renal_condition_requires_review",
+      "sku_ids": ["sku_amino_acid_detox", "sku_liver_detox_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肾功能不全", "condition:肾病"],
+      "message": "已知肾功能异常或肾病，相关产品必须由医生人工确认。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "weight_support_metabolic_warning",
+      "sku_ids": ["sku_weight_support"],
+      "action": "warn",
+      "all_conditions": ["marker:fasting_glucose:high"],
+      "any_conditions": [],
+      "message": "空腹血糖偏高时，减重产品只能作为代谢管理的补充，不能替代饮食、活动和血糖随访。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    }
+  ],
   "products": [
     {
       "sku_id": "sku_super_anti_inflammatory",

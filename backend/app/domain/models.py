@@ -96,6 +96,16 @@ class EvidenceStatus(str, Enum):
     visual_model_only = "visual_model_only"
 
 
+class FindingStandardizationStatus(str, Enum):
+    unprocessed = "unprocessed"
+    proposed = "proposed"
+    validated = "validated"
+    support_mapped = "support_mapped"
+    system_mapped = "system_mapped"
+    unmapped = "unmapped"
+    rejected = "rejected"
+
+
 class ReviewStatus(str, Enum):
     reviewed = "reviewed"
     reference_only = "reference_only"
@@ -105,6 +115,12 @@ class ReviewStatus(str, Enum):
 class ClinicianRuleAction(str, Enum):
     boost = "boost"
     avoid = "avoid"
+
+
+class SafetyRuleAction(str, Enum):
+    exclude = "exclude"
+    requires_review = "requires_review"
+    warn = "warn"
 
 
 class ExtractStatus(str, Enum):
@@ -151,6 +167,19 @@ class CaseIndicator(StrictModel):
     source_span: SourceSpan
 
 
+class ConfirmedClinicalFinding(StrictModel):
+    finding_id: str
+    finding_code: str | None = None
+    finding_name: str
+    system_ids: list[str] = Field(default_factory=list)
+    support_goals: list[str] = Field(default_factory=list)
+    mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.validated
+    abnormal_flag: str = "positive"
+    confidence: float = 0.0
+    source_span: SourceSpan
+
+
 class PageText(StrictModel):
     page: int
     text: str
@@ -172,6 +201,17 @@ class AbnormalFinding(StrictModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     evidence_status: EvidenceStatus = EvidenceStatus.needs_review
     evidence_notes: list[str] = Field(default_factory=list)
+    marker_code_candidate: str | None = None
+    finding_code_candidate: str | None = None
+    system_id_candidates: list[str] = Field(default_factory=list)
+    support_goal_candidates: list[str] = Field(default_factory=list)
+    mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    marker_code: str | None = None
+    finding_code: str | None = None
+    system_ids: list[str] = Field(default_factory=list)
+    support_goals: list[str] = Field(default_factory=list)
+    standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.unprocessed
+    standardization_notes: list[str] = Field(default_factory=list)
 
 
 class ChronicFoodSensitivityResult(StrictModel):
@@ -208,6 +248,7 @@ class CaseAnalysis(StrictModel):
     file_ids: list[str] = Field(default_factory=list)
     model_version: str
     prompt_version: str = "case-analysis-v1"
+    standardization_version: str = "legacy"
     progress_current: int = 0
     progress_total: int = 0
     current_file_name: str | None = None
@@ -313,6 +354,7 @@ class CaseRecord(StrictModel):
     questionnaire: Questionnaire | None = None
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[CaseIndicator] = Field(default_factory=list)
+    confirmed_clinical_findings: list[ConfirmedClinicalFinding] = Field(default_factory=list)
     draft_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     parsing_review_completed: bool = False
@@ -408,6 +450,27 @@ class DraftRecommendationItem(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    primary_system_id: str | None = None
+    matched_finding_ids: list[str] = Field(default_factory=list)
+    system_priority_rank: int | None = None
+    safety_decisions: list["SafetyDecision"] = Field(default_factory=list)
+
+
+class SafetyDecision(StrictModel):
+    rule_id: str
+    sku_id: str | None = None
+    action: SafetyRuleAction
+    message: str
+    source_ref: str | None = None
+
+
+class StructuredSystemFinding(StrictModel):
+    system_id: str
+    system_name: str
+    priority_level: str
+    priority_score: float
+    summary: str
+    finding_ids: list[str] = Field(default_factory=list)
 
 
 class RecommendationDraft(StrictModel):
@@ -422,12 +485,15 @@ class RecommendationDraft(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     contraindications: list[str] = Field(default_factory=list)
+    safety_decisions: list[SafetyDecision] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     abstain_reason: str | None = None
     manual_review_required: bool = True
     red_flags: list[str] = Field(default_factory=list)
+    structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     report_sections: dict[str, Any] = Field(default_factory=dict)
+    internal_audit: dict[str, Any] = Field(default_factory=dict)
     model_version: str
     prompt_version: str
     rule_version: str

@@ -13,6 +13,7 @@ from app.core.settings import AppSettings
 from app.domain.models import AnalysisMode, CaseIndicator, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
 from app.providers.local import GroundedDraftComposer
 from app.providers.base import DraftCompositionResult
+from app.services.recommendation_local_engine import RecommendationContext
 
 
 class StubLLMProvider:
@@ -68,6 +69,32 @@ class RecommendationServiceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+
+    def test_dosage_matching_requires_review_for_high_risk_context(self) -> None:
+        product = self.container.repository.get_product("sku_vitamin_d3_k")
+        self.assertIsNotNone(product)
+        context = RecommendationContext(
+            markers_by_code={},
+            goals=set(),
+            chief_concerns=set(),
+            family_history=set(),
+            symptoms=set(),
+            conditions={"肾功能异常"},
+            medications={"warfarin"},
+            allergies=set(),
+            food_sensitivities=set(),
+            pregnancy=False,
+            age=16,
+            lifestyle_tags=set(),
+            msq_system_scores={},
+            clinical_summary_text="",
+            summary_nutrient_hints=[],
+        )
+        dosage = self.container.recommendation_service._resolve_dosage(product, context)
+        warnings = self.container.recommendation_service._product_safety_warnings(product, context)
+        self.assertIn("医生复核剂量", dosage)
+        self.assertTrue(any("未成年人" in warning for warning in warnings))
+        self.assertTrue(any("用药" in warning for warning in warnings))
 
     def _prepare_case(self, report_text: str, questionnaire: Questionnaire):
         case = self.container.case_service.create_case(

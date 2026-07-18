@@ -68,10 +68,10 @@ export function WorkspaceHome() {
     <main className="shell">
       <header className="hero hero--home">
         <div className="hero__content">
-          <p className="hero__eyebrow">内部评估系统</p>
-          <h1>功能医学营养评估与报告中心</h1>
+          <p className="hero__eyebrow">伯瑞蓝图 · 内部临床工作台</p>
+          <h1><span className="hero__brand">伯瑞蓝图</span>功能医学营养评估与报告中心</h1>
           <p className="hero__copy">
-            把报告上传、人工校对、营养素匹配、生活方式建议和审核发布收在一套紧凑的本地工作流里。
+            从资料受理、证据核对到营养素方案和报告发布，把每一步都沉淀成清晰、可追溯的医生工作流。
           </p>
           <div className="hero__chips">
             <span className="hero__chip">公共工作台</span>

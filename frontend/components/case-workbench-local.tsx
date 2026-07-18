@@ -86,10 +86,15 @@ function analysisProgressPercent(analysis: CaseAnalysis) {
 }
 
 function analysisStageDetail(analysis: CaseAnalysis) {
-  const label = ANALYSIS_LABELS[analysis.status] ?? analysis.status;
-  if (analysis.current_file_name) return `${label}：${analysis.current_file_name}`;
-  if (analysis.status === "analyzing_documents") return `${label}（${analysis.progress_current}/${analysis.progress_total}）`;
-  return label;
+  const total = Math.max(analysis.progress_total, 0);
+  const completed = Math.min(analysis.progress_current, total);
+  if (analysis.status === "analyzing_documents") {
+    const fileSummary = `文件分析 ${completed}/${total} ${completed >= total && total > 0 ? "已完成" : "处理中"}`;
+    return analysis.current_file_name ? `${fileSummary}：${analysis.current_file_name}` : fileSummary;
+  }
+  if (analysis.status === "synthesizing") return `文件分析 ${total}/${total} 已完成，正在进行病例级综合`;
+  if (analysis.status === "validating") return "病例级综合已完成，正在进行证据校验";
+  return ANALYSIS_LABELS[analysis.status] ?? analysis.status;
 }
 
 export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
@@ -421,8 +426,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setOperation({ placement: "report", title: "审核并生成报告", stage: "正在保存审核结果并生成报告文件……", percent: 55, status: "running" });
       await approveDraft(draft.id, reviewerId, publishableSummary, { excluded_sku_ids: excludedSkuIds });
       await loadCase();
-      setNotice("报告已审核发布，PDF 已可下载。");
-      setOperation({ placement: "report", title: "审核并生成报告", stage: "报告已发布，可下载 PDF。", percent: 100, status: "success" });
+      setNotice("报告已审核发布，正在自动导出 PDF。");
+      const downloaded = await handleDownloadReport(draft.id);
+      if (!downloaded) throw new Error("PDF 自动下载失败，请稍后重试");
+      setNotice("报告已审核发布，PDF 已自动下载。");
+      setOperation({ placement: "report", title: "审核并生成报告", stage: "报告已发布，PDF 已自动下载。", percent: 100, status: "success" });
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "审核发布失败";
@@ -433,7 +441,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     }
   }
 
-  async function handleDownloadReport(draftId: string) {
+  async function handleDownloadReport(draftId: string): Promise<boolean> {
     try {
       setBusy(true);
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在生成并下载报告文件……", percent: 12, status: "running" });
@@ -441,10 +449,12 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在下载报告文件……", percent: Math.max(12, percent), status: "running" });
       });
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: "PDF 已下载。", percent: 100, status: "success" });
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "报告下载失败";
       setError(message);
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: message, percent: 100, status: "error" });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -456,14 +466,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const caseRecord = payload.case;
   const latestDraft = payload.latest_draft;
   const canStart = validFiles.length > 0 && (!analysis || ["failed", "stale"].includes(analysis.status));
-  const linkedDraftNeedsRegeneration = Boolean(
-    analysis?.draft_id &&
-    latestDraft?.id === analysis.draft_id &&
-    latestDraft.recommended_skus.length === 0
-  );
   const canReview = analysis &&
-    ["ready_for_review", "reviewed"].includes(analysis.status) &&
-    (!analysis.draft_id || linkedDraftNeedsRegeneration);
+    ["ready_for_review", "reviewed"].includes(analysis.status);
   const includedRecommendationCount = latestDraft
     ? latestDraft.recommended_skus.filter((item) => !excludedSkuIds.includes(item.sku_id)).length
     : 0;
@@ -556,7 +560,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </div>
                 <span className="indicator-status indicator-status--info">{analysis.progress_current}/{analysis.progress_total}</span>
               </div>
-              <progress className="analysis-progress" max={Math.max(analysis.progress_total, 1)} value={analysis.progress_current} />
+              <div className="analysis-progress-meta"><span>{analysisStageDetail(analysis)}</span><strong>{analysisProgressPercent(analysis)}%</strong></div>
+              <progress className="analysis-progress" max={100} value={analysisProgressPercent(analysis)} aria-label="病例综合分析总体进度" />
               {analysis.current_file_name ? <p className="muted">正在处理：{analysis.current_file_name}</p> : null}
               {analysis.error_message ? <p className="error-text">{analysis.error_code}: {analysis.error_message}</p> : null}
               {analysis.warnings.map((warning, index) => <p className="muted" key={`${warning}-${index}`}>⚠ {warning}</p>)}

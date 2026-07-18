@@ -17,6 +17,7 @@ export function OperationProgress({ operation }: { operation: OperationProgressS
         <strong><span className="operation-progress__spinner" aria-hidden="true" />{operation.title}</strong>
         <span>{operation.status === "success" ? "完成" : operation.status === "error" ? "失败" : "处理中"}</span>
       </div>
+      <div className="operation-progress__track" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.max(0, operation.percent))}%` }} /></div>
       <p>{operation.stage}</p>
       {operation.detail ? <small>{operation.detail}</small> : null}
     </div>

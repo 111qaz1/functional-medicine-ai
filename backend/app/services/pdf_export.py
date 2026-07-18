@@ -45,7 +45,10 @@ class PdfReportExporter:
         recommended_skus: list[Any] | None = None,
     ) -> Path:
         safe_name = self._sanitize_filename(customer_name)
-        target = self.root / f"{safe_name}-{draft_id}.pdf"
+        # The downloaded report should be recognizable by the case name. A case
+        # can be regenerated repeatedly, so the newest approved report replaces
+        # the previous file with the same customer-facing name.
+        target = self.root / f"{safe_name}.pdf"
         self._build_pdf(
             target,
             customer_name=customer_name,

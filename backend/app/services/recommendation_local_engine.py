@@ -28,6 +28,7 @@ class RecommendationContext:
     allergies: set[str]
     food_sensitivities: set[str]
     pregnancy: bool
+    age: int | None
     lifestyle_tags: set[str]
     msq_system_scores: dict[str, int]
     clinical_summary_text: str
@@ -304,7 +305,7 @@ class RecommendationService:
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
                         display_name=product.display_name,
-                        dosage=self._first_month_dosage(product),
+                        dosage=self._resolve_dosage(product, context),
                         reason=final_reason,
                         evidence_ids=evidence_ids,
                         evidence_details=self._build_evidence_details(
@@ -313,7 +314,7 @@ class RecommendationService:
                             knowledge_by_id=knowledge_by_id,
                             clinician_rule_by_id=clinician_rule_by_id,
                         ),
-                        warnings=self._product_safety_warnings(product),
+                        warnings=self._product_safety_warnings(product, context),
                     )
                 )
 
@@ -537,6 +538,7 @@ class RecommendationService:
             allergies=allergies,
             food_sensitivities=food_sensitivities,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
+            age=questionnaire.age if questionnaire else None,
             lifestyle_tags=lifestyle_tags,
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
@@ -3156,8 +3158,27 @@ class RecommendationService:
                 lines.append(f"{item.display_name}：{item.dosage}；适用说明：{item.reason}{safety_suffix}")
         return lines
 
-    def _product_safety_warnings(self, product: ProductRule) -> list[str]:
-        return list(dict.fromkeys(product.contraindications + product.interaction_rule + product.warning_text))[:6]
+    def _dosage_review_reasons(self, context: RecommendationContext) -> list[str]:
+        reasons: list[str] = []
+        if context.age is not None and context.age < 18:
+            reasons.append("未成年人需按年龄/体重由医生确认剂量")
+        if context.pregnancy:
+            reasons.append("孕哺期需由医生确认剂量与成分安全性")
+        high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
+        if any(term in condition for condition in context.conditions for term in high_risk_conditions):
+            reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
+        if context.medications:
+            reasons.append("当前用药可能影响营养素剂量或服用时机")
+        return reasons
+
+    def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
+        base = self._first_month_dosage(product).strip() or "请按医生建议使用"
+        return f"医生复核剂量；产品规则基准：{base}" if self._dosage_review_reasons(context) else base
+
+    def _product_safety_warnings(self, product: ProductRule, context: RecommendationContext | None = None) -> list[str]:
+        dosage_reasons = self._dosage_review_reasons(context) if context is not None else []
+        warnings = dosage_reasons + product.contraindications + product.interaction_rule + product.warning_text
+        return list(dict.fromkeys(warnings))[:6]
 
     def _public_safety_note(self, warnings: list[str], *, limit: int = 3) -> str:
         public_warnings = []

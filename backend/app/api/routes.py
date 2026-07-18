@@ -18,6 +18,7 @@ from app.api.schemas import (
     AuthMeResponse,
     AuthRegisterRequest,
     AuthResponse,
+    PasswordChangeRequest,
     ApproveDraftRequest,
     CaseDetailResponse,
     CaseSummaryResponse,
@@ -38,6 +39,7 @@ from app.api.schemas import (
     QuestionnaireRequest,
     ReviewAndGenerateRequest,
     ReviewAndGenerateResponse,
+    ProcessingOperationResponse,
     StartAnalysisRequest,
     UpdateClinicianRuleRequest,
 )
@@ -112,14 +114,6 @@ def _require_doctor(request: Request) -> DoctorAccount:
 
 def _require_admin(request: Request) -> DoctorAccount:
     container = _container(request)
-    if container.repository.count_doctors() == 0:
-        return DoctorAccount(
-            id="system_setup",
-            username="system_setup",
-            display_name="System setup",
-            password_hash="",
-            role=DoctorRole.admin,
-        )
     doctor = _require_doctor(request)
     if doctor.role != DoctorRole.admin:
         raise HTTPException(status_code=403, detail="只有管理员可以执行该操作。")
@@ -235,7 +229,13 @@ def _merge_clinical_summary_text(existing_text: str | None, imported_text: str) 
     return "\n".join(merged_lines).strip()
 
 
-def _case_detail_response(container, case, *, include_audit_logs: bool = False) -> CaseDetailResponse:
+def _case_detail_response(
+    container,
+    case,
+    *,
+    include_audit_logs: bool = False,
+    operation: ProcessingOperationResponse | None = None,
+) -> CaseDetailResponse:
     latest_draft = container.repository.get_draft(case.draft_ids[-1]) if case.draft_ids else None
     review = _current_review_decision(container, case.draft_ids[-1]) if case.draft_ids else None
     audit_logs = []
@@ -251,6 +251,7 @@ def _case_detail_response(container, case, *, include_audit_logs: bool = False) 
         review_decision=review,
         audit_logs=audit_logs,
         matched_clinician_rules=container.assistant_rule_service.match_rules_for_case(case),
+        operation=operation,
     )
 
 
@@ -334,6 +335,21 @@ def auth_login(payload: AuthLoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     _set_session_cookie(response, session.session.id)
     return AuthResponse(doctor=_doctor_response(session.doctor))
+
+
+@router.post("/auth/password")
+def auth_change_password(payload: PasswordChangeRequest, request: Request):
+    container = _container(request)
+    doctor = _require_admin(request)
+    try:
+        updated = container.auth_service.change_password(
+            doctor=doctor,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"updated": True, "doctor": _doctor_response(updated)}
 
 
 @router.post("/auth/logout")
@@ -451,7 +467,34 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         validation_error=intake.validation_error,
     )
     case = container.case_service.add_uploaded_file(case.id, uploaded_file)
-    return _case_detail_response(container, case)
+    if intake.validation_error:
+        operation = ProcessingOperationResponse(
+            success=False,
+            stage="upload_preflight",
+            status="failed",
+            parsing_succeeded=False,
+            message=intake.validation_error,
+            filename=filename,
+        )
+    elif intake.extracted_text:
+        operation = ProcessingOperationResponse(
+            success=True,
+            stage="upload_preflight",
+            status="succeeded",
+            parsing_succeeded=True,
+            message="文件上传并完成文本层预解析；综合分析尚未开始。",
+            filename=filename,
+        )
+    else:
+        operation = ProcessingOperationResponse(
+            success=True,
+            stage="upload_preflight",
+            status="pending",
+            parsing_succeeded=None,
+            message="文件上传成功；该文件需要在综合分析阶段继续解析。",
+            filename=filename,
+        )
+    return _case_detail_response(container, case, operation=operation)
 
 
 @router.delete("/cases/{case_id}/files/{file_id}", response_model=CaseDetailResponse)
@@ -552,7 +595,18 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         lab_items=lab_items,
         parse_warnings=parse_warnings,
     )
-    return _case_detail_response(container, case)
+    return _case_detail_response(
+        container,
+        case,
+        operation=ProcessingOperationResponse(
+            success=True,
+            stage="file_reparse",
+            status="succeeded",
+            parsing_succeeded=True,
+            message="文件已重新解析并更新结构化指标。",
+            filename=target_file.filename,
+        ),
+    )
 
 
 @router.post("/cases/{case_id}/questionnaire", response_model=CaseDetailResponse)
@@ -583,7 +637,18 @@ async def import_questionnaire_file(case_id: str, request: Request, file: Upload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _case_detail_response(container, case)
+    return _case_detail_response(
+        container,
+        case,
+        operation=ProcessingOperationResponse(
+            success=True,
+            stage="questionnaire_import",
+            status="succeeded",
+            parsing_succeeded=True,
+            message="问卷解析成功，已写入病例结构化问卷。",
+            filename=filename,
+        ),
+    )
 
 
 @router.put("/cases/{case_id}/clinical-summary", response_model=CaseDetailResponse)
@@ -866,7 +931,7 @@ def list_clinician_rules(request: Request):
 @router.post("/assistant/rules/from-case")
 def create_clinician_rule_from_case(payload: CreateClinicianRuleFromCaseRequest, request: Request):
     container = _container(request)
-    doctor = _require_doctor(request)
+    doctor = _require_admin(request)
     _authorized_case(container, payload.case_id, doctor)
     try:
         rule = container.assistant_rule_service.create_from_case(
@@ -907,7 +972,7 @@ def chat_with_case_assistant(case_id: str, payload: AssistantCaseChatRequest, re
 @router.put("/assistant/rules/{rule_id}")
 def update_clinician_rule(rule_id: str, payload: UpdateClinicianRuleRequest, request: Request):
     container = _container(request)
-    doctor = _require_doctor(request)
+    doctor = _require_admin(request)
     updates = dict(
         title=payload.title,
         instruction_text=payload.instruction_text,
@@ -944,7 +1009,7 @@ def update_clinician_rule(rule_id: str, payload: UpdateClinicianRuleRequest, req
 @router.delete("/assistant/rules/{rule_id}")
 def delete_clinician_rule(rule_id: str, request: Request):
     container = _container(request)
-    doctor = _require_doctor(request)
+    doctor = _require_admin(request)
     try:
         container.assistant_rule_service.delete_rule(rule_id, doctor=doctor)
     except KeyError as exc:
@@ -957,6 +1022,7 @@ def delete_clinician_rule(rule_id: str, request: Request):
 @router.get("/system/llm-config", response_model=LLMConfigResponse)
 def get_llm_config(request: Request):
     container = _container(request)
+    _require_admin(request)
     config = llm_config_from_settings(container.settings)
     validation_error = llm_config_validation_error(config)
     return LLMConfigResponse(

@@ -44,6 +44,11 @@ class LLMConfigValidationTests(unittest.TestCase):
             app = create_app()
             app.state.container = build_container(settings)
             with TestClient(app) as client:
+                registered = client.post(
+                    "/auth/register",
+                    json={"username": "admin", "password": "secret123", "display_name": "Admin"},
+                )
+                self.assertEqual(registered.status_code, 200, registered.text)
                 response = client.put(
                     "/system/llm-config",
                     json={

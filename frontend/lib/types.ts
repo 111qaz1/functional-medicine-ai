@@ -102,6 +102,17 @@ export interface AbnormalFinding {
   confidence: number;
   evidence_status: "verified_text" | "needs_review" | "visual_model_only";
   evidence_notes: string[];
+  marker_code_candidate?: string | null;
+  finding_code_candidate?: string | null;
+  system_id_candidates?: string[];
+  support_goal_candidates?: string[];
+  mapping_confidence?: number;
+  marker_code?: string | null;
+  finding_code?: string | null;
+  system_ids?: string[];
+  support_goals?: string[];
+  standardization_status?: "unprocessed" | "proposed" | "validated" | "support_mapped" | "system_mapped" | "unmapped" | "rejected";
+  standardization_notes?: string[];
 }
 
 export interface ChronicFoodSensitivityResult {
@@ -193,6 +204,18 @@ export interface CaseRecord {
   questionnaire?: Questionnaire | null;
   extracted_lab_items: ExtractedLabItem[];
   manual_indicators: CaseIndicator[];
+  confirmed_clinical_findings?: Array<{
+    finding_id: string;
+    finding_code?: string | null;
+    finding_name: string;
+    system_ids?: string[];
+    support_goals?: string[];
+    mapping_confidence?: number;
+    standardization_status?: "validated" | "support_mapped" | "system_mapped";
+    abnormal_flag: string;
+    confidence: number;
+    source_span: SourceSpan;
+  }>;
   draft_ids: string[];
   flags: string[];
   parsing_review_completed: boolean;
@@ -211,6 +234,25 @@ export interface DraftRecommendationItem {
   evidence_ids: string[];
   evidence_details: string[];
   warnings: string[];
+  primary_system_id?: string | null;
+  matched_finding_ids?: string[];
+  system_priority_rank?: number | null;
+  safety_decisions?: Array<{
+    rule_id: string;
+    sku_id?: string | null;
+    action: "exclude" | "requires_review" | "warn";
+    message: string;
+    source_ref?: string | null;
+  }>;
+}
+
+export interface StructuredSystemFinding {
+  system_id: string;
+  system_name: string;
+  priority_level: "最高优先级" | "优先级高" | "中度关注" | string;
+  priority_score: number;
+  summary: string;
+  finding_ids: string[];
 }
 
 export interface RecommendationDraft {
@@ -225,12 +267,21 @@ export interface RecommendationDraft {
   evidence_ids: string[];
   evidence_details: string[];
   contraindications: string[];
+  safety_decisions?: Array<{
+    rule_id: string;
+    sku_id?: string | null;
+    action: "exclude" | "requires_review" | "warn";
+    message: string;
+    source_ref?: string | null;
+  }>;
   missing_info: string[];
   confidence: number;
   abstain_reason?: string | null;
   manual_review_required: boolean;
   red_flags: string[];
+  structured_system_findings?: StructuredSystemFinding[];
   report_sections: Record<string, string[] | string>;
+  internal_audit?: Record<string, unknown>;
   model_version: string;
   prompt_version: string;
   rule_version: string;

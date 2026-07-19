@@ -24,6 +24,7 @@ from app.services.document_intake import DocumentIntakeService
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.ingestion import KnowledgeIngestionService
 from app.services.parsing import DocumentParsingService, LabNormalizationService
+from app.services.finding_standardization import FindingStandardizationService
 from app.services.pdf_export import PdfReportExporter
 from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.questionnaire_import import QuestionnaireImportService
@@ -199,6 +200,11 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     auth_service = AuthService(repository)
     case_service = CaseService(repository)
     indicator_service = CaseIndicatorService()
+    finding_standardization_service = FindingStandardizationService(
+        _data_path(settings, "marker_dictionary.json"),
+        _data_path(settings, "clinical_finding_dictionary.json"),
+        _data_path(settings, "product_tag_matrix.json"),
+    )
     parsing_service = DocumentParsingService(
         ocr_provider=DocumentOCRProvider(
             base_url=settings.llm_base_url,
@@ -217,6 +223,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         vector_store=vector_store,
         llm_provider=llm_provider,
         parsing_service=parsing_service,
+        standardization_service=finding_standardization_service,
         rag_retriever=rag_retriever,
         model_version=model_version,
         prompt_version=prompt_version,
@@ -235,6 +242,10 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             api_style=settings.llm_api_style,
             timeout_seconds=max(settings.llm_timeout_seconds, 90.0),
             temperature=min(settings.llm_temperature, 0.1),
+            marker_codes=finding_standardization_service.marker_codes,
+            finding_codes=finding_standardization_service.finding_codes,
+            system_codes=finding_standardization_service.system_codes,
+            support_goal_codes=finding_standardization_service.support_goal_codes,
         )
     case_analysis_service = CaseAnalysisService(
         repository=repository,
@@ -242,7 +253,8 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         recommendation_service=recommendation_service,
         provider=case_analysis_provider,
         model_version=settings.llm_model or "unconfigured",
-        prompt_version="case-analysis-v2-zh-msq-hybrid",
+        prompt_version="case-analysis-v4-support-goals",
+        standardization_service=finding_standardization_service,
         questionnaire_import_service=questionnaire_import_service,
         worker_count=settings.analysis_worker_count,
     )

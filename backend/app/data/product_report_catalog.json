@@ -1,6 +1,6 @@
 {
-  "version": "2026-07-16-customer-report-products-v2",
-  "source_note": "Derived from local customer report product introduction sheet. Original workbook is not stored in Git.",
+  "version": "2026-07-18-customer-report-products-v3",
+  "source_note": "Names, English names and patient-facing descriptions were checked against the local customer product introduction workbook; functional targets were cross-checked against the local nutrient function workbook without importing dosage fields. Original workbooks are not stored in Git.",
   "ignored_products": [
     "综合消化酶",
     "复合益生菌"

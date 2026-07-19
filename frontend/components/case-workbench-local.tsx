@@ -51,7 +51,15 @@ function reportText(draft: RecommendationDraft | null | undefined) {
 }
 
 function cloneFindings(items: AbnormalFinding[]) {
-  return items.map((item) => ({ ...item, evidence_notes: [...item.evidence_notes] }));
+  return items.map((item) => ({
+    ...item,
+    evidence_notes: [...item.evidence_notes],
+    system_id_candidates: [...(item.system_id_candidates ?? [])],
+    support_goal_candidates: [...(item.support_goal_candidates ?? [])],
+    system_ids: [...(item.system_ids ?? [])],
+    support_goals: [...(item.support_goals ?? [])],
+    standardization_notes: [...(item.standardization_notes ?? [])]
+  }));
 }
 
 function evidenceLabel(status: AbnormalFinding["evidence_status"]) {
@@ -72,6 +80,15 @@ function findingResultLabel(finding: AbnormalFinding) {
     || [finding.raw_value, finding.unit].filter(Boolean).join(" ")
     || finding.interpretation?.trim()
     || "已发现异常";
+}
+
+function standardizationStatusLabel(status: AbnormalFinding["standardization_status"]) {
+  if (status === "validated") return "已完成精准结构化匹配。";
+  if (status === "support_mapped") return "已识别相关营养支持方向，生成草案时仍由本地产品与安全规则校验。";
+  if (status === "system_mapped") return "已归入相关身体系统，不会单独触发营养素推荐。";
+  if (status === "unmapped") return "暂未建立可靠映射，该异常仍会保留在报告中。";
+  if (status === "rejected") return "模型候选未通过本地校验，该异常仍会保留在报告中。";
+  return "";
 }
 
 function analysisProgressPercent(analysis: CaseAnalysis) {
@@ -637,6 +654,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                     <details className="abnormal-finding-card__editor">
                       <summary>展开校对</summary>
                       <div className="abnormal-finding-card__editor-body">
+                        {standardizationStatusLabel(finding.standardization_status) ? (
+                          <p className="muted">{standardizationStatusLabel(finding.standardization_status)}</p>
+                        ) : null}
                         <div className="grid-two">
                           <label className="field"><span>异常名称</span><input value={finding.name} onChange={(event) => updateFinding(index, { name: event.target.value })} /></label>
                           <label className="field"><span>结果 / 非数值结论</span><input value={finding.result_text ?? ""} onChange={(event) => updateFinding(index, { result_text: event.target.value || null })} /></label>

@@ -1,0 +1,22 @@
+[
+  {"code":"fatty_liver","display_name":"脂肪肝","synonyms":["脂肪肝","肝脂肪变","肝脏脂肪浸润"]},
+  {"code":"liver_calcification","display_name":"肝脏钙化灶","synonyms":["肝脏钙化灶","肝内钙化灶","肝钙化"]},
+  {"code":"thyroid_nodule","display_name":"甲状腺结节","synonyms":["甲状腺结节","甲状腺占位"]},
+  {"code":"breast_nodule","display_name":"乳腺结节","synonyms":["乳腺结节","乳腺肿块","BI-RADS"]},
+  {"code":"pulmonary_nodule","display_name":"肺结节","synonyms":["肺结节","肺部结节","Lung-RADS"]},
+  {"code":"osteopenia","display_name":"骨量减少","synonyms":["骨量减少","低骨量","骨密度降低"]},
+  {"code":"osteoporosis","display_name":"骨质疏松","synonyms":["骨质疏松","骨质疏松症"]},
+  {"code":"chronic_gastritis","display_name":"慢性胃炎","synonyms":["慢性胃炎","慢性非萎缩性胃炎"]},
+  {"code":"atrophic_gastritis","display_name":"慢性萎缩性胃炎","synonyms":["慢性萎缩性胃炎","萎缩性胃炎"]},
+  {"code":"intestinal_metaplasia","display_name":"胃黏膜肠上皮化生","synonyms":["肠上皮化生","肠化生","胃黏膜肠化"]},
+  {"code":"gastric_polyp","display_name":"胃息肉","synonyms":["胃息肉","胃底腺息肉","胃多发息肉"]},
+  {"code":"bile_reflux","display_name":"胆汁反流","synonyms":["胆汁反流","胆汁反流性胃炎"]},
+  {"code":"intestinal_barrier_dysfunction","display_name":"肠道屏障异常","synonyms":["肠道屏障异常","肠漏","肠道通透性增高","Zonulin升高"]},
+  {"code":"gut_dysbiosis","display_name":"肠道菌群失衡","synonyms":["肠道菌群失衡","菌群紊乱","肠道菌群紊乱","菌群多样性下降"]},
+  {"code":"sleep_disorder","display_name":"睡眠障碍","synonyms":["睡眠障碍","失眠","入睡困难","睡眠质量差"]},
+  {"code":"underweight","display_name":"体重过轻","synonyms":["体重过轻","低体重","消瘦"]},
+  {"code":"hypertension","display_name":"血压升高","synonyms":["高血压","血压升高","收缩压升高","舒张压升高"]},
+  {"code":"eczema","display_name":"湿疹","synonyms":["湿疹","特应性皮炎"]},
+  {"code":"allergic_rhinitis","display_name":"过敏性鼻炎","synonyms":["过敏性鼻炎","变应性鼻炎"]},
+  {"code":"bacterial_vaginosis","display_name":"细菌性阴道病","synonyms":["细菌性阴道病","细菌性阴道炎"]}
+]

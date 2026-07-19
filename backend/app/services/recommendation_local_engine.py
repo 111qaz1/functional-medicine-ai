@@ -120,8 +120,27 @@ class RecommendationService:
         self.prompt_version = prompt_version
         self.rule_version = rule_version
         self.object_store = None
+        self.product_dosage_mapping = self._load_product_dosage_mapping()
         self.product_tag_profiles = self._load_product_tag_profiles()
         self.product_safety_profiles = self._load_product_safety_profiles()
+
+    def _load_product_dosage_mapping(self) -> dict[str, dict]:
+        """Load the versioned Excel import once when the service starts."""
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "product_dosage_mapping.json"
+        if not mapping_path.exists():
+            return {}
+        try:
+            payload = json.loads(mapping_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        entries = payload.get("products", payload) if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return {}
+        return {
+            str(item.get("sku_id")): item
+            for item in entries
+            if isinstance(item, dict) and item.get("sku_id")
+        }
 
     def _load_product_tag_profiles(self) -> dict[str, ProductTagProfile]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_tag_matrix.json"
@@ -3088,6 +3107,9 @@ class RecommendationService:
         return formatted
 
     def _first_month_dosage(self, product: ProductRule) -> str:
+        excel_rule = self.product_dosage_mapping.get(product.sku_id, {}).get("dosage_text")
+        if isinstance(excel_rule, str) and excel_rule.strip():
+            return excel_rule.strip()
         first_month_rules = {
             "sku_liver_detox_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；连续 4 周后根据肝胆指标和胃肠耐受调整。",
             "sku_amino_acid_detox": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；用于首月二阶段解毒支持，需结合肝肾功能人工确认。",

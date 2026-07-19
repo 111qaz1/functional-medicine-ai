@@ -115,6 +115,22 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [reviewActionNotice, setReviewActionNotice] = useState<string | null>(null);
   const [operation, setOperation] = useState<OperationProgressState | null>(null);
+  const [findingFilter, setFindingFilter] = useState<"all" | "attention" | "needs_review" | "verified">("all");
+  const [findingSearch, setFindingSearch] = useState("");
+
+  const visibleFindings = useMemo(() => findings
+    .map((finding, index) => ({ finding, index }))
+    .filter(({ finding }) => {
+      const query = findingSearch.trim().toLowerCase();
+      const matchesSearch = !query || [finding.name, finding.result_text, finding.interpretation, finding.source_text]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+      const matchesFilter = findingFilter === "all"
+        || (findingFilter === "attention" && ["high", "low", "positive"].includes(finding.abnormal_flag))
+        || (findingFilter === "needs_review" && finding.evidence_status === "needs_review")
+        || (findingFilter === "verified" && finding.evidence_status === "verified_text");
+      return matchesSearch && matchesFilter;
+    }), [findings, findingFilter, findingSearch]);
 
   async function loadCase() {
     const next = await fetchCase(caseId);
@@ -595,8 +611,21 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
 
             <SectionCard title="异常发现校对" subtitle="03 · Clinical review" tone="review">
               <label className="field"><span>校对医生</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} /></label>
+              <div className="finding-toolbar">
+                <div className="finding-filter" role="group" aria-label="异常指标筛选">
+                  {([
+                    ["all", `全部 ${findings.length}`],
+                    ["attention", `异常 ${findings.filter((item) => ["high", "low", "positive"].includes(item.abnormal_flag)).length}`],
+                    ["needs_review", `待确认 ${findings.filter((item) => item.evidence_status === "needs_review").length}`],
+                    ["verified", `已核对 ${findings.filter((item) => item.evidence_status === "verified_text").length}`]
+                  ] as const).map(([value, label]) => (
+                    <button type="button" key={value} className={`finding-filter__button${findingFilter === value ? " is-active" : ""}`} onClick={() => setFindingFilter(value)}>{label}</button>
+                  ))}
+                </div>
+                <input className="finding-search" value={findingSearch} onChange={(event) => setFindingSearch(event.target.value)} placeholder="搜索指标、结果或证据" aria-label="搜索异常指标" />
+              </div>
               <div className="abnormal-finding-list">
-                {findings.map((finding, index) => (
+                {visibleFindings.map(({ finding, index }) => (
                   <div className="abnormal-finding-card" key={finding.id}>
                     <div className="abnormal-finding-card__summary">
                       <div>
@@ -633,6 +662,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                   </div>
                 ))}
                 {!findings.length ? <p className="muted">模型未给出异常；医生仍可人工补充。</p> : null}
+                {findings.length > 0 && !visibleFindings.length ? <p className="muted">当前筛选条件下没有匹配的异常指标。</p> : null}
               </div>
               <div className="button-row">
                 <button type="button" className="secondary-button" disabled={busy || !validFiles.length} onClick={addFinding}>补充异常</button>

@@ -895,8 +895,11 @@ class RecommendationServiceTests(unittest.TestCase):
         fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")
         glutathione_support = self.container.repository.get_product("sku_amino_acid_detox")
 
-        self.assertIn("每日 4 粒", self.container.recommendation_service._first_month_dosage(fish_oil))
-        self.assertIn("每日 2 粒", self.container.recommendation_service._first_month_dosage(glutathione_support))
+        fish_oil_dosage = self.container.recommendation_service._first_month_dosage(fish_oil)
+        glutathione_dosage = self.container.recommendation_service._first_month_dosage(glutathione_support)
+        self.assertIn("日常心血管养护", fish_oil_dosage)
+        self.assertIn("每日2 粒", fish_oil_dosage)
+        self.assertIn("首月二阶段解毒支持", glutathione_dosage)
 
     def test_product_tag_matrix_prioritizes_precise_liver_detox_products(self) -> None:
         case = self._prepare_case(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -26,9 +27,11 @@ from app.domain.models import (
     DraftRecommendationItem,
     EvidenceStatus,
     FileIntakeStatus,
+    FindingStandardizationStatus,
     PageText,
     Questionnaire,
     RecommendationDraft,
+    StructuredSystemFinding,
     UploadedFile,
     WorkspaceScope,
 )
@@ -37,6 +40,7 @@ from app.services.case_analysis import CaseAnalysisService, OpenAICompatibleCase
 from app.services.case_service import CaseService
 from app.services.document_intake import DocumentIntakeService
 from app.services.indicator_extraction import CaseIndicatorService
+from app.services.finding_standardization import FindingStandardizationService
 from app.services.pdf_export import PdfReportExporter
 from app.services.review_local import ReviewService
 
@@ -45,6 +49,8 @@ class FakeAnalysisProvider:
     def __init__(self) -> None:
         self.document_calls = 0
         self.synthesis_calls = 0
+        self.synthesis_thinking_types: list[str] = []
+        self.synthesis_document_names: list[list[str]] = []
 
     def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
         self.document_calls += 1
@@ -92,6 +98,10 @@ class FakeAnalysisProvider:
 
     def synthesize_case(self, **kwargs):
         self.synthesis_calls += 1
+        self.synthesis_thinking_types.append(kwargs.get("thinking_type", "enabled"))
+        self.synthesis_document_names.append(
+            [item.file_name for item in kwargs.get("document_results", [])]
+        )
         reviewed = kwargs.get("reviewed_findings")
         return SimpleNamespace(
             case_summary="医生确认后的病例总结" if reviewed is not None else "初步病例总结",
@@ -124,6 +134,15 @@ class FakeRecommendationService:
                 )
             ],
             lifestyle_actions=["合成生活方式"],
+            structured_system_findings=[
+                StructuredSystemFinding(
+                    system_id="endocrine_metabolic",
+                    system_name="内分泌/代谢系统",
+                    priority_level="优先级高",
+                    priority_score=70,
+                    summary="合成结构化系统分析",
+                )
+            ],
             report_sections={
                 "异常指标汇总": ["合成指标A 12.3 偏高"],
                 "功能医学系统失衡分析": ["旧系统分析"],
@@ -184,12 +203,19 @@ class CaseAnalysisTests(unittest.TestCase):
             owner_doctor_id=owner,
         )
 
-    def _add_text_file(self, case_id: str, *, file_id: str = "file-a", digest: str = "same-digest"):
+    def _add_text_file(
+        self,
+        case_id: str,
+        *,
+        file_id: str = "file-a",
+        digest: str = "same-digest",
+        filename: str = "synthetic-report.txt",
+    ):
         text = "合成指标A 12.3 U/L 1.0-10.0\n检查提示合成非数值异常存在"
         uploaded = UploadedFile(
             id=file_id,
             case_id=case_id,
-            filename="synthetic-report.txt",
+            filename=filename,
             content_type="text/plain",
             size_bytes=len(text.encode()),
             content_sha256=digest,
@@ -226,6 +252,91 @@ class CaseAnalysisTests(unittest.TestCase):
             self.service.create_analysis(case.id)
         self.assertEqual(self.provider.document_calls, 0)
 
+    def test_hybrid_standardization_validates_vitamin_d_and_preserves_unmapped_findings(self) -> None:
+        data_dir = Path(__file__).resolve().parents[1] / "app" / "data"
+        service = FindingStandardizationService(
+            data_dir / "marker_dictionary.json",
+            data_dir / "clinical_finding_dictionary.json",
+        )
+        vitamin_d = AbnormalFinding(
+            id="finding-vitamin-d",
+            name="维生素D减少",
+            result_text="偏低",
+            abnormal_flag="low",
+            source_file_id="file-a",
+            source_file_name="report.pdf",
+            source_page=1,
+            source_text="维生素D减少",
+            confidence=0.96,
+            marker_code_candidate="vitamin_d",
+        )
+        standardized = service.standardize(vitamin_d, doctor_confirmed=True)
+        self.assertEqual(standardized.marker_code, "vitamin_d")
+        self.assertEqual(standardized.abnormal_flag, "low")
+        self.assertEqual(standardized.standardization_status, FindingStandardizationStatus.validated)
+        self.assertEqual(service.to_lab_item(standardized).marker_code, "vitamin_d")
+
+        unmapped = service.standardize(vitamin_d.model_copy(update={
+            "id": "finding-unmapped",
+            "name": "未收录合成异常",
+            "source_text": "未收录合成异常",
+            "marker_code_candidate": None,
+        }), doctor_confirmed=True)
+        self.assertEqual(unmapped.standardization_status, FindingStandardizationStatus.unmapped)
+        self.assertIsNone(unmapped.marker_code)
+
+    def test_support_goal_fallback_is_local_and_blocks_follow_up_only_findings(self) -> None:
+        data_dir = Path(__file__).resolve().parents[1] / "app" / "data"
+        service = FindingStandardizationService(
+            data_dir / "marker_dictionary.json",
+            data_dir / "clinical_finding_dictionary.json",
+            data_dir / "product_tag_matrix.json",
+        )
+        support_finding = AbnormalFinding(
+            id="finding-bone-support",
+            name="骨代谢支持需求",
+            result_text="需要关注",
+            abnormal_flag="positive",
+            source_file_id="file-a",
+            source_file_name="report.pdf",
+            source_page=1,
+            source_text="骨代谢支持需求",
+            confidence=0.95,
+            system_id_candidates=["bone_muscle"],
+            support_goal_candidates=["vitamin_d_repletion"],
+            mapping_confidence=0.92,
+        )
+        standardized = service.standardize(support_finding, doctor_confirmed=True)
+        self.assertEqual(standardized.standardization_status, FindingStandardizationStatus.support_mapped)
+        self.assertEqual(standardized.support_goals, ["vitamin_d_repletion"])
+        self.assertEqual(service.to_clinical_finding(standardized).system_ids, ["bone_muscle"])
+
+        antibody = support_finding.model_copy(update={
+            "id": "finding-antibody",
+            "name": "PM-Scl抗体阳性",
+            "source_text": "PM-Scl抗体阳性",
+            "system_id_candidates": ["immune_inflammation"],
+            "support_goal_candidates": ["immune"],
+            "mapping_confidence": 0.98,
+        })
+        blocked = service.standardize(antibody, doctor_confirmed=True)
+        self.assertEqual(blocked.standardization_status, FindingStandardizationStatus.system_mapped)
+        self.assertEqual(blocked.support_goals, [])
+
+    def test_named_food_sensitivity_report_only_populates_specialty_section(self) -> None:
+        case = self._create_case()
+        self._add_text_file(case.id, filename="慢性食物敏感报告（1）.pdf")
+
+        analysis = self._wait(
+            self.service.create_analysis(case.id, third_party_processing_confirmed=True).id
+        )
+
+        self.assertEqual(analysis.status, AnalysisStatus.ready_for_review)
+        self.assertEqual(analysis.abnormal_findings, [])
+        self.assertIsNotNone(analysis.food_sensitivity)
+        self.assertEqual(len(analysis.food_sensitivity.mild_foods), 5)
+        self.assertEqual(self.provider.synthesis_document_names[-1], [])
+
     def test_analysis_persists_each_result_validates_evidence_and_reuses_cache(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
@@ -240,6 +351,47 @@ class CaseAnalysisTests(unittest.TestCase):
         second = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
         self.assertEqual(second.status, AnalysisStatus.ready_for_review)
         self.assertEqual(self.provider.document_calls, 1)
+
+    def test_documents_run_with_at_most_two_workers_and_preserve_upload_order(self) -> None:
+        class ConcurrentProvider(FakeAnalysisProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.active_calls = 0
+                self.max_active_calls = 0
+                self.lock = threading.Lock()
+
+            def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
+                with self.lock:
+                    self.active_calls += 1
+                    self.max_active_calls = max(self.max_active_calls, self.active_calls)
+                try:
+                    time.sleep(0.08)
+                    return super().analyze_document(uploaded_file)
+                finally:
+                    with self.lock:
+                        self.active_calls -= 1
+
+        case = self._create_case()
+        for index in range(4):
+            self._add_text_file(
+                case.id,
+                file_id=f"file-{index}",
+                digest=f"unique-digest-{index}",
+            )
+        provider = ConcurrentProvider()
+        self.service.provider = provider
+
+        analysis = self._wait(
+            self.service.create_analysis(case.id, third_party_processing_confirmed=True).id
+        )
+
+        self.assertEqual(analysis.status, AnalysisStatus.ready_for_review)
+        self.assertEqual(provider.document_calls, 4)
+        self.assertEqual(provider.max_active_calls, 2)
+        self.assertEqual(
+            [item.file_id for item in analysis.document_results],
+            [f"file-{index}" for index in range(4)],
+        )
 
     def test_cache_is_isolated_by_doctor_scope(self) -> None:
         first_case = self._create_case(owner="doctor-a")
@@ -350,6 +502,56 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIn("synthetic draft failure", error)
         self.assertEqual(len(saved.reviewed_abnormal_findings), 2)
 
+    def test_unchanged_findings_run_review_synthesis_with_thinking(self) -> None:
+        case = self._create_case()
+        self._add_text_file(case.id)
+        analysis = self._wait(
+            self.service.create_analysis(case.id, third_party_processing_confirmed=True).id
+        )
+        self.assertEqual(self.provider.synthesis_calls, 1)
+        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled"])
+
+        saved, draft, error = self.service.review_and_generate(
+            case_id=case.id,
+            analysis_id=analysis.id,
+            reviewer_id="synthetic-reviewer",
+            expected_revision=analysis.revision,
+            abnormal_findings=analysis.abnormal_findings,
+        )
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(draft)
+        self.assertEqual(self.provider.synthesis_calls, 2)
+        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "enabled"])
+        self.assertEqual(saved.reviewed_case_summary, "医生确认后的病例总结")
+
+    def test_changed_findings_run_review_synthesis(self) -> None:
+        case = self._create_case()
+        self._add_text_file(case.id)
+        analysis = self._wait(
+            self.service.create_analysis(case.id, third_party_processing_confirmed=True).id
+        )
+        changed = [
+            item.model_copy(update={"result_text": "医生修正结果"})
+            if index == 0
+            else item
+            for index, item in enumerate(analysis.abnormal_findings)
+        ]
+
+        saved, draft, error = self.service.review_and_generate(
+            case_id=case.id,
+            analysis_id=analysis.id,
+            reviewer_id="synthetic-reviewer",
+            expected_revision=analysis.revision,
+            abnormal_findings=changed,
+        )
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(draft)
+        self.assertEqual(self.provider.synthesis_calls, 2)
+        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "enabled"])
+        self.assertEqual(saved.reviewed_case_summary, "医生确认后的病例总结")
+
     def test_reviewed_findings_generate_idempotent_draft_and_report_order(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
@@ -365,7 +567,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(
             list(draft.report_sections),
-            ["异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "总医嘱说明"],
+            ["核心结论与健康画像", "异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "总医嘱说明"],
         )
         review_service = ReviewService(
             self.repository,
@@ -375,6 +577,7 @@ class CaseAnalysisTests(unittest.TestCase):
         )
         rendered = review_service._render_report(draft, self.case_service.get_case(case.id))
         headings = [
+            "## 核心结论与健康画像",
             "## 异常指标汇总",
             "## 慢性食物敏感检测结果",
             "## 功能医学系统失衡分析",
@@ -409,6 +612,37 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIsNone(repeated_error)
         self.assertEqual(repeated_draft.id, draft.id)
         self.assertEqual(repeated.revision, saved.revision)
+
+    def test_final_report_groups_abnormal_findings_by_upload_order_without_pages(self) -> None:
+        case = self._create_case()
+        self._add_text_file(
+            case.id,
+            file_id="file-first",
+            digest="digest-first",
+            filename="first-report.txt",
+        )
+        self._add_text_file(
+            case.id,
+            file_id="file-second",
+            digest="digest-second",
+            filename="second-report.txt",
+        )
+        analysis = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
+
+        _, draft, error = self.service.review_and_generate(
+            case_id=case.id,
+            analysis_id=analysis.id,
+            reviewer_id="synthetic-reviewer",
+            expected_revision=analysis.revision,
+            abnormal_findings=analysis.abnormal_findings,
+        )
+
+        self.assertIsNone(error)
+        grouped = draft.report_sections["异常指标汇总"]
+        headings = [item for item in grouped if item.startswith("### ")]
+        self.assertEqual(headings, ["### 1. first-report.txt", "### 2. second-report.txt"])
+        self.assertFalse(any("页" in item or "page" in item.lower() for item in grouped))
+        self.assertEqual(list(draft.report_sections)[0], "核心结论与健康画像")
 
     def test_empty_legacy_draft_can_be_regenerated_without_reading_documents_again(self) -> None:
         case = self._create_case()
@@ -647,6 +881,7 @@ class CaseAnalysisTests(unittest.TestCase):
             provider.analyze_document(uploaded)
         self.assertEqual(len(seen_urls), 4)
         self.assertEqual(len(set(seen_urls)), 4)
+        self.assertEqual(len(thinking_types), 1)
         self.assertTrue(thinking_types)
         self.assertTrue(all(item == "disabled" for item in thinking_types))
 

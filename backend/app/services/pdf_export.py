@@ -368,7 +368,6 @@ class PdfReportExporter:
         )
         flowables.append(table)
         flowables.extend(self._build_prescription_advice_flowables(prescription_advice_items or [], styles))
-        flowables.extend(self._build_nutrition_basis_flowables(rows, styles))
         return flowables
 
     def _build_prescription_advice_flowables(
@@ -429,74 +428,6 @@ class PdfReportExporter:
             )
         return rows
 
-    def _build_nutrition_basis_flowables(
-        self,
-        rows: list[dict[str, Any]],
-        styles: dict[str, ParagraphStyle],
-    ) -> list[Any]:
-        basis_items = self._nutrition_basis_items(rows)
-        if not basis_items:
-            return []
-
-        flowables: list[Any] = [
-            Spacer(1, 9),
-            Paragraph("推荐搭配说明", styles["subsection"]),
-            Spacer(1, 4),
-        ]
-        for item in basis_items:
-            flowables.append(Paragraph(f"- {escape(item)}", styles["body-muted"]))
-            flowables.append(Spacer(1, 4))
-        return flowables
-
-    def _nutrition_basis_items(self, rows: list[dict[str, Any]]) -> list[str]:
-        items: list[str] = []
-        for row in rows:
-            product_name = self._clean_customer_text(row.get("product_name", ""))
-            reason = self._clean_customer_text(row.get("reason", ""))
-            if not product_name or not reason:
-                continue
-            polished = self._polish_nutrition_reason(product_name, reason)
-            if polished:
-                items.append(f"{product_name}：{polished}")
-        return list(dict.fromkeys(items))
-
-    def _polish_nutrition_reason(self, product_name: str, reason: str) -> str:
-        source_text = self._strip_internal_reason_terms(f"{product_name} {reason}")
-        normalized = self._clean_customer_text(source_text)
-
-        if any(token in normalized for token in ("肝脏", "肝胆", "解毒", "谷胱甘肽", "胆汁", "脂肪肝", "酒精", "尿酸")):
-            return "本次方案更关注肝胆代谢、解毒负担和氧化压力管理，因此把它放入首月支持；执行时建议同步减少酒精、精制碳水和高油外食，并结合后续肝肾功能、尿酸和血脂趋势观察。"
-        if any(token in normalized for token in ("甲状腺", "桥本", "甲减", "硒", "碘")):
-            return "它主要用于配合甲状腺营养基础和代谢节律管理；若正在使用甲状腺相关药物，服用时间和剂量需要由医生确认。"
-        if any(token in normalized for token in ("血脂", "心血管", "鱼油", "EPA", "DHA", "心肌", "同型半胱氨酸", "HCY")):
-            return "它更偏向心血管和血脂代谢支持，适合与控油、优质脂肪摄入、规律运动和复查血脂趋势一起评估效果。"
-        if any(token in normalized for token in ("血糖", "胰岛素", "碳水", "体重", "减重", "代谢")):
-            return "它用于配合血糖稳定、餐盘结构和体重管理；首月重点不是单靠补充剂，而是和主食比例、饭后活动、睡眠节律一起调整。"
-        if any(token in normalized for token in ("睡眠", "压力", "镁", "GABA", "焦虑", "紧张", "南非醉茄")):
-            return "它主要服务于睡眠恢复、压力调节和神经放松；建议配合固定作息、减少下午咖啡因和睡前屏幕刺激来观察改善。"
-        if any(token in normalized for token in ("肠道", "消化", "胃", "菌群", "腹胀", "便秘", "黏膜")):
-            return "它用于配合消化道负担和肠道屏障管理；建议同时记录排便、腹胀、外食和触发食物，方便后续判断是否需要调整。"
-        if any(token in normalized for token in ("维生素D", "VD3", "骨骼", "免疫")):
-            return "它用于补足维生素D相关支持，和免疫调节、骨骼健康及整体恢复有关；后续可结合25-OH维生素D复查结果调整。"
-        if any(token in normalized for token in ("线粒体", "能量", "疲劳", "辅酶Q10", "认知", "脑雾")):
-            return "它用于支持细胞能量、疲劳恢复和脑力状态；建议结合睡眠、运动耐受和白天精力变化一起观察。"
-        if any(token in normalized for token in ("抗炎", "炎症", "抗氧化", "槲皮素", "维生素C", "白藜芦醇")):
-            return "它用于配合炎症和氧化压力管理；首月建议同时做好抗炎饮食、睡眠恢复和压力管理，避免只依赖单一补充剂。"
-        if any(token in normalized for token in ("女性", "激素", "经前", "潮热", "DHEA")):
-            return "它用于配合内分泌节律和女性周期相关支持；涉及激素前体或特殊阶段时，需要医生确认后再执行。"
-
-        return "本次纳入它，主要是为了围绕当前报告和问卷提示做阶段性营养支持；建议先观察4周耐受、症状和复查趋势，再由医生决定是否继续或调整。"
-
-    def _strip_internal_reason_terms(self, reason: str) -> str:
-        cleaned = self._clean_customer_text(reason)
-        cleaned = re.sub(r"关联度约\s*\d+%\s*[：:，,]?", "", cleaned)
-        cleaned = re.sub(r"命中产品标签命中：[^，。；;]+[，。；;]?", "", cleaned)
-        cleaned = re.sub(r"产品标签命中：[^，。；;]+[，。；;]?", "", cleaned)
-        cleaned = cleaned.replace("作为当前阶段的候选推荐", "")
-        cleaned = cleaned.replace("候选推荐", "")
-        cleaned = re.sub(r"\s+", " ", cleaned)
-        return cleaned.strip(" ，。；;：:")
-
     def _build_dose_summary(self, rows: list[dict[str, Any]]) -> str:
         slot_order = ["早餐后", "午餐后", "晚餐后", "随餐/餐后", "晚间/睡前", "需人工确认", "按顾问建议"]
         counts = {slot: 0 for slot in slot_order}
@@ -525,7 +456,20 @@ class PdfReportExporter:
         return "按顾问建议"
 
     def _full_product_description(self, description: str) -> str:
-        return self._clean_customer_text(description)
+        text = self._clean_customer_text(description)
+        replacements = {
+            "强效": "",
+            "精准": "",
+            "高效": "",
+            "从根源": "",
+            "告别": "改善",
+            "优选": "可选",
+            "突破传统VC吸收局限": "用于改善传统维生素C的吸收利用",
+            "快速降低": "支持调节",
+        }
+        for source, target in replacements.items():
+            text = text.replace(source, target)
+        return re.sub(r"\s+", " ", text).strip()
 
     def _public_warnings(self, warnings: list[Any], *, limit: int = 2) -> list[str]:
         public_warnings: list[str] = []

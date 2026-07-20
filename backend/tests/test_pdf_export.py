@@ -186,6 +186,7 @@ class PdfReportExporterTests(unittest.TestCase):
         )
 
         self.assertTrue(pdf_path.exists())
+        self.assertEqual(pdf_path.name, "测试客户.pdf")
         self.assertGreater(pdf_path.stat().st_size, 1_000)
         reader = PdfReader(str(pdf_path))
         self.assertGreaterEqual(len(reader.pages), 1)

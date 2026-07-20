@@ -710,17 +710,9 @@ class CaseAnalysisService:
         case = self.case_service.get_case(case_id)
         if analysis.draft_id and self.current_snapshot_hash(case) == analysis.snapshot_hash:
             existing_draft = self.repository.get_draft(analysis.draft_id)
-            existing_status = getattr(getattr(existing_draft, "status", None), "value", "")
-            if existing_draft and existing_status == "approved":
-                return analysis, existing_draft, None
-            if (
-                existing_draft
-                and existing_draft.recommended_skus
-                and analysis.standardization_version == STANDARDIZATION_VERSION
-            ):
-                return analysis, existing_draft, None
-            # Legacy abstained/empty drafts remain in history but may be regenerated
-            # from the already reviewed analysis without reading source documents again.
+            # Every explicit doctor retry creates a fresh draft so updated rules,
+            # dosage matching, or provider output can be applied without rereading files.
+            # Keep the previous draft in history for auditability.
             analysis.draft_id = None
             self._save(analysis)
         if analysis.revision != expected_revision:

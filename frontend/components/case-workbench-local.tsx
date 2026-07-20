@@ -103,10 +103,15 @@ function analysisProgressPercent(analysis: CaseAnalysis) {
 }
 
 function analysisStageDetail(analysis: CaseAnalysis) {
-  const label = ANALYSIS_LABELS[analysis.status] ?? analysis.status;
-  if (analysis.current_file_name) return `${label}：${analysis.current_file_name}`;
-  if (analysis.status === "analyzing_documents") return `${label}（${analysis.progress_current}/${analysis.progress_total}）`;
-  return label;
+  const total = Math.max(analysis.progress_total, 0);
+  const completed = Math.min(analysis.progress_current, total);
+  if (analysis.status === "analyzing_documents") {
+    const fileSummary = `文件分析 ${completed}/${total} ${completed >= total && total > 0 ? "已完成" : "处理中"}`;
+    return analysis.current_file_name ? `${fileSummary}：${analysis.current_file_name}` : fileSummary;
+  }
+  if (analysis.status === "synthesizing") return `文件分析 ${total}/${total} 已完成，正在进行病例级综合`;
+  if (analysis.status === "validating") return "病例级综合已完成，正在进行证据校验";
+  return ANALYSIS_LABELS[analysis.status] ?? analysis.status;
 }
 
 export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
@@ -127,6 +132,22 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [reviewActionNotice, setReviewActionNotice] = useState<string | null>(null);
   const [operation, setOperation] = useState<OperationProgressState | null>(null);
+  const [findingFilter, setFindingFilter] = useState<"all" | "attention" | "needs_review" | "verified">("all");
+  const [findingSearch, setFindingSearch] = useState("");
+
+  const visibleFindings = useMemo(() => findings
+    .map((finding, index) => ({ finding, index }))
+    .filter(({ finding }) => {
+      const query = findingSearch.trim().toLowerCase();
+      const matchesSearch = !query || [finding.name, finding.result_text, finding.interpretation, finding.source_text]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+      const matchesFilter = findingFilter === "all"
+        || (findingFilter === "attention" && ["high", "low", "positive"].includes(finding.abnormal_flag))
+        || (findingFilter === "needs_review" && finding.evidence_status === "needs_review")
+        || (findingFilter === "verified" && finding.evidence_status === "verified_text");
+      return matchesSearch && matchesFilter;
+    }), [findings, findingFilter, findingSearch]);
 
   async function loadCase() {
     const next = await fetchCase(caseId);
@@ -438,8 +459,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setOperation({ placement: "report", title: "审核并生成报告", stage: "正在保存审核结果并生成报告文件……", percent: 55, status: "running" });
       await approveDraft(draft.id, reviewerId, publishableSummary, { excluded_sku_ids: excludedSkuIds });
       await loadCase();
-      setNotice("报告已审核发布，PDF 已可下载。");
-      setOperation({ placement: "report", title: "审核并生成报告", stage: "报告已发布，可下载 PDF。", percent: 100, status: "success" });
+      setNotice("报告已审核发布，正在自动导出 PDF。");
+      const downloaded = await handleDownloadReport(draft.id);
+      if (!downloaded) throw new Error("PDF 自动下载失败，请稍后重试");
+      setNotice("报告已审核发布，PDF 已自动下载。");
+      setOperation({ placement: "report", title: "审核并生成报告", stage: "报告已发布，PDF 已自动下载。", percent: 100, status: "success" });
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "审核发布失败";
@@ -450,7 +474,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     }
   }
 
-  async function handleDownloadReport(draftId: string) {
+  async function handleDownloadReport(draftId: string): Promise<boolean> {
     try {
       setBusy(true);
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在生成并下载报告文件……", percent: 12, status: "running" });
@@ -458,10 +482,12 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         setOperation({ placement: "report", title: "导出 PDF 报告", stage: "正在下载报告文件……", percent: Math.max(12, percent), status: "running" });
       });
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: "PDF 已下载。", percent: 100, status: "success" });
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "报告下载失败";
       setError(message);
       setOperation({ placement: "report", title: "导出 PDF 报告", stage: message, percent: 100, status: "error" });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -473,14 +499,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const caseRecord = payload.case;
   const latestDraft = payload.latest_draft;
   const canStart = validFiles.length > 0 && (!analysis || ["failed", "stale"].includes(analysis.status));
-  const linkedDraftNeedsRegeneration = Boolean(
-    analysis?.draft_id &&
-    latestDraft?.id === analysis.draft_id &&
-    latestDraft.recommended_skus.length === 0
-  );
   const canReview = analysis &&
-    ["ready_for_review", "reviewed"].includes(analysis.status) &&
-    (!analysis.draft_id || linkedDraftNeedsRegeneration);
+    ["ready_for_review", "reviewed"].includes(analysis.status);
   const includedRecommendationCount = latestDraft
     ? latestDraft.recommended_skus.filter((item) => !excludedSkuIds.includes(item.sku_id)).length
     : 0;
@@ -573,7 +593,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </div>
                 <span className="indicator-status indicator-status--info">{analysis.progress_current}/{analysis.progress_total}</span>
               </div>
-              <progress className="analysis-progress" max={Math.max(analysis.progress_total, 1)} value={analysis.progress_current} />
+              <div className="analysis-progress-meta"><span>{analysisStageDetail(analysis)}</span><strong>{analysisProgressPercent(analysis)}%</strong></div>
+              <progress className="analysis-progress" max={100} value={analysisProgressPercent(analysis)} aria-label="病例综合分析总体进度" />
               {analysis.current_file_name ? <p className="muted">正在处理：{analysis.current_file_name}</p> : null}
               {analysis.error_message ? <p className="error-text">{analysis.error_code}: {analysis.error_message}</p> : null}
               {analysis.warnings.map((warning, index) => <p className="muted" key={`${warning}-${index}`}>⚠ {warning}</p>)}
@@ -607,8 +628,21 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
 
             <SectionCard title="异常发现校对" subtitle="03 · Clinical review" tone="review">
               <label className="field"><span>校对医生</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} /></label>
+              <div className="finding-toolbar">
+                <div className="finding-filter" role="group" aria-label="异常指标筛选">
+                  {([
+                    ["all", `全部 ${findings.length}`],
+                    ["attention", `异常 ${findings.filter((item) => ["high", "low", "positive"].includes(item.abnormal_flag)).length}`],
+                    ["needs_review", `待确认 ${findings.filter((item) => item.evidence_status === "needs_review").length}`],
+                    ["verified", `已核对 ${findings.filter((item) => item.evidence_status === "verified_text").length}`]
+                  ] as const).map(([value, label]) => (
+                    <button type="button" key={value} className={`finding-filter__button${findingFilter === value ? " is-active" : ""}`} onClick={() => setFindingFilter(value)}>{label}</button>
+                  ))}
+                </div>
+                <input className="finding-search" value={findingSearch} onChange={(event) => setFindingSearch(event.target.value)} placeholder="搜索指标、结果或证据" aria-label="搜索异常指标" />
+              </div>
               <div className="abnormal-finding-list">
-                {findings.map((finding, index) => (
+                {visibleFindings.map(({ finding, index }) => (
                   <div className="abnormal-finding-card" key={finding.id}>
                     <div className="abnormal-finding-card__summary">
                       <div>
@@ -648,6 +682,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                   </div>
                 ))}
                 {!findings.length ? <p className="muted">模型未给出异常；医生仍可人工补充。</p> : null}
+                {findings.length > 0 && !visibleFindings.length ? <p className="muted">当前筛选条件下没有匹配的异常指标。</p> : null}
               </div>
               <div className="button-row">
                 <button type="button" className="secondary-button" disabled={busy || !validFiles.length} onClick={addFinding}>补充异常</button>

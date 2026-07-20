@@ -116,12 +116,14 @@ class FakeRecommendationService:
         self.case_service = case_service
         self.fail = fail
         self.parsing_service = None
+        self.generation_count = 0
 
     def generate(self, case_id: str, requested_by: str) -> RecommendationDraft:
         if self.fail:
             raise RuntimeError("synthetic draft failure")
+        self.generation_count += 1
         draft = RecommendationDraft(
-            id=f"draft-{case_id}",
+            id=f"draft-{case_id}-{self.generation_count}",
             case_id=case_id,
             case_summary=["旧摘要"],
             key_lab_highlights=["合成指标A 12.3 偏高"],
@@ -552,7 +554,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "enabled"])
         self.assertEqual(saved.reviewed_case_summary, "医生确认后的病例总结")
 
-    def test_reviewed_findings_generate_idempotent_draft_and_report_order(self) -> None:
+    def test_reviewed_findings_can_regenerate_draft_and_preserve_report_order(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
         analysis = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
@@ -606,12 +608,12 @@ class CaseAnalysisTests(unittest.TestCase):
             case_id=case.id,
             analysis_id=analysis.id,
             reviewer_id="synthetic-reviewer",
-            expected_revision=analysis.revision,
+            expected_revision=saved.revision,
             abnormal_findings=[],
         )
         self.assertIsNone(repeated_error)
-        self.assertEqual(repeated_draft.id, draft.id)
-        self.assertEqual(repeated.revision, saved.revision)
+        self.assertNotEqual(repeated_draft.id, draft.id)
+        self.assertGreater(repeated.revision, saved.revision)
 
     def test_final_report_groups_abnormal_findings_by_upload_order_without_pages(self) -> None:
         case = self._create_case()

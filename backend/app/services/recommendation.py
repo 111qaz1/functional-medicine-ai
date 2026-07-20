@@ -24,6 +24,7 @@ class RecommendationContext:
     medications: set[str]
     allergies: set[str]
     pregnancy: bool
+    age: int | None
     lifestyle_tags: set[str]
 
 
@@ -77,12 +78,10 @@ class RecommendationService:
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
                         display_name=product.display_name,
-                        dosage=product.dosage_rule,
+                        dosage=self._resolve_dosage(product, context),
                         reason=self._build_product_reason(product, case.questionnaire.goals if case.questionnaire else [], evidence_ids),
                         evidence_ids=evidence_ids,
-                        warnings=list(
-                            dict.fromkeys(product.warning_text + product.interaction_rule + product.contraindications)
-                        )[:4],
+                        warnings=self._dosage_warnings(product, context),
                     )
                 )
 
@@ -148,8 +147,33 @@ class RecommendationService:
             medications=medications,
             allergies=allergies,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
+            age=questionnaire.age if questionnaire else None,
             lifestyle_tags=lifestyle_tags,
         )
+
+    def _dosage_review_reasons(self, context: RecommendationContext) -> list[str]:
+        reasons: list[str] = []
+        if context.age is not None and context.age < 18:
+            reasons.append("未成年人需按年龄/体重由医生确认剂量")
+        if context.pregnancy:
+            reasons.append("孕哺期需由医生确认剂量与成分安全性")
+        high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
+        if any(term in condition for condition in context.conditions for term in high_risk_conditions):
+            reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
+        if context.medications:
+            reasons.append("当前用药可能影响营养素剂量或服用时机")
+        return reasons
+
+    def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
+        base = product.dosage_rule.strip() or "请按医生建议使用"
+        reasons = self._dosage_review_reasons(context)
+        if not reasons:
+            return base
+        return f"医生复核剂量；产品规则基准：{base}"
+
+    def _dosage_warnings(self, product: ProductRule, context: RecommendationContext) -> list[str]:
+        reasons = self._dosage_review_reasons(context)
+        return list(dict.fromkeys([*product.warning_text, *product.interaction_rule, *product.contraindications, *reasons]))[:6]
 
     def _build_query(self, case, context: RecommendationContext) -> str:
         marker_terms = []

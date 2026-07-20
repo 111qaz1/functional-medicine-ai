@@ -53,6 +53,7 @@ class RecommendationContext:
     allergies: set[str]
     food_sensitivities: set[str]
     pregnancy: bool
+    age: int | None
     lifestyle_tags: set[str]
     msq_system_scores: dict[str, int]
     clinical_summary_text: str
@@ -163,6 +164,7 @@ class RecommendationService:
         self.prompt_version = prompt_version
         self.rule_version = rule_version
         self.object_store = None
+        self.product_dosage_mapping = self._load_product_dosage_mapping()
         self.product_tag_profiles = self._load_product_tag_profiles()
         self.product_report_profiles = self._load_product_report_profiles()
         self.product_safety_profiles = self._load_product_safety_profiles()
@@ -188,6 +190,24 @@ class RecommendationService:
                     invalid.append(f"{profile.sku_id}:{marker_code}")
         if invalid:
             raise ValueError("产品规则引用了不存在的标准指标代码：" + "、".join(sorted(set(invalid))))
+
+    def _load_product_dosage_mapping(self) -> dict[str, dict]:
+        """Load the versioned Excel import once when the service starts."""
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "product_dosage_mapping.json"
+        if not mapping_path.exists():
+            return {}
+        try:
+            payload = json.loads(mapping_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        entries = payload.get("products", payload) if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return {}
+        return {
+            str(item.get("sku_id")): item
+            for item in entries
+            if isinstance(item, dict) and item.get("sku_id")
+        }
 
     def _load_product_tag_profiles(self) -> dict[str, ProductTagProfile]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_tag_matrix.json"
@@ -632,7 +652,7 @@ class RecommendationService:
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
                         display_name=self._canonical_product_name(product),
-                        dosage=self._first_month_dosage(product),
+                        dosage=self._resolve_dosage(product, context),
                         reason=final_reason,
                         evidence_ids=evidence_ids,
                         evidence_details=self._build_evidence_details(
@@ -644,7 +664,7 @@ class RecommendationService:
                         warnings=list(
                             dict.fromkeys(
                                 [
-                                    *self._product_safety_warnings(product),
+                                    *self._product_safety_warnings(product, context),
                                     *[
                                         decision.message
                                         for decision in safety_decisions_by_sku.get(product.sku_id, [])
@@ -944,6 +964,7 @@ class RecommendationService:
             allergies=allergies,
             food_sensitivities=food_sensitivities,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
+            age=questionnaire.age if questionnaire else None,
             lifestyle_tags=lifestyle_tags,
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
@@ -3547,6 +3568,9 @@ class RecommendationService:
         return formatted
 
     def _first_month_dosage(self, product: ProductRule) -> str:
+        excel_rule = self.product_dosage_mapping.get(product.sku_id, {}).get("dosage_text")
+        if isinstance(excel_rule, str) and excel_rule.strip():
+            return excel_rule.strip()
         first_month_rules = {
             "sku_liver_detox_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；连续 4 周后根据肝胆指标和胃肠耐受调整。",
             "sku_amino_acid_detox": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；用于首月二阶段解毒支持，需结合肝肾功能人工确认。",
@@ -3617,8 +3641,27 @@ class RecommendationService:
                 lines.append(f"{item.display_name}：{item.dosage}；适用说明：{item.reason}{safety_suffix}")
         return lines
 
-    def _product_safety_warnings(self, product: ProductRule) -> list[str]:
-        return list(dict.fromkeys(product.contraindications + product.interaction_rule + product.warning_text))[:6]
+    def _dosage_review_reasons(self, context: RecommendationContext) -> list[str]:
+        reasons: list[str] = []
+        if context.age is not None and context.age < 18:
+            reasons.append("未成年人需按年龄/体重由医生确认剂量")
+        if context.pregnancy:
+            reasons.append("孕哺期需由医生确认剂量与成分安全性")
+        high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
+        if any(term in condition for condition in context.conditions for term in high_risk_conditions):
+            reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
+        if context.medications:
+            reasons.append("当前用药可能影响营养素剂量或服用时机")
+        return reasons
+
+    def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
+        base = self._first_month_dosage(product).strip() or "请按医生建议使用"
+        return f"医生复核剂量；产品规则基准：{base}" if self._dosage_review_reasons(context) else base
+
+    def _product_safety_warnings(self, product: ProductRule, context: RecommendationContext | None = None) -> list[str]:
+        dosage_reasons = self._dosage_review_reasons(context) if context is not None else []
+        warnings = dosage_reasons + product.contraindications + product.interaction_rule + product.warning_text
+        return list(dict.fromkeys(warnings))[:6]
 
     def _public_safety_note(self, warnings: list[str], *, limit: int = 3) -> str:
         public_warnings = []

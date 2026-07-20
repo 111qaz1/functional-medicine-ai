@@ -1,0 +1,503 @@
+{
+  "schema_version": 1,
+  "source_file": "营养素剂量说明.xlsx",
+  "generated_at": "2026-07-19",
+  "matching_note": "按 Excel 序号与现有产品目录人工确认映射；未纳入目录的产品保留为 source-only 记录，运行时不会自动推荐。",
+  "products": [
+    {
+      "sku_id": "sku_super_anti_inflammatory",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 3,
+      "source_sequence": 1,
+      "category": "超强抗炎",
+      "excel_product_name": "乳香复合物",
+      "aliases": [
+        "乳香复合物",
+        "Frankincense Complex"
+      ],
+      "active_ingredient": "姜黄素复合物",
+      "per_serving_amount": 130,
+      "dosage_text": "日常预防养护（关节僵硬、经期前预防不适）\n每日1 粒，早餐后随餐服用，提前建立抗炎屏障，减少关节 / 经期不适发作。\n强化缓解（关节疼痛肿胀、经期腹痛 / 腰酸明显）\n每日2 粒，早晚餐后各 1 粒，连续服用至症状缓解（经期可服用至经期结束后 1-2 天）；后续减至每日 1 粒维持。\n急性发作（突发关节痛、剧烈经期腹痛）\n单次服用2 粒，随餐服用，快速镇痛抗炎；若疼痛未缓解，可间隔 6-8 小时再补服 1 粒（每日不超过 3 粒）。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_magnesium_glycinate",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 4,
+      "source_sequence": 2,
+      "category": "甘氨酸镁",
+      "excel_product_name": "甘氨酸镁",
+      "aliases": [
+        "甘氨酸镁",
+        "Magnesium Glycinate"
+      ],
+      "active_ingredient": "镁（甘氨酸镁）",
+      "per_serving_amount": "55mg",
+      "dosage_text": "成人基础补镁：每日 1-2 粒，随餐服用（早餐或午餐后），补充日常镁摄入缺口，维持基础代谢与精力。\n放松助眠需求：每日 1-2 粒，睡前 30-60 分钟服用，强化神经放松与睡眠改善效果。\n肌肉紧张 / 痉挛缓解：每日 2-4 粒，分 2 次服用（随餐 + 睡前），针对性缓解肌肉僵硬、抽筋问题。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_blood_sugar_complex",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 5,
+      "source_sequence": 3,
+      "category": "血糖综合支持",
+      "excel_product_name": "肉桂提取物",
+      "aliases": [
+        "肉桂提取物",
+        "Cinnamon Extract"
+      ],
+      "active_ingredient": "维生素C",
+      "per_serving_amount": "50mg",
+      "dosage_text": "1、日常代谢养护（预防血糖波动、基础抗氧化）\n每日1-2 粒，随餐服用（早餐后），长期坚持（3 个月以上）。\n2、血糖偏高 / 代谢综合征（空腹血糖受损、糖耐量异常）\n每日2 粒，分 2 次服用（早 + 晚随餐），每次 1 粒，连续服用12 周；症状缓解后可减至 1 粒 / 天维持。\n\n3、餐后血糖控制（针对餐后高血糖）\n每日1-2 粒，餐前 30 分钟随餐服用，按需使用（无需长期每日服用）。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_weight_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 6,
+      "source_sequence": 4,
+      "category": "减重代谢支持",
+      "excel_product_name": "L-肉碱复合物",
+      "aliases": [
+        "L-肉碱复合物",
+        "L-Carnitine Complex"
+      ],
+      "active_ingredient": "维生素C",
+      "per_serving_amount": "25mg",
+      "dosage_text": "1.轻度减脂（体脂偏高、日常养护）\n每日2 粒，早餐后随餐服用，长期坚持（12 周以上）。\n2.中度减脂（超重 / 肥胖，配合饮食 + 运动）\n每日3 粒，分 2 次服用（早餐后 2 粒 + 运动前 1 粒），持续 12 周；症状缓解后减至 2 粒 / 天维持。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_liposomal_vitamin_c_500",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 7,
+      "source_sequence": 5,
+      "category": "脂质体维生素C",
+      "excel_product_name": "脂质体维生素C",
+      "aliases": [
+        "脂质体维生素C",
+        "Liposomal Vitamin C"
+      ],
+      "active_ingredient": "维生素C（脂质体维生素C）",
+      "per_serving_amount": "425mg",
+      "dosage_text": "1.日常抗氧化 / 免疫养护（预防感冒、基础抗衰）\n每日1 粒，早餐后或空腹服用，长期坚持（3 个月以上）；\n2.免疫强化 / 感冒期（感冒初期、免疫力低下）\n每日2 粒，分 2 次服用（早 + 晚空腹），每次 1 粒，连续服用 3-5 天；症状缓解后减至 1 粒 / 天维持；\n3.皮肤抗衰 / 胶原养护（改善弹性、提亮肤色）\n每日1-2 粒，随餐服用，长期坚持；\n日常抗氧化 / 免疫养护（预防感冒、基础抗衰）\n每日1 粒，早餐后或空腹服用，长期坚持（3 个月以上）；\n提供 425mg 脂质体维 C+20mg 类黄酮，满足日常高效抗氧化与免疫需求。\n免疫强化 / 感冒期（感冒初期、免疫力低下）\n每日2 粒，分 2 次服用（早 + 晚空腹），每次 1 粒，连续服用 3-5 天；症状缓解后减至 1 粒 / 天维持；\n强化免疫细胞活性，缩短感冒病程、减轻症状严重程度。\n皮肤抗衰 / 胶原养护（改善弹性、提亮肤色）\n每日1-2 粒，随餐服用，长期坚持；\n促进胶原合成，清除自由基，改善皮肤暗沉、细纹，提升光泽度。\n特殊需求（术后 / 伤口愈合、缺铁性贫血辅助）\n每日2 粒，分 2 次服用，需在医师指导下使用，辅助伤口愈合与铁吸收）\n每日2 粒，分 2 次服用，需在医师指导下使用，辅助伤口愈合与铁吸收",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_mitochondrial_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 8,
+      "source_sequence": 6,
+      "category": "线粒体支持",
+      "excel_product_name": "吡咯喹啉醌复合物",
+      "aliases": [
+        "吡咯喹啉醌复合物",
+        "PQQ Complex"
+      ],
+      "active_ingredient": "维生素C",
+      "per_serving_amount": "30mg",
+      "dosage_text": "1.日常线粒体养护 / 抗衰（预防疲劳、基础抗衰）\n每日1 粒，早餐后随餐服用，长期坚持（3 个月以上）；\n2.慢性疲劳 / 精力不足（职场高压、熬夜、运动后恢复）\n每日2 粒，分 2 次服用（早 + 晚随餐），每次 1 粒，连续服用4-8 周；症状缓解后可减至 1 粒 / 天维持；\n3.心血管 / 神经养护（心肌保护、认知提升）\n每日1-2 粒，随餐服用，长期坚持；",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_ashwagandha_stress_balance",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 9,
+      "source_sequence": 7,
+      "category": "南非醉茄压力平衡",
+      "excel_product_name": "南非醉茄",
+      "aliases": [
+        "南非醉茄",
+        "Ashwagandha"
+      ],
+      "active_ingredient": "南非醉茄 提取物（根和叶）",
+      "per_serving_amount": "200mg",
+      "dosage_text": "日常压力 / 情绪舒缓（职场高压、情绪波动）\n每日1 粒，早餐后或下午服用，长期坚持，稳定情绪、缓解日常焦虑，提升专注力。\n睡眠改善（入睡困难、浅睡、情绪性失眠）\n每日1-2 粒，睡前 30-60 分钟服用；1 粒温和助眠，2 粒强化舒缓，连续服用 2-4 周，改善深睡时长与睡眠质量。\n认知疲劳（大脑疲惫、记忆力下降）\n每日1 粒，早餐后服用，长期坚持，配合压力舒缓，修复神经膜，提升认知功能。\n慢性压力 / 重度焦虑\n每日2 粒，分 2 次服用（早 + 晚），每次 1 粒，连续服用 4-8 周；症状缓解后减至 1 粒 / 天维持，避免压力反复。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_cardiac_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 10,
+      "source_sequence": 8,
+      "category": "心肌功能支持",
+      "excel_product_name": "复合阿育王",
+      "aliases": [
+        "复合阿育王",
+        "Terminalia Arjuna Complex"
+      ],
+      "active_ingredient": "钙（柠檬酸钙）",
+      "per_serving_amount": "25mg",
+      "dosage_text": "日常养护（预防心肌疲劳、基础精力提升）\n每日1 粒，早餐后随餐服用，长期坚持，维护心肌健康与基础精力。\n精力匮乏 / 心肌疲劳（职场高压、熬夜后、运动后）\n每日2 粒，分 2 次服用（早 + 晚随餐），每次 1 粒，连续服用 2-4 周；症状缓解后减至 1 粒 / 天维持。\n运动 / 高强度体力消耗（健身、重体力劳动）\n每日2 粒，运动前 30-60 分钟随餐服用，辅助提升心肌耐受力与运动耐力，加速疲劳恢复。\n中老年心肌养护（循环不佳、易疲劳）\n每日1-2 粒，早餐后随餐服用，长期坚持，优化心肌功能与全身循环，延缓衰老。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_sleep_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 11,
+      "source_sequence": 9,
+      "category": "睡眠支持",
+      "excel_product_name": "γ-氨基丁酸复合物",
+      "aliases": [
+        "γ-氨基丁酸复合物",
+        "GABA Complex"
+      ],
+      "active_ingredient": "维生素B6",
+      "per_serving_amount": "5mg",
+      "dosage_text": "日常入睡困难 / 浅睡易醒：每日1 粒，睡前 30 分钟服用，长期坚持，维护自然睡眠节律。\n情绪焦虑 / 压力性失眠：每日1-2 粒，睡前 60 分钟服用；1 粒基础舒缓，2 粒强化镇静，连续服用 2-4 周，症状缓解后减至 1 粒 / 天。\n作息紊乱 / 倒时差：提前 1-2 天开始，每日1 粒，睡前 30 分钟服用，帮助快速调整生物钟。\n短期重度失眠：每日2 粒，睡前 60 分钟服用，连续服用不超过 2 周，症状缓解后减至 1 粒 / 天维持。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_thyroid_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 12,
+      "source_sequence": 10,
+      "category": "甲状腺健康支持",
+      "excel_product_name": "红景天复合物",
+      "aliases": [
+        "红景天复合物",
+        "Rhodiola Rosea Complex"
+      ],
+      "active_ingredient": "维生素A",
+      "per_serving_amount": "0.3mg",
+      "dosage_text": "日常甲状腺养护（亚健康、压力预防）\n每日1 粒，早餐后随餐服用，长期坚持，维持甲状腺营养储备，预防功能波动。\n甲状腺功能波动（桥本倾向、甲减早期、疲劳 / 代谢放缓）\n每日2 粒，分 2 次服用（早 + 晚随餐），每次 1 粒，连续服用 3 个月；症状缓解后减至 1 粒 / 天维持。\n压力性甲状腺应激（加班、熬夜、情绪高压）\n每日1-2 粒，随餐服用，按需强化，缓解压力对甲状腺轴的抑制，避免短期功能异常。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_fish_oil_rtg",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 13,
+      "source_sequence": 11,
+      "category": "rTG鱼油",
+      "excel_product_name": "rTG鱼油",
+      "aliases": [
+        "rTG鱼油",
+        "rTG Fish Oil"
+      ],
+      "active_ingredient": "二十碳五烯酸（EPA）",
+      "per_serving_amount": "315mg",
+      "dosage_text": "日常心血管养护 / 基础抗炎\n每日1 粒，早餐后随餐服用，长期坚持，维护基础心血管健康与抗炎状态。\n血脂偏高 / 慢性炎症（关节 / 代谢炎症）\n每日2 粒，分 1-2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续服用 3 个月后可根据指标调整为每日 1 粒维持。\n脑眼养护（中老年 / 用眼用脑人群）\n每日1-2 粒，随餐服用，长期坚持，辅助提升认知、保护视力。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_vitamin_d3_k",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 14,
+      "source_sequence": 12,
+      "category": "维生素D3+K复合物",
+      "excel_product_name": "维生素D3与维生素K复合物",
+      "aliases": [
+        "维生素D3与维生素K复合物",
+        "Vitamin D3 & K"
+      ],
+      "active_ingredient": "维生素D3",
+      "per_serving_amount": "5000IU",
+      "dosage_text": "维生素 D3 缺乏纠正（25 (OH) D < 20ng/ml）\n每日1 粒，随餐服用，连续服用 3 个月；检测 25 (OH) D 水平达标后（≥30ng/ml），调整为隔日 1 粒或每周 3-4 粒维持（利用 MK-7 长效性，减少服用频率）。\n日常骨骼 / 心血管养护（D3 水平 20-30ng/ml，或健康人群预防）\n隔日 1 粒或每周 3-4 粒，随餐服用，长期坚持；MK-7 的长效性可保证稳定的钙调节效果，无需每日服用。\n特殊人群（老年人、长期室内、肠道吸收障碍者）\n每日1 粒，随餐服用，每 6 个月检测一次 25 (OH) D 与血钙水平，根据结果调整剂量。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_selenium_vitamin_e",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 15,
+      "source_sequence": 13,
+      "category": "富硒维生素E",
+      "excel_product_name": "维生素E与硒复合物",
+      "aliases": [
+        "维生素E与硒复合物",
+        "Vitamin E with Selenium"
+      ],
+      "active_ingredient": "维生素E",
+      "per_serving_amount": "68mg",
+      "dosage_text": "日常抗氧化 / 免疫养护（熬夜、高压、饮食失衡人群）\n每日1 粒，早餐后随餐服用，长期坚持，维持身体抗氧化平衡，改善疲劳与免疫力低下。\n备孕 / 生殖健康养护（备孕期男女）\n每日1 粒，随餐服用，连续服用 3 个月；男性重点提升精子活力，女性辅助改善卵子质量与内膜健康。\n中老年心血管养护（血脂偏高、血管健康关注）\n每日1 粒，晚餐后随餐服用，长期坚持，辅助调节血脂、保护血管内皮，降低心血管风险。\n抗氧化强化（术后恢复、重度疲劳）\n每日2 粒，分 1-2 次随餐服用，连续服用 2-4 周；症状缓解后减至每日 1 粒维持。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_neuro_cognitive",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 16,
+      "source_sequence": 14,
+      "category": "神经健康与认知功能支持",
+      "excel_product_name": "胞磷胆碱",
+      "aliases": [
+        "胞磷胆碱",
+        "Citicoline"
+      ],
+      "active_ingredient": "有机猴头菇菌丝体及子实体粉末",
+      "per_serving_amount": "140mg",
+      "dosage_text": "日常神经认知养护（轻度脑疲劳、高压用脑、预防认知衰退）\n每日2 粒，早餐后随餐服用，长期坚持，维持神经元健康与认知功能稳定。\n强化认知修复（记忆力减退、认知衰退明显、备考 / 职场重度脑疲劳）\n每日4粒，分 2 次服用（早餐 2 粒 + 晚餐2 粒），连续服用 3 个月；症状缓解后减至每日 1 粒维持，巩固认知功能。\n临时应急场景（高强度用脑、熬夜备考、考试前）\n可临时加服2 粒，随餐服用，快速缓解脑疲劳，提升专注力与信息处理效率。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_coq10",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 17,
+      "source_sequence": 15,
+      "category": "辅酶Q10",
+      "excel_product_name": "辅酶Q10",
+      "aliases": [
+        "辅酶Q10",
+        "Coenzyme Q10"
+      ],
+      "active_ingredient": "维生素E",
+      "per_serving_amount": "67mg",
+      "dosage_text": "日常抗氧化 / 精力养护（职场高压、轻度疲劳、预防衰老）\n每日1 粒，早餐后随餐服用，长期坚持，维持细胞能量与抗氧化平衡。\n心血管养护 / 心肌能量支持（中老年人、心慌胸闷、血压血脂波动人群）\n每日2 粒，分 1-2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续服用 3 个月后可减至每日 1 粒维持。\n运动 / 高强度体力消耗（健身、重体力劳动、竞技运动）\n每日1-2 粒，运动前 30-60 分钟随餐服用，辅助提升运动耐力，加速运动后能量恢复。\n生殖健康养护（备孕期男女）\n每日1 粒，随餐服用，连续服用 3 个月，辅助提升生殖细胞活力。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_plant_multi_mineral",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 18,
+      "source_sequence": 16,
+      "category": "植物复合维生素矿物质",
+      "excel_product_name": "复合维生素矿物质",
+      "aliases": [
+        "复合维生素矿物质",
+        "Multivitamin Mineral"
+      ],
+      "active_ingredient": "维生素A",
+      "per_serving_amount": "0.75mg",
+      "dosage_text": "日常基础养护（饮食均衡、轻度疲劳）\n每日1 粒，早餐后随餐服用，长期坚持，填补日常营养缺口，维持基础健康。\n强化养护（高压职场、备考、饮食不均衡、免疫波动）\n每日2 粒，分 2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续服用 2-4 周；症状缓解后减至每日 1 粒维持。\n中老年 / 代谢缓慢人群\n每日1-2 粒，随餐服用，长期坚持，辅助维护骨骼、免疫与代谢健康，延缓衰老。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_stomach_acid_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 19,
+      "source_sequence": 17,
+      "category": "胃酸替代物",
+      "excel_product_name": "酸性蛋白酶",
+      "aliases": [
+        "酸性蛋白酶",
+        "Kiwi Extract"
+      ],
+      "active_ingredient": "盐酸甜菜碱",
+      "per_serving_amount": "550mg",
+      "dosage_text": "日常消化养护（轻度腹胀、高蛋白饮食后不适）\n每日1 粒，早餐后随餐服用，长期维持胃肠消化平衡，预防饮食过量导致的消化负担。\n强化消化 / 代谢支持（重度消化不良、饮食油腻、代谢缓慢、脂肪肝早期）\n每日2 粒，分 2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续 2-4 周；症状缓解后可减至每日 1 粒维持，巩固消化与代谢健康。\n特殊场景（术后消化恢复、高龄消化功能衰退）\n每日1-2 粒，随餐服用，根据身体耐受度调整，建议在医师指导下长期服用。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_dhea",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 20,
+      "source_sequence": 18,
+      "category": "DHEA",
+      "excel_product_name": "脱氢表雄酮",
+      "aliases": [
+        "脱氢表雄酮",
+        "DHEA"
+      ],
+      "active_ingredient": "脱氢表雄酮",
+      "per_serving_amount": "25mg",
+      "dosage_text": "备孕 / 卵巢功能养护（女性）\n每日1 粒（25mg），早餐后随餐服用，连续服用 3 个月；受孕后需立即停用，并咨询医师。\n中老年激素抗衰 / 精力提升（男女）\n每日1 粒（25mg），随餐服用，长期坚持，建议每 6 个月监测激素水平，根据结果调整剂量。\n男性生殖健康养护\n每日1 粒（25mg），随餐服用，连续服用 3 个月，改善精子质量与活力。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_polaprezinc",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 21,
+      "source_sequence": 19,
+      "category": "肌肽锌",
+      "excel_product_name": "锌肌肽",
+      "aliases": [
+        "锌肌肽",
+        "Zinc Carnosine"
+      ],
+      "active_ingredient": "锌（肌肽锌）",
+      "per_serving_amount": "17mg",
+      "dosage_text": "日常胃肠养护（轻度胃炎、消化不良、锌缺乏）\n每日1 粒，餐后服用，长期坚持，维护胃肠黏膜健康与锌营养平衡。\n黏膜修复强化（慢性胃炎、胃溃疡、胃肠术后）\n每日2 粒，分 2 次服用（早晚餐后各 1 粒），连续服用 8-12 周；症状缓解后可减至每日 1 粒维持，降低复发风险。\n锌缺乏专项补充（味觉减退、食欲差、免疫低下）\n每日1 粒，餐后服用，连续服用 2-3 个月，建议定期检测血清锌水平，根据结果调整剂量。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_hcy_methylation",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 22,
+      "source_sequence": 20,
+      "category": "HCY代谢及甲基化支持",
+      "excel_product_name": "甜菜碱复合物",
+      "aliases": [
+        "甜菜碱复合物",
+        "Betaine Complex"
+      ],
+      "active_ingredient": "维生素B2",
+      "per_serving_amount": "0.8mg",
+      "dosage_text": "高同型半胱氨酸、脂肪肝早期、胃肠黏膜损伤明显\n每日2 粒，分 2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续 2-4 周；症状缓解后减至每日 1 粒维持。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_bile_flow_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 23,
+      "source_sequence": 21,
+      "category": "胆汁分泌支持",
+      "excel_product_name": "朝鲜蓟与胆碱复合物",
+      "aliases": [
+        "朝鲜蓟与胆碱复合物",
+        "Artichoke & Choline"
+      ],
+      "active_ingredient": "维生素C",
+      "per_serving_amount": "50mg",
+      "dosage_text": "日常肝胆 / 消化养护（轻度油腻饮食、疲劳、消化不适）\n每日1 粒，早餐后随餐服用，长期坚持，维持肝胆代谢平衡与消化健康。\n强化养护（脂肪肝早期、高同型半胱氨酸、胆囊功能减弱、重度消化不良）\n每日2 粒，分 2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续 2-3 个月；症状缓解后减至每日 1 粒维持，降低复发风险。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_zinc_complex",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 24,
+      "source_sequence": 22,
+      "category": "锌",
+      "excel_product_name": "锌",
+      "aliases": [
+        "锌",
+        "Zinc Chelate"
+      ],
+      "active_ingredient": "锌（甘氨酸锌，精氨酸锌）",
+      "per_serving_amount": "20mg",
+      "dosage_text": "日常预防 / 轻度缺锌（食欲差、轻微脱发、皮肤粗糙）\n每日1 粒，早餐后服用，长期维持锌营养平衡。\n强化补锌（明显缺锌：儿童生长迟缓、男性少弱精、反复感染）\n每日2 粒，分早晚两次服用，连续 2-3 个月；检测血清锌水平达标后，减至每日 1 粒维持。\n备孕人群\n男性：每日2 粒，随餐服用，连续 3 个月（匹配精子生成周期）；\n女性：每日1-2 粒，随餐服用，至受孕后遵医嘱调整。\n儿童（需医师指导）\n1-3 岁：每日半粒；\n4-10 岁：每日 1 粒；\n11 岁以上：同成人剂量。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_immune_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 25,
+      "source_sequence": 23,
+      "category": "免疫支持",
+      "excel_product_name": "槲皮素复合物",
+      "aliases": [
+        "槲皮素复合物",
+        "Quercetin Complex"
+      ],
+      "active_ingredient": "维生素C",
+      "per_serving_amount": "100mg",
+      "dosage_text": "日常免疫维护（预防感冒、换季维稳、熬夜高压）\n每日1 粒，早餐后随餐服用，长期维持免疫平衡。\n强化免疫支持（反复感冒、过敏季、慢性炎症发作期）\n每日2 粒，分早晚两次服用（早餐 1 粒 + 晚餐 1 粒），连续 2-3 个月；症状缓解后减至每日 1 粒维持，降低复发风险。\n感染恢复期（感冒 / 流感后、术后免疫修复）\n每日2 粒，随餐服用，加速免疫细胞修复，缩短恢复周期。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_herbal_antimicrobial",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 26,
+      "source_sequence": 24,
+      "category": "草本杀菌胶囊",
+      "excel_product_name": "牛至油复合物",
+      "aliases": [
+        "牛至油复合物",
+        "Oregano oil Complex"
+      ],
+      "active_ingredient": "牛至油（包埋）",
+      "per_serving_amount": "50mg",
+      "dosage_text": "日常养护（肠道健康、免疫预防）\n每日1 粒，早餐后随餐服用，长期维持肠道菌群平衡与免疫状态。\n强化调理（胃肠不适、感染期、免疫低下）\n每日2 粒，早晚餐后各 1 粒，连续 2-4 周；症状缓解后减至每日 1 粒，巩固效果。\n特殊场景（旅行、换季易感、病原暴露）\n提前 1-2 周开始每日1 粒，持续至风险期结束，提前建立免疫与肠道防护。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": null,
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 27,
+      "source_sequence": 25,
+      "category": "综合消化酶",
+      "excel_product_name": "复合消化营养素",
+      "aliases": [
+        "复合消化营养素",
+        "Digestive Enzymes"
+      ],
+      "active_ingredient": "淀粉酶",
+      "per_serving_amount": "12000DU",
+      "dosage_text": "日常消化辅助（饮食均衡、偶尔腹胀）\n每日1 粒，随午餐或晚餐主餐服用，维持日常消化平衡。\n强化消化调理（饮食油腻 / 高蛋白 / 高纤维、积食、腹胀明显）\n每日2 粒，随午餐 + 晚餐各 1 粒；或单次 2 粒随大餐（如火锅、烧烤、聚餐）服用，快速缓解消化压力。\n特殊场景（乳糖不耐受、吃大量水果 / 粗粮）\n乳糖不耐受：每次1 粒，随乳制品（牛奶 / 酸奶）服用；\n水果 / 粗粮过量：每次1 粒，随对应餐食服用。\n中老年 / 胃肠功能弱\n每日1-2 粒，随餐服用，长期调理，减轻胃肠消化负担，提升营养吸收。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": null,
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 28,
+      "source_sequence": 26,
+      "category": "复合益生菌",
+      "excel_product_name": "复合益生菌",
+      "aliases": [
+        "复合益生菌",
+        "Probiotic Complex"
+      ],
+      "active_ingredient": "布拉酵母",
+      "per_serving_amount": "50亿 CFU",
+      "dosage_text": "日常肠道养护（预防菌群紊乱、饮食不规律）\n每日1 粒，早餐后服用，长期维持肠道健康生态。\n强化调理（腹胀 / 腹泻 / 便秘、乳糖不耐、感染恢复期）\n每日2 粒，早晚餐后各 1 粒，连续2-4 周；症状缓解后减至每日 1 粒，巩固菌群平衡。\n特殊场景（旅行水土不服、大餐后、抗生素后调理）\n出发前 1 天 + 旅行期间每日2 粒；大餐 / 抗生素后每日2 粒，连续 1 周，快速恢复肠道菌群，避免紊",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_liver_detox_support",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 29,
+      "source_sequence": 27,
+      "category": "肝脏排毒支持",
+      "excel_product_name": "奶蓟草提取物",
+      "aliases": [
+        "奶蓟草提取物",
+        "Milk Thistle Extract"
+      ],
+      "active_ingredient": "维生素A",
+      "per_serving_amount": "375mcg",
+      "dosage_text": "日常肝脏养护（饮食油腻 / 熬夜 / 轻度肝疲劳）\n每日1 粒，早餐后随餐服用，长期维持肝脏健康平衡。\n强化调理（酒精伤肝 / 脂肪肝 / 术后肝修复）\n每日2 粒，早晚餐后各 1 粒，连续 2-4 周；症状缓解后减至每日 1 粒，巩固修复效果。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_b_complex",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 30,
+      "source_sequence": 28,
+      "category": "维生素B族",
+      "excel_product_name": "维生素B族",
+      "aliases": [
+        "维生素B族",
+        "Vitamin B Complex"
+      ],
+      "active_ingredient": "维生素B1",
+      "per_serving_amount": "26mg",
+      "dosage_text": "日常养护（预防 B 族缺乏、轻度疲劳）\n每日1 粒，早餐后随餐服用，长期维持代谢与免疫平衡。\n强化调理（高同型半胱氨酸、重度疲劳、皮肤黏膜问题、备孕）\n每日2 粒，早晚餐后各 1 粒，连续 2-4 周；症状缓解后减至每日 1 粒，巩固效果。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_trans_resveratrol",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 31,
+      "source_sequence": 29,
+      "category": "至尊白藜芦醇",
+      "excel_product_name": "反式白藜芦醇",
+      "aliases": [
+        "反式白藜芦醇",
+        "Liposomal-Resveratrol"
+      ],
+      "active_ingredient": "脂质体白藜芦醇",
+      "per_serving_amount": "200mg",
+      "dosage_text": "日常抗氧化 / 皮肤抗衰（熬夜党、皮肤暗沉、初老肌）\n每日1 粒，早餐后服用，长期维持皮肤状态与代谢平衡。\n强化调理（血管健康养护、慢性炎症、高同型半胱氨酸、中老年代谢弱）\n每日2 粒，早晚餐后各 1 粒，连续 2-4 周；症状缓解后减至每日 1 粒，巩固健康状态。\n特殊场景（换季过敏、高压力免疫低下）\n每日1-2 粒，随餐服用，同步改善炎症与免疫状态。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_female_hormone_balance",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 32,
+      "source_sequence": 30,
+      "category": "女性激素平衡",
+      "excel_product_name": "Harmicelsus-F 女性激素平衡",
+      "aliases": [
+        "Harmicelsus-F 女性激素平衡"
+      ],
+      "active_ingredient": "钙（D葡萄糖酸钙）",
+      "per_serving_amount": "9mg",
+      "dosage_text": "日常养护（月经规律、轻度经前不适、预防更年期）\n每日1 粒，早餐后随餐服用，长期维持激素平衡。\n强化调理（月经不调、重度经前综合征、更年期潮热盗汗明显）\n每日2 粒，早晚餐后各 1 粒，连续服用 2-3 个月经周期 / 3 个月；症状缓解后减至每日 1 粒，巩固内分泌状态。\n备孕人群（黄体功能不足、月经不调）\n每日1 粒，随餐服用，建议在医师指导下使用，至受孕后遵医嘱调整。",
+      "source": "营养素剂量说明.xlsx"
+    },
+    {
+      "sku_id": "sku_amino_acid_detox",
+      "source_sheet": "单粒泡罩（中文）",
+      "source_row": 33,
+      "source_sequence": 31,
+      "category": "肝脏排毒氨基酸支持",
+      "excel_product_name": "谷胱甘肽",
+      "aliases": [
+        "谷胱甘肽",
+        "L-Glutamine"
+      ],
+      "active_ingredient": "L-谷氨酰胺",
+      "per_serving_amount": "110mg",
+      "dosage_text": "",
+      "source": "营养素剂量说明.xlsx"
+    }
+  ]
+}

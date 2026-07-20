@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 import httpx
 
+from app.core.llm_compat import chat_generation_options
 from app.core.settings import AppSettings
 
 
@@ -133,7 +134,11 @@ class PrescriptionAdviceService:
     def _chat_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.settings.llm_model,
-            "temperature": min(self.settings.llm_temperature, 0.2),
+            **chat_generation_options(
+                model=self.settings.llm_model,
+                temperature=min(self.settings.llm_temperature, 0.2),
+                thinking_type="disabled",
+            ),
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._system_prompt()},

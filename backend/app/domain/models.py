@@ -90,6 +90,48 @@ class AnalysisStatus(str, Enum):
     failed = "failed"
 
 
+class FinalGenerationStatus(str, Enum):
+    idle = "idle"
+    queued = "queued"
+    final_synthesizing = "final_synthesizing"
+    validating_support_needs = "validating_support_needs"
+    mapping_products = "mapping_products"
+    checking_safety = "checking_safety"
+    generating_draft = "generating_draft"
+    ready = "ready"
+    failed = "failed"
+
+
+class SemanticEvidenceStrength(str, Enum):
+    direct = "direct"
+    explicit_conclusion = "explicit_conclusion"
+    contextual = "contextual"
+
+
+class ClinicalEvidenceClass(str, Enum):
+    clinical_confirmed = "clinical_confirmed"
+    lab_abnormal = "lab_abnormal"
+    symptom = "symptom"
+    exposure = "exposure"
+    genetic_risk = "genetic_risk"
+    follow_up_only = "follow_up_only"
+
+
+class SupportEligibilityStatus(str, Enum):
+    eligible = "eligible"
+    narrative_only = "narrative_only"
+    rejected = "rejected"
+
+
+class SupportDirection(str, Enum):
+    increase = "increase"
+    decrease = "decrease"
+    maintain = "maintain"
+    balance = "balance"
+    restore = "restore"
+    unknown = "unknown"
+
+
 class EvidenceStatus(str, Enum):
     verified_text = "verified_text"
     needs_review = "needs_review"
@@ -173,7 +215,9 @@ class ConfirmedClinicalFinding(StrictModel):
     finding_name: str
     system_ids: list[str] = Field(default_factory=list)
     support_goals: list[str] = Field(default_factory=list)
+    support_direction: SupportDirection = SupportDirection.unknown
     mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_class: ClinicalEvidenceClass = ClinicalEvidenceClass.clinical_confirmed
     standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.validated
     abnormal_flag: str = "positive"
     confidence: float = 0.0
@@ -194,6 +238,9 @@ class AbnormalFinding(StrictModel):
     reference_range: str | None = None
     abnormal_flag: str = "unknown"
     interpretation: str | None = None
+    report_explanation: str | None = None
+    neutral_interpretation: str | None = None
+    support_need_text: str | None = None
     source_file_id: str
     source_file_name: str
     source_page: int
@@ -239,6 +286,27 @@ class DocumentAnalysisResult(StrictModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class SemanticEvidenceReference(StrictModel):
+    ref: str
+    evidence_strength: SemanticEvidenceStrength
+
+
+class SemanticSupportNeed(StrictModel):
+    id: str
+    support_need_text: str
+    support_goal_code: str | None = None
+    support_direction: SupportDirection = SupportDirection.unknown
+    system_id: str
+    evidence_refs: list[SemanticEvidenceReference] = Field(default_factory=list)
+    evidence_strength: SemanticEvidenceStrength = SemanticEvidenceStrength.contextual
+    evidence_class: ClinicalEvidenceClass = ClinicalEvidenceClass.symptom
+    corroboration_count: int = Field(default=0, ge=0)
+    rationale: str
+    model_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    eligibility_status: SupportEligibilityStatus = SupportEligibilityStatus.narrative_only
+    validation_notes: list[str] = Field(default_factory=list)
+
+
 class CaseAnalysis(StrictModel):
     id: str
     case_id: str
@@ -269,6 +337,14 @@ class CaseAnalysis(StrictModel):
     reviewed_at: datetime | None = None
     revision: int = 1
     draft_id: str | None = None
+    final_generation_status: FinalGenerationStatus = FinalGenerationStatus.idle
+    final_generation_progress: int = Field(default=0, ge=0, le=100)
+    final_generation_error: str | None = None
+    final_generation_revision: int = 0
+    support_goal_version: str = "legacy"
+    support_needs: list[SemanticSupportNeed] = Field(default_factory=list)
+    final_structured_system_findings: list["StructuredSystemFinding"] = Field(default_factory=list)
+    final_synthesis_completed_revision: int | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -452,6 +528,7 @@ class DraftRecommendationItem(StrictModel):
     warnings: list[str] = Field(default_factory=list)
     primary_system_id: str | None = None
     matched_finding_ids: list[str] = Field(default_factory=list)
+    matched_support_need_ids: list[str] = Field(default_factory=list)
     system_priority_rank: int | None = None
     safety_decisions: list["SafetyDecision"] = Field(default_factory=list)
 
@@ -501,6 +578,7 @@ class RecommendationDraft(StrictModel):
     source_analysis_id: str | None = None
     source_analysis_revision: int | None = None
     source_snapshot_hash: str | None = None
+    support_goal_version: str = "legacy"
     # Read-only compatibility with drafts written by the abandoned PR #13.
     updated_at: datetime | None = None
     revision: int = 1

@@ -11,7 +11,24 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
-from app.domain.models import AbnormalFinding, AnalysisMode, CaseAnalysis, CaseIndicator, IndicatorStatus, ProductRule, Questionnaire, SourceSpan, UploadedFile
+from app.domain.models import (
+    AbnormalFinding,
+    AnalysisMode,
+    AnalysisStatus,
+    CaseAnalysis,
+    CaseIndicator,
+    IndicatorStatus,
+    ProductRule,
+    Questionnaire,
+    SemanticEvidenceReference,
+    SemanticEvidenceStrength,
+    SemanticSupportNeed,
+    SupportDirection,
+    SourceSpan,
+    StructuredSystemFinding,
+    SupportEligibilityStatus,
+    UploadedFile,
+)
 from app.providers.local import GroundedDraftComposer
 from app.providers.base import DraftCompositionResult
 from app.services.recommendation_local_engine import RecommendationContext
@@ -70,6 +87,58 @@ class RecommendationServiceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+
+    def _project_semantic_support(
+        self,
+        case,
+        *,
+        goal_code: str,
+        system_id: str,
+        text: str,
+        evidence_ref: str = "clinical_summary:main",
+        support_direction: SupportDirection = SupportDirection.unknown,
+    ) -> CaseAnalysis:
+        analysis = CaseAnalysis(
+            id=f"analysis-{case.id}-{goal_code}",
+            case_id=case.id,
+            status=AnalysisStatus.reviewed,
+            snapshot_hash="synthetic",
+            model_version="synthetic",
+            reviewed_case_summary=text,
+            support_goal_version="support-goals-v1-2026-07-19",
+            support_needs=[
+                SemanticSupportNeed(
+                    id=f"support-{case.id}-{goal_code}",
+                    support_need_text=text,
+                    support_goal_code=goal_code,
+                    support_direction=support_direction,
+                    system_id=system_id,
+                    evidence_refs=[
+                        SemanticEvidenceReference(
+                            ref=evidence_ref,
+                            evidence_strength=SemanticEvidenceStrength.contextual,
+                        )
+                    ],
+                    evidence_strength=SemanticEvidenceStrength.contextual,
+                    corroboration_count=1,
+                    rationale=text,
+                    model_confidence=0.62,
+                    eligibility_status=SupportEligibilityStatus.eligible,
+                )
+            ],
+            final_structured_system_findings=[
+                StructuredSystemFinding(
+                    system_id=system_id,
+                    system_name=system_id,
+                    priority_level="优先级高",
+                    priority_score=45,
+                    summary=text,
+                )
+            ],
+        )
+        self.container.repository.save_case_analysis(analysis)
+        self.container.case_analysis_service._project_review_to_case(case, analysis)
+        return analysis
 
     def test_dosage_matching_requires_review_for_high_risk_context(self) -> None:
         product = self.container.repository.get_product("sku_vitamin_d3_k")
@@ -194,6 +263,111 @@ class RecommendationServiceTests(unittest.TestCase):
         )
         self.assertEqual(decision.action.value, "exclude")
         self.assertEqual(decision.sku_id, "sku_weight_support")
+
+    def test_doctor_confirmed_underweight_excludes_weight_support_without_bmi_marker(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="体重安全事实测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        underweight = AbnormalFinding(
+            id="finding-underweight-explicit",
+            name="体重过轻",
+            result_text="BMI 17.65 kg/m²",
+            abnormal_flag="low",
+            source_file_id="file-report",
+            source_file_name="report.pdf",
+            source_page=1,
+            source_text="BMI 17.65 kg/m²，体重过轻",
+            confidence=0.97,
+            finding_code_candidate="underweight",
+            system_id_candidates=["endocrine_metabolic"],
+            support_goal_candidates=["weight_metabolism"],
+            mapping_confidence=0.94,
+        )
+        standardized = self.container.case_analysis_service.standardization_service.standardize(
+            underweight,
+            doctor_confirmed=True,
+        )
+        analysis = CaseAnalysis(
+            id="analysis-underweight-explicit",
+            case_id=case.id,
+            status=AnalysisStatus.reviewed,
+            snapshot_hash="synthetic",
+            model_version="synthetic",
+            reviewed_abnormal_findings=[standardized],
+            support_needs=[
+                SemanticSupportNeed(
+                    id="support-conflicting-weight-loss",
+                    support_need_text="体重与脂肪代谢支持",
+                    support_goal_code="weight_metabolism",
+                    support_direction=SupportDirection.decrease,
+                    system_id="endocrine_metabolic",
+                    evidence_refs=[
+                        SemanticEvidenceReference(
+                            ref="finding:finding-underweight-explicit",
+                            evidence_strength=SemanticEvidenceStrength.explicit_conclusion,
+                        )
+                    ],
+                    evidence_strength=SemanticEvidenceStrength.explicit_conclusion,
+                    corroboration_count=1,
+                    rationale="模拟模型方向错误。",
+                    model_confidence=0.91,
+                    eligibility_status=SupportEligibilityStatus.eligible,
+                )
+            ],
+        )
+        self.container.repository.save_case_analysis(analysis)
+        self.container.case_analysis_service._project_review_to_case(case, analysis)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertNotIn("sku_weight_support", {item.sku_id for item in draft.recommended_skus})
+        decision = next(
+            item
+            for item in draft.safety_decisions
+            if item.rule_id == "case_bmi_low_excludes_weight_support"
+        )
+        self.assertEqual(decision.action.value, "exclude")
+
+    def test_directionless_weight_goal_cannot_activate_weight_loss_product(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="体重方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self._project_semantic_support(
+            case,
+            goal_code="weight_metabolism",
+            system_id="endocrine_metabolic",
+            text="体重与脂肪代谢需要关注",
+            support_direction=SupportDirection.unknown,
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertNotIn("sku_weight_support", {item.sku_id for item in draft.recommended_skus})
+
+    def test_validated_directional_semantic_need_can_activate_weight_product(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="语义减重方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self._project_semantic_support(
+            case,
+            goal_code="weight_metabolism",
+            system_id="endocrine_metabolic",
+            text="报告明确提示体脂偏高，需要健康减脂支持",
+            support_direction=SupportDirection.decrease,
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertIn("sku_weight_support", {item.sku_id for item in draft.recommended_skus})
 
     def test_safety_rules_are_local_and_complete_under_one_hundred_milliseconds(self) -> None:
         case = self._prepare_case(
@@ -371,7 +545,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("降糖药物", warnings_text)
         self.assertIn("监测血糖", warnings_text)
 
-    def test_symptom_tag_matrix_promotes_directly_relevant_nutrients(self) -> None:
+    def test_validated_symptom_support_need_promotes_directly_relevant_nutrients(self) -> None:
         case = self._prepare_case(
             "基础体检未见明显急性异常。",
             Questionnaire(
@@ -386,13 +560,51 @@ class RecommendationServiceTests(unittest.TestCase):
                 stress_level="high",
             ),
         )
+        self._project_semantic_support(
+            case,
+            goal_code="sleep_stress",
+            system_id="neuro_sleep",
+            text="持续入睡困难、夜醒与紧张提示睡眠压力恢复需求。",
+            evidence_ref="questionnaire:symptoms",
+        )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         recommended_ids = [item.sku_id for item in draft.recommended_skus]
-        evidence_details = " ".join(draft.evidence_details)
+        evidence_details = " ".join(
+            detail
+            for item in draft.recommended_skus
+            for detail in item.evidence_details
+        )
 
         self.assertIn("sku_sleep_support", recommended_ids[:4])
-        self.assertIn("产品标签命中：症状", evidence_details)
+        self.assertIn("支持需求", evidence_details)
+
+    def test_gut_semantic_need_does_not_activate_glucose_or_weight_products(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="肠道语义支持测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.update_clinical_summary(
+            case.id,
+            clinical_summary_text="β-葡萄糖醛酸酶升高，报告解释提示肠道菌群代谢需要关注。",
+            actor_id="unit-test",
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="gut_microbiome",
+            system_id="digestive_gut",
+            text="肠道菌群生态与相关代谢支持需求。",
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertIn("sku_herbal_antimicrobial", recommended_ids)
+        self.assertNotIn("sku_blood_sugar_complex", recommended_ids)
+        self.assertNotIn("sku_weight_support", recommended_ids)
 
     def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
         root = Path(self.temp_dir.name)
@@ -863,6 +1075,13 @@ class RecommendationServiceTests(unittest.TestCase):
             ),
             actor_id="unit-test",
         )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="energy_mitochondria",
+            system_id="neuro_sleep",
+            text="医生总结明确记录细胞能量生成与疲劳恢复支持需求。",
+        )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
@@ -872,7 +1091,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertFalse(draft.abstain_reason)
         self.assertTrue(recommended_ids)
         self.assertTrue(
-            {"sku_blood_sugar_complex", "sku_mitochondrial_support", "sku_fish_oil_rtg", "sku_coq10"}
+            {"sku_mitochondrial_support", "sku_coq10"}
             & recommended_ids
         )
         self.assertIn("人工录入评估结论", guidance_text)
@@ -893,6 +1112,13 @@ class RecommendationServiceTests(unittest.TestCase):
                 "代表基因 KLF14、ELOVL2、TRIM59。"
             ),
             actor_id="unit-test",
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="foundational",
+            system_id="endocrine_metabolic",
+            text="医生总结明确列出多种基础维生素、矿物质与氨基酸营养支持需求。",
         )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
@@ -930,6 +1156,13 @@ class RecommendationServiceTests(unittest.TestCase):
             ),
             actor_id="unit-test",
         )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="foundational",
+            system_id="endocrine_metabolic",
+            text="医生总结明确列出多种基础维生素、矿物质与氨基酸营养支持需求。",
+        )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
@@ -939,12 +1172,12 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertFalse(draft.abstain_reason)
         self.assertTrue(
-            {"sku_plant_multi_mineral", "sku_b_complex", "sku_hcy_methylation", "sku_amino_acid_detox"} & recommended_ids
+            {"sku_plant_multi_mineral"} & recommended_ids
         )
         self.assertIn("病例总结提示的所需营养素", guidance_text)
         self.assertIn("蛋白质", guidance_text)
         self.assertIn("所需营养素提示", summary_text)
-        self.assertIn("神经/认知/睡眠系统", analysis_text)
+        self.assertIn("内分泌/代谢系统", analysis_text)
         self.assertNotIn("排序", analysis_text)
         self.assertNotIn("候选", analysis_text)
         self.assertNotIn("挤掉", analysis_text)
@@ -1241,7 +1474,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
         self.assertTrue(any("signal:" in evidence_id for evidence_id in draft.evidence_ids))
 
-    def test_generates_lipid_recommendations_from_case_indicators_when_lab_items_missing(self) -> None:
+    def test_display_only_lipid_strings_do_not_reconstruct_standard_markers(self) -> None:
         case = self.container.case_service.create_case(
             customer_name="血脂展示层案例",
             consultant_id="nutrition-team",
@@ -1279,11 +1512,11 @@ class RecommendationServiceTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
-        self.assertFalse(draft.abstain_reason)
+        self.assertTrue(draft.abstain_reason)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
-        self.assertTrue({"sku_fish_oil_rtg", "sku_cardiac_support"} & recommended_ids)
+        self.assertFalse({"sku_fish_oil_rtg", "sku_cardiac_support"} & recommended_ids)
 
-    def test_generates_iron_recommendations_from_case_indicators_when_lab_items_missing(self) -> None:
+    def test_display_only_iron_strings_do_not_reconstruct_standard_markers(self) -> None:
         case = self.container.case_service.create_case(
             customer_name="缺铁展示层案例",
             consultant_id="nutrition-team",
@@ -1327,9 +1560,9 @@ class RecommendationServiceTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
-        self.assertFalse(draft.abstain_reason)
+        self.assertTrue(draft.abstain_reason)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
-        self.assertTrue({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
+        self.assertFalse({"sku_plant_multi_mineral", "sku_liposomal_vitamin_c_500"} & recommended_ids)
 
     def test_risk_notices_do_not_block_nutrition_recommendations(self) -> None:
         case = self._prepare_case(
@@ -1373,9 +1606,11 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
         self.assertFalse(draft.abstain_reason)
-        self.assertEqual([item.sku_id for item in draft.recommended_skus], ["sku_vitamin_d3_k"])
-        self.assertIn("结合", draft.recommended_skus[0].reason)
-        self.assertNotIn("product:sku_", draft.recommended_skus[0].reason)
+        recommended_ids = [item.sku_id for item in draft.recommended_skus]
+        self.assertEqual(set(recommended_ids), {"sku_blood_sugar_complex", "sku_vitamin_d3_k"})
+        self.assertNotIn("sku_weight_support", recommended_ids)
+        self.assertTrue(all("结合" in item.reason for item in draft.recommended_skus))
+        self.assertTrue(all("product:sku_" not in item.reason for item in draft.recommended_skus))
         self.assertTrue(draft.evidence_details)
         self.assertTrue(any("VD3+K" in item for item in draft.evidence_details))
         self.assertTrue(all(any("\u4e00" <= ch <= "\u9fff" for ch in item) for item in draft.lifestyle_actions))
@@ -1443,10 +1678,32 @@ class RecommendationServiceTests(unittest.TestCase):
         analysis = CaseAnalysis(
             id="analysis-model-bone-support",
             case_id=case.id,
+            status=AnalysisStatus.reviewed,
             snapshot_hash="synthetic",
             model_version="synthetic",
             reviewed_abnormal_findings=[finding],
+            support_goal_version="support-goals-v1-2026-07-19",
+            support_needs=[
+                SemanticSupportNeed(
+                    id="support-model-bone",
+                    support_need_text="维生素D与骨代谢支持",
+                    support_goal_code="vitamin_d_repletion",
+                    system_id="bone_muscle",
+                    evidence_refs=[
+                        SemanticEvidenceReference(
+                            ref="finding:finding-model-bone-support",
+                            evidence_strength=SemanticEvidenceStrength.explicit_conclusion,
+                        )
+                    ],
+                    evidence_strength=SemanticEvidenceStrength.explicit_conclusion,
+                    corroboration_count=1,
+                    rationale="医生确认骨代谢支持需求。",
+                    model_confidence=0.92,
+                    eligibility_status=SupportEligibilityStatus.eligible,
+                )
+            ],
         )
+        self.container.repository.save_case_analysis(analysis)
         self.container.case_analysis_service._project_review_to_case(case, analysis)
         projected = self.container.case_service.get_case(case.id)
         self.assertEqual(
@@ -1457,11 +1714,12 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         vitamin_d = next(item for item in draft.recommended_skus if item.sku_id == "sku_vitamin_d3_k")
         self.assertIn("finding-model-bone-support", vitamin_d.matched_finding_ids)
+        self.assertIn("support-model-bone", vitamin_d.matched_support_need_ids)
         self.assertTrue(
             any("model_support_goal_vitamin_d_repletion" in item for item in vitamin_d.evidence_ids)
         )
 
-    def test_llm_primary_mode_passes_broader_case_context_to_model(self) -> None:
+    def test_product_selection_does_not_expose_catalog_to_draft_model(self) -> None:
         capture = CaptureLLMProvider()
         self.container.recommendation_service.llm_provider = capture
         self.container.recommendation_service.model_version = "remote:test-model"
@@ -1509,15 +1767,11 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
         self.assertFalse(draft.abstain_reason)
-        self.assertIsNotNone(capture.last_input)
-        self.assertEqual(capture.last_input.analysis_mode, "llm_primary")
-        self.assertIn("非高密度脂蛋白胆固醇", capture.last_input.reviewed_report_text)
-        self.assertIn("support_profiles", capture.last_input.structured_case_context)
-        self.assertGreaterEqual(len(capture.last_input.candidate_products), 1)
-        self.assertIn("模型优先判断当前应先围绕代谢与恢复能力做整体支持", draft.report_sections["核心结论与健康画像"])
-        self.assertIn("模型结合报告和问卷信息，提示当前代谢负担与生活方式因素相互叠加", draft.report_sections["功能医学系统失衡分析"])
+        self.assertIsNone(capture.last_input)
+        self.assertTrue(draft.recommended_skus)
+        self.assertTrue(all(item.sku_id.startswith("sku_") for item in draft.recommended_skus))
 
-    def test_clinician_rule_from_case_biases_future_similar_cases(self) -> None:
+    def test_clinician_rule_cannot_bypass_versioned_product_capability(self) -> None:
         self.container.repository.save_product(
             ProductRule(
                 sku_id="sku_doctor_custom_lipid_support",
@@ -1580,10 +1834,9 @@ class RecommendationServiceTests(unittest.TestCase):
         future_draft = self.container.recommendation_service.generate(future_case.id, requested_by="unit-test")
         future_ids = {item.sku_id for item in future_draft.recommended_skus}
 
-        self.assertIn("sku_doctor_custom_lipid_support", future_ids)
-        self.assertTrue(any(evidence_id.startswith("clinician_rule:") for evidence_id in future_draft.evidence_ids))
+        self.assertNotIn("sku_doctor_custom_lipid_support", future_ids)
 
-    def test_dynamically_added_product_enters_future_recommendations(self) -> None:
+    def test_dynamically_added_product_waits_for_versioned_capability_mapping(self) -> None:
         self.container.repository.save_product(
             ProductRule(
                 sku_id="sku_custom_focus_support",
@@ -1622,8 +1875,8 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
 
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
-        self.assertFalse(draft.abstain_reason)
-        self.assertIn("sku_custom_focus_support", recommended_ids)
+        self.assertTrue(draft.abstain_reason)
+        self.assertNotIn("sku_custom_focus_support", recommended_ids)
 
     def test_approve_generates_pdf_report(self) -> None:
         case = self._prepare_case(

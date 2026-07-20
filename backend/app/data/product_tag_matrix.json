@@ -1,5 +1,5 @@
 {
-  "version": "product-tag-matrix-v2-2026-07-18",
+  "version": "product-tag-matrix-v3-evidence-priority-2026-07-20",
   "axis_system_map": {
     "gut_bile": ["digestive_gut", "liver_detox"],
     "gut_microbiome": ["digestive_gut"],
@@ -13,6 +13,7 @@
     "thyroid_axis": ["endocrine_metabolic", "immune_inflammation"],
     "glycemic_balance": ["endocrine_metabolic"],
     "weight_metabolism": ["endocrine_metabolic"],
+    "nutrition_repletion": ["endocrine_metabolic", "digestive_gut", "bone_muscle"],
     "vitamin_d_repletion": ["bone_muscle", "immune_inflammation"],
     "hormone_axis": ["endocrine_metabolic", "reproductive_breast"],
     "female_hormone": ["reproductive_breast"],
@@ -76,7 +77,7 @@
       "precision_level": "adjunct",
       "primary_axes": ["weight_metabolism"],
       "secondary_axes": ["glycemic_balance", "energy_mitochondria"],
-      "marker_tags": ["bmi:high", "waist_circumference:high", "fasting_glucose:high"],
+      "marker_tags": ["bmi:high", "waist_circumference:high"],
       "symptom_tags": ["体重", "肥胖", "脂肪代谢", "活动力下降"],
       "condition_tags": [],
       "goal_tags": ["体重管理", "代谢支持"],
@@ -242,7 +243,7 @@
       "sequence": "16",
       "product_name": "植物抗氧化-不含铁",
       "precision_level": "general_support",
-      "primary_axes": ["foundational"],
+      "primary_axes": ["nutrition_repletion", "foundational"],
       "secondary_axes": ["antioxidant", "energy_mitochondria", "immune"],
       "marker_tags": ["ferritin:low", "serum_iron:low"],
       "symptom_tags": ["基础营养", "疲劳", "营养缺口", "恢复慢"],

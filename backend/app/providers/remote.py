@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+from app.core.llm_compat import chat_generation_options
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, LLMProvider
 
 
@@ -116,7 +117,11 @@ class OpenAICompatibleCaseAssistant:
         messages.append({"role": "user", "content": payload["user_message"]})
         return {
             "model": self.model,
-            "temperature": self.temperature,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
             "messages": messages,
         }
 
@@ -358,7 +363,11 @@ class OpenAICompatibleGroundedComposer:
     def _build_chat_payload(self, grounded_payload: dict[str, Any], analysis_mode: str) -> dict[str, Any]:
         return {
             "model": self.model,
-            "temperature": self.temperature,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -776,9 +785,12 @@ class OpenAICompatibleRagReportFusion:
     def _build_chat_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled"},
-            "max_completion_tokens": self.max_output_tokens,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
+            "max_tokens": self.max_output_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._system_prompt()},

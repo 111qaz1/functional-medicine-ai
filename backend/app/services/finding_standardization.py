@@ -17,8 +17,7 @@ from app.domain.models import (
 from app.services.body_systems import AXIS_SYSTEM_MAP, SYSTEM_NAMES, classify_text_to_system_ids
 
 
-STANDARDIZATION_VERSION = "finding-standardization-v2-support-goals"
-MIN_SUPPORT_MAPPING_CONFIDENCE = 0.80
+STANDARDIZATION_VERSION = "finding-standardization-v3-exact-identity"
 
 _SUPPORT_FALLBACK_BLOCKED_PATTERNS = (
     "结节",
@@ -226,9 +225,6 @@ class FindingStandardizationService:
         valid = [goal for goal in candidates if goal in self.axis_system_map]
         if not valid:
             return []
-        if finding.mapping_confidence < MIN_SUPPORT_MAPPING_CONFIDENCE:
-            notes.append("模型营养支持目标置信度不足，未用于产品匹配。")
-            return []
         if self._support_fallback_blocked(finding):
             notes.append("该异常属于临床随访优先类型，禁止通过模糊支持目标触发产品。")
             return []
@@ -275,14 +271,20 @@ class FindingStandardizationService:
         if candidate:
             if candidate not in self.markers_by_code:
                 notes.append(f"候选检验指标代码不存在：{candidate}。")
-            elif self._metadata_matches(self.markers_by_code[candidate], finding):
+            elif self._metadata_matches(self.markers_by_code[candidate], finding) and self._marker_unit_compatible(
+                self.markers_by_code[candidate], finding
+            ):
                 notes.append("模型候选检验指标代码已通过本地校验。")
                 return candidate
             else:
                 notes.append(f"候选检验指标代码与名称或证据不一致：{candidate}。")
-        matches = [code for code, item in self.markers_by_code.items() if self._metadata_matches(item, finding)]
+        matches = [
+            code
+            for code, item in self.markers_by_code.items()
+            if self._metadata_matches(item, finding) and self._marker_unit_compatible(item, finding)
+        ]
         if len(matches) == 1:
-            notes.append("已通过本地别名表回填标准检验指标代码。")
+            notes.append("已通过完整标准名或完整别名匹配标准检验指标代码。")
             return matches[0]
         if len(matches) > 1:
             notes.append("检验指标名称存在多个可能映射。")
@@ -300,7 +302,7 @@ class FindingStandardizationService:
                 notes.append(f"候选临床发现代码与名称或证据不一致：{candidate}。")
         matches = [code for code, item in self.findings_by_code.items() if self._metadata_matches(item, finding)]
         if len(matches) == 1:
-            notes.append("已通过本地别名表回填标准临床发现代码。")
+            notes.append("已通过完整标准名或完整别名匹配标准临床发现代码。")
             return matches[0]
         if len(matches) > 1:
             notes.append("临床发现名称存在多个可能映射。")
@@ -322,19 +324,55 @@ class FindingStandardizationService:
         return calculated or supplied
 
     def _metadata_matches(self, metadata: dict, finding: AbnormalFinding) -> bool:
-        primary = self._normalize(" ".join(filter(None, [finding.name, finding.result_text, finding.interpretation])))
+        # Indicator identity must come from the finding name itself. Results and
+        # narrative interpretation are deliberately excluded: matching aliases as
+        # substrings there caused beta-glucuronidase to become glucose and
+        # transferrin to become ferritin.
+        identity_tokens = self._identity_tokens(finding.name)
         aliases = [metadata.get("display_name", ""), *(metadata.get("synonyms") or [])]
         for alias in aliases:
             normalized_alias = self._normalize(alias)
-            if not normalized_alias:
-                continue
-            if len(normalized_alias) <= 2:
-                if primary == normalized_alias:
-                    return True
-                continue
-            if normalized_alias in primary:
+            if normalized_alias and normalized_alias in identity_tokens:
                 return True
         return False
+
+    @staticmethod
+    def _marker_unit_compatible(metadata: dict, finding: AbnormalFinding) -> bool:
+        if not (finding.unit or "").strip():
+            return True
+        unit = unicodedata.normalize("NFKC", finding.unit or "").replace("μ", "u").lower()
+        allowed = {
+            unicodedata.normalize("NFKC", str(value)).replace("μ", "u").lower()
+            for value in [
+                metadata.get("normalized_unit"),
+                *((metadata.get("unit_factors") or {}).keys()),
+            ]
+            if value
+        }
+        return not allowed or unit in allowed
+
+    def _identity_tokens(self, value: str) -> set[str]:
+        raw = unicodedata.normalize("NFKC", value or "").strip()
+        parts = [raw, *re.split(r"[()（）/／|｜:：,，;；\[\]【】]", raw)]
+        tokens = {normalized for part in parts if (normalized := self._normalize(part))}
+        directional_suffixes = (
+            "明显偏高",
+            "明显偏低",
+            "偏高",
+            "偏低",
+            "升高",
+            "增高",
+            "降低",
+            "减少",
+            "阳性",
+            "异常",
+        )
+        for part in list(tokens):
+            for suffix in directional_suffixes:
+                normalized_suffix = self._normalize(suffix)
+                if part.endswith(normalized_suffix) and len(part) > len(normalized_suffix):
+                    tokens.add(part[: -len(normalized_suffix)])
+        return tokens
 
     @staticmethod
     def _marker_flag(value: str) -> str:

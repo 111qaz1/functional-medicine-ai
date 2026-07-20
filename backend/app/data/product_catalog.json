@@ -160,9 +160,7 @@
     "merge_status": null,
     "indications": [
       "goal:体重管理",
-      "goal:代谢支持",
-      "marker:fasting_glucose:high",
-      "lifestyle:movement"
+      "goal:代谢支持"
     ],
     "exclusions": [
       "pregnancy"

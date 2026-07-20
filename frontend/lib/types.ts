@@ -95,6 +95,9 @@ export interface AbnormalFinding {
   reference_range?: string | null;
   abnormal_flag: string;
   interpretation?: string | null;
+  report_explanation?: string | null;
+  neutral_interpretation?: string | null;
+  support_need_text?: string | null;
   source_file_id: string;
   source_file_name: string;
   source_page: number;
@@ -113,6 +116,35 @@ export interface AbnormalFinding {
   support_goals?: string[];
   standardization_status?: "unprocessed" | "proposed" | "validated" | "support_mapped" | "system_mapped" | "unmapped" | "rejected";
   standardization_notes?: string[];
+}
+
+export type FinalGenerationStatus =
+  | "idle"
+  | "queued"
+  | "final_synthesizing"
+  | "validating_support_needs"
+  | "mapping_products"
+  | "checking_safety"
+  | "generating_draft"
+  | "ready"
+  | "failed";
+
+export interface SemanticSupportNeed {
+  id: string;
+  support_need_text: string;
+  support_goal_code?: string | null;
+  support_direction: "increase" | "decrease" | "maintain" | "balance" | "restore" | "unknown";
+  system_id: string;
+  evidence_refs: Array<{
+    ref: string;
+    evidence_strength: "direct" | "explicit_conclusion" | "contextual";
+  }>;
+  evidence_strength: "direct" | "explicit_conclusion" | "contextual";
+  corroboration_count: number;
+  rationale: string;
+  model_confidence: number;
+  eligibility_status: "eligible" | "narrative_only" | "rejected";
+  validation_notes: string[];
 }
 
 export interface ChronicFoodSensitivityResult {
@@ -154,6 +186,14 @@ export interface CaseAnalysis {
   reviewed_by?: string | null;
   revision: number;
   draft_id?: string | null;
+  final_generation_status: FinalGenerationStatus;
+  final_generation_progress: number;
+  final_generation_error?: string | null;
+  final_generation_revision: number;
+  support_goal_version: string;
+  support_needs: SemanticSupportNeed[];
+  final_structured_system_findings: StructuredSystemFinding[];
+  final_synthesis_completed_revision?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -236,6 +276,7 @@ export interface DraftRecommendationItem {
   warnings: string[];
   primary_system_id?: string | null;
   matched_finding_ids?: string[];
+  matched_support_need_ids?: string[];
   system_priority_rank?: number | null;
   safety_decisions?: Array<{
     rule_id: string;
@@ -289,6 +330,7 @@ export interface RecommendationDraft {
   source_analysis_id?: string | null;
   source_analysis_revision?: number | null;
   source_snapshot_hash?: string | null;
+  support_goal_version?: string;
 }
 
 export interface ReviewAndGenerateResponse {

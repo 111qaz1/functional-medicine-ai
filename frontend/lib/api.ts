@@ -200,6 +200,13 @@ export async function reviewAndGenerate(
   );
 }
 
+export async function retryDraftGeneration(caseId: string, analysisId: string) {
+  return apiFetch<CaseAnalysis>(
+    `/cases/${caseId}/analyses/${analysisId}:retry-draft-generation`,
+    { method: "POST" }
+  );
+}
+
 export async function reparseCaseFile(caseId: string, fileId: string) {
   return apiFetch<CaseDetailResponse>(`/cases/${caseId}/files/${fileId}:reparse`, {
     method: "POST"
@@ -242,7 +249,11 @@ export function downloadPdfReport(
       }
       const disposition = request.getResponseHeader("Content-Disposition") ?? "";
       const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-      const filename = encodedName ? decodeURIComponent(encodedName) : `functional-medicine-report-${draftId}.pdf`;
+      const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+      const plainName = disposition.match(/filename=([^;]+)/i)?.[1]?.trim();
+      const filename = encodedName
+        ? decodeURIComponent(encodedName)
+        : quotedName || plainName || `functional-medicine-report-${draftId}.pdf`;
       const url = URL.createObjectURL(request.response);
       const link = document.createElement("a");
       link.href = url;

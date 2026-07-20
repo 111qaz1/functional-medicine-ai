@@ -534,6 +534,7 @@ def get_latest_case_analysis(case_id: str, request: Request):
 @router.post(
     "/cases/{case_id}/analyses/{analysis_id}:review-and-generate",
     response_model=ReviewAndGenerateResponse,
+    status_code=202,
 )
 def review_analysis_and_generate(
     case_id: str,
@@ -561,6 +562,24 @@ def review_analysis_and_generate(
         draft_generated=draft is not None,
         generation_error=error,
     )
+
+
+@router.post(
+    "/cases/{case_id}/analyses/{analysis_id}:retry-draft-generation",
+    status_code=202,
+)
+def retry_draft_generation(case_id: str, analysis_id: str, request: Request):
+    container = _container(request)
+    _authorized_case(container, case_id, _current_doctor(request))
+    try:
+        return container.case_analysis_service.retry_draft_generation(
+            case_id=case_id,
+            analysis_id=analysis_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/cases/{case_id}/files/{file_id}:reparse", response_model=CaseDetailResponse)

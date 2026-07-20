@@ -11,6 +11,7 @@ from threading import Lock
 from app.domain.models import (
     AuditLog,
     AnalysisStatus,
+    FinalGenerationStatus,
     CaseAnalysis,
     CaseRecord,
     ClinicianRule,
@@ -388,15 +389,27 @@ class LocalRepository:
         }
         changed = 0
         with self._lock, closing(self._connect()) as connection, connection:
-            rows = connection.execute(
-                "SELECT id, payload FROM case_analyses WHERE status IN (?, ?, ?, ?, ?)",
-                tuple(active),
-            ).fetchall()
+            rows = connection.execute("SELECT id, payload FROM case_analyses").fetchall()
             for row in rows:
                 analysis = CaseAnalysis.model_validate_json(row["payload"])
-                analysis.status = AnalysisStatus.failed
-                analysis.error_code = "interrupted_by_restart"
-                analysis.error_message = "后端服务重启导致分析中断，请手动重试。"
+                initial_active = analysis.status.value in active
+                final_active = analysis.final_generation_status in {
+                    FinalGenerationStatus.queued,
+                    FinalGenerationStatus.final_synthesizing,
+                    FinalGenerationStatus.validating_support_needs,
+                    FinalGenerationStatus.mapping_products,
+                    FinalGenerationStatus.checking_safety,
+                    FinalGenerationStatus.generating_draft,
+                }
+                if not initial_active and not final_active:
+                    continue
+                if initial_active:
+                    analysis.status = AnalysisStatus.failed
+                    analysis.error_code = "interrupted_by_restart"
+                    analysis.error_message = "后端服务重启导致分析中断，请手动重试。"
+                if final_active:
+                    analysis.final_generation_status = FinalGenerationStatus.failed
+                    analysis.final_generation_error = "后端服务重启导致草案生成中断，请手动重试。"
                 analysis.updated_at = datetime.now(timezone.utc)
                 connection.execute(
                     "UPDATE case_analyses SET status = ?, updated_at = ?, payload = ? WHERE id = ?",

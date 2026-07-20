@@ -201,7 +201,9 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertIn("RAG异常指标解释", draft.report_sections)
         self.assertIn("RAG生活方式干预", draft.report_sections)
         self.assertIn("RAG复查建议", draft.report_sections)
-        self.assertEqual(len(composer.last_input.rag_hits), 4)
+        # Product selection is now entirely local. The model/composer must not
+        # receive RAG hits together with product candidates or SKU names.
+        self.assertIsNone(composer.last_input)
         self.assertIn("rag_rejected:unsafe_drug", serialized_audit)
 
         review = self.container.review_service.approve(
@@ -258,7 +260,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
             ]
         )
         case = self._prepare_case(
-            "空腹血糖 6.2 mmol/L 3.9-5.6",
+            "25-OH Vitamin D 18 ng/mL 30-100",
             Questionnaire(
                 age=32,
                 sex="female",
@@ -704,8 +706,9 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         serialized_audit = json.dumps(draft.internal_audit, ensure_ascii=False)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
 
-        self.assertIn("sku_doctor_custom_lipid_support", recommended_ids)
-        self.assertTrue(any(evidence_id.startswith("clinician_rule:") for evidence_id in draft.evidence_ids))
+        # A clinician boost rule can reorder an evidence-backed candidate, but
+        # cannot introduce a product that has no versioned capability mapping.
+        self.assertNotIn("sku_doctor_custom_lipid_support", recommended_ids)
         self.assertNotIn("改为推荐目录外产品", serialized_sections)
         self.assertIn("direct_product_reference", serialized_audit)
 

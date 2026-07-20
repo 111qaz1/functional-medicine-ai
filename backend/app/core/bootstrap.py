@@ -30,6 +30,7 @@ from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.questionnaire_import import QuestionnaireImportService
 from app.services.recommendation_local import RecommendationService
 from app.services.review_local import ReviewService
+from app.services.semantic_support import SemanticSupportService
 
 
 def _data_path(settings: AppSettings, *parts: str) -> Path:
@@ -205,6 +206,9 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         _data_path(settings, "clinical_finding_dictionary.json"),
         _data_path(settings, "product_tag_matrix.json"),
     )
+    semantic_support_service = SemanticSupportService(
+        _data_path(settings, "support_goal_catalog.json")
+    )
     parsing_service = DocumentParsingService(
         ocr_provider=DocumentOCRProvider(
             base_url=settings.llm_base_url,
@@ -241,11 +245,13 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             model=settings.llm_model,
             api_style=settings.llm_api_style,
             timeout_seconds=max(settings.llm_timeout_seconds, 90.0),
+            thinking_timeout_seconds=max(settings.llm_thinking_timeout_seconds, 90.0),
             temperature=min(settings.llm_temperature, 0.1),
             marker_codes=finding_standardization_service.marker_codes,
             finding_codes=finding_standardization_service.finding_codes,
             system_codes=finding_standardization_service.system_codes,
-            support_goal_codes=finding_standardization_service.support_goal_codes,
+            support_goal_codes=semantic_support_service.goal_codes,
+            support_goal_definitions=semantic_support_service.prompt_catalog(),
         )
     case_analysis_service = CaseAnalysisService(
         repository=repository,
@@ -253,8 +259,9 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         recommendation_service=recommendation_service,
         provider=case_analysis_provider,
         model_version=settings.llm_model or "unconfigured",
-        prompt_version="case-analysis-v4-support-goals",
+        prompt_version="case-analysis-v7-evidence-priority",
         standardization_service=finding_standardization_service,
+        semantic_support_service=semantic_support_service,
         questionnaire_import_service=questionnaire_import_service,
         worker_count=settings.analysis_worker_count,
     )

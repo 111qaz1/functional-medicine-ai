@@ -1,10 +1,11 @@
 {
-  "version": "support-goals-v4-evidence-priority-2026-07-20",
+  "version": "support-goals-v5-digestive-products-2026-07-22",
   "goals": [
     {"code":"gut_bile","name":"肝胆与脂肪消化支持","definition":"支持胆汁分泌、脂肪消化与肝胆消化协同。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["nodule","mass","antibody_only"]},
     {"code":"gut_microbiome","name":"肠道菌群生态支持","definition":"支持存在明确菌群结构、致病菌或代谢产物异常时的肠道生态调整。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["food_sensitivity"]},
     {"code":"gut_mucosa","name":"胃肠黏膜与屏障支持","definition":"支持胃肠黏膜、屏障完整性和黏膜免疫相关需求。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["food_sensitivity"]},
-    {"code":"digestive_enzyme","name":"消化吸收支持","definition":"支持胃酸、消化酶与营养吸收相关需求。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":[]},
+    {"code":"gastric_acid","name":"胃酸分泌支持","definition":"仅支持有明确胃酸分泌不足、低胃酸或蛋白质胃内初步消化不足证据的需求。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["food_sensitivity"],"eligible_directions":["increase","restore"]},
+    {"code":"digestive_enzyme","name":"消化酶与营养吸收支持","definition":"支持有明确消化酶、全食物分解、餐后消化负担或营养吸收不足证据的需求；不用于替代胃酸分泌支持。","system_id":"digestive_gut","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["food_sensitivity"],"eligible_directions":["increase","restore","maintain"]},
     {"code":"liver_detox","name":"肝脏代谢与抗氧化支持","definition":"支持存在明确肝胆代谢或生物转化负担证据时的营养需求。","system_id":"liver_detox","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["cancer_risk"]},
     {"code":"methylation","name":"甲基化与同型半胱氨酸支持","definition":"支持同型半胱氨酸、叶酸与维生素B族相关甲基化需求。","system_id":"cardiovascular","allowed_evidence_types":["direct","explicit_conclusion"],"blocked_standalone_finding_types":[]},
     {"code":"immune","name":"免疫功能支持","definition":"支持有明确免疫功能、感染易感或黏膜免疫证据的营养需求。","system_id":"immune_inflammation","allowed_evidence_types":["direct","explicit_conclusion","contextual"],"blocked_standalone_finding_types":["antibody_only","tumor_marker"]},
@@ -44,20 +45,20 @@
     {"sku_id":"sku_neuro_cognitive","primary_goal_codes":["neuro_cognitive"],"secondary_goal_codes":["energy_mitochondria","sleep_stress"],"enabled":true},
     {"sku_id":"sku_coq10","primary_goal_codes":["energy_mitochondria"],"secondary_goal_codes":["cardiovascular","antioxidant"],"enabled":true},
     {"sku_id":"sku_plant_multi_mineral","primary_goal_codes":["nutrition_repletion","foundational"],"secondary_goal_codes":["antioxidant","energy_mitochondria","immune"],"enabled":true},
-    {"sku_id":"sku_stomach_acid_support","primary_goal_codes":["digestive_enzyme"],"secondary_goal_codes":["gut_bile"],"enabled":true},
+    {"sku_id":"sku_stomach_acid_support","primary_goal_codes":["gastric_acid"],"secondary_goal_codes":[],"goal_direction_requirements":{"gastric_acid":["increase","restore"]},"enabled":true},
     {"sku_id":"sku_dhea","primary_goal_codes":["hormone_axis"],"secondary_goal_codes":["female_hormone","anti_aging"],"enabled":true},
     {"sku_id":"sku_polaprezinc","primary_goal_codes":["gut_mucosa"],"secondary_goal_codes":["digestive_enzyme","immune"],"enabled":true},
     {"sku_id":"sku_hcy_methylation","primary_goal_codes":["methylation"],"secondary_goal_codes":["cardiovascular","liver_detox","energy_mitochondria"],"enabled":true},
     {"sku_id":"sku_bile_flow_support","primary_goal_codes":["gut_bile"],"secondary_goal_codes":["liver_detox","digestive_enzyme"],"enabled":true},
     {"sku_id":"sku_zinc_complex","primary_goal_codes":["immune"],"secondary_goal_codes":["gut_mucosa","female_hormone"],"enabled":true},
     {"sku_id":"sku_immune_support","primary_goal_codes":["immune"],"secondary_goal_codes":["inflammation","antioxidant","gut_mucosa"],"enabled":true},
-    {"sku_id":"sku_herbal_antimicrobial","primary_goal_codes":["gut_microbiome"],"secondary_goal_codes":["immune","gut_bile"],"enabled":true},
+    {"sku_id":"sku_herbal_antimicrobial","primary_goal_codes":["gut_microbiome"],"secondary_goal_codes":["immune","gut_bile"],"goal_direction_requirements":{"gut_microbiome":["decrease"]},"enabled":true},
     {"sku_id":"sku_liver_detox_support","primary_goal_codes":["liver_detox"],"secondary_goal_codes":["gut_bile","antioxidant","lipid_balance"],"enabled":true},
     {"sku_id":"sku_b_complex","primary_goal_codes":["energy_mitochondria"],"secondary_goal_codes":["methylation","liver_detox","glycemic_balance"],"enabled":true},
     {"sku_id":"sku_trans_resveratrol","primary_goal_codes":["antioxidant"],"secondary_goal_codes":["cardiovascular","anti_aging","inflammation"],"enabled":true},
     {"sku_id":"sku_female_hormone_balance","primary_goal_codes":["female_hormone"],"secondary_goal_codes":["hormone_axis","sleep_stress"],"enabled":true},
     {"sku_id":"sku_amino_acid_detox","primary_goal_codes":["liver_detox"],"secondary_goal_codes":["antioxidant","gut_mucosa","energy_mitochondria"],"enabled":true},
-    {"sku_id":"sku_digestive_enzymes","primary_goal_codes":["digestive_enzyme"],"secondary_goal_codes":[],"enabled":false},
-    {"sku_id":"sku_probiotics","primary_goal_codes":["gut_microbiome"],"secondary_goal_codes":[],"enabled":false}
+    {"sku_id":"sku_digestive_enzymes","primary_goal_codes":["digestive_enzyme"],"secondary_goal_codes":[],"goal_direction_requirements":{"digestive_enzyme":["increase","restore","maintain"]},"enabled":true},
+    {"sku_id":"sku_probiotic_complex","primary_goal_codes":["gut_microbiome"],"secondary_goal_codes":["gut_mucosa"],"goal_direction_requirements":{"gut_microbiome":["increase","restore","balance","maintain"],"gut_mucosa":["restore","balance","maintain"]},"enabled":true}
   ]
 }

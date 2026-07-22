@@ -529,7 +529,8 @@ class RecommendationService:
             "gut_bile": "肝胆与脂肪消化支持",
             "gut_microbiome": "菌群结构与肠道生态支持",
             "gut_mucosa": "胃肠黏膜与屏障支持",
-            "digestive_enzyme": "消化吸收支持",
+            "gastric_acid": "胃酸分泌支持",
+            "digestive_enzyme": "消化酶与营养吸收支持",
             "liver_detox": "肝胆代谢与抗氧化支持",
             "immune": "免疫调节支持",
             "inflammation": "炎症平衡支持",
@@ -2378,7 +2379,7 @@ class RecommendationService:
             base_title="消化系统/肠道",
             body="腹胀、排便波动、油腻不耐受、胃酸/消化或菌群线索提示消化道执行力会影响整体方案效果；建议先观察触发食物、排便规律、膳食纤维、蛋白质消化和油脂耐受。",
             score=gut_score,
-            axes=("gut_bile", "gut_microbiome", "gut_mucosa", "digestive_enzyme"),
+            axes=("gut_bile", "gut_microbiome", "gut_mucosa", "gastric_acid", "digestive_enzyme"),
         )
 
         neuro_sleep_score = 0.0
@@ -2857,7 +2858,8 @@ class RecommendationService:
             "antioxidant": "抗氧化轴",
             "bone_metabolism": "骨代谢轴",
             "cardiovascular": "心血管系统",
-            "digestive_enzyme": "消化酶/胃酸支持",
+            "gastric_acid": "胃酸分泌支持",
+            "digestive_enzyme": "消化酶/营养吸收支持",
             "energy_mitochondria": "细胞能量/线粒体系统",
             "female_hormone": "女性激素系统",
             "foundational": "基础营养支持",

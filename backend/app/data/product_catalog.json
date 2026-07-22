@@ -1002,6 +1002,107 @@
     "priority": 27
   },
   {
+    "sku_id": "sku_digestive_enzymes",
+    "display_name": "综合消化酶",
+    "category": "digestive_support",
+    "source_refs": [
+      "31产品介绍（客户报告版）.xlsx#Sheet1!B27:D27",
+      "营养素剂量说明.xlsx#单粒泡罩（中文）!B179:J189"
+    ],
+    "formula_summary": "由11种消化酶组成的全谱消化支持配方，覆盖碳水化合物、蛋白质、脂肪、膳食纤维、乳糖、果胶和蔗糖等食物成分的分解。",
+    "core_ingredients": [
+      "淀粉酶",
+      "酸性蛋白酶",
+      "中性蛋白酶",
+      "木聚糖酶",
+      "真菌蛋白酶",
+      "纤维素酶",
+      "脂肪酶",
+      "乳糖酶",
+      "果胶酶",
+      "半纤维素酶",
+      "蔗糖酶"
+    ],
+    "candidate_use_cases": [
+      "消化酶支持",
+      "餐后消化负担",
+      "营养吸收支持",
+      "乳糖不耐受相关消化支持"
+    ],
+    "contraindications": [
+      "对消化酶、蛋白酶或相关发酵来源成分明确过敏者禁用"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:消化酶支持",
+      "goal:营养吸收支持",
+      "symptom:消化不良",
+      "symptom:餐后腹胀",
+      "symptom:积食",
+      "symptom:乳糖不耐受"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，随午餐或晚餐主餐使用；强化和特殊场景由医生复核。",
+    "interaction_rule": [],
+    "warning_text": [
+      "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 25
+  },
+  {
+    "sku_id": "sku_probiotic_complex",
+    "display_name": "复合益生菌",
+    "category": "gut_support",
+    "source_refs": [
+      "31产品介绍（客户报告版）.xlsx#Sheet1!B28:D28",
+      "营养素剂量说明.xlsx#单粒泡罩（中文）!B190:J196"
+    ],
+    "formula_summary": "由布拉酵母及6种乳酸菌、乳杆菌或链球菌组成的7菌株复合益生菌配方，用于菌群平衡、恢复与肠道黏膜屏障支持。",
+    "core_ingredients": [
+      "布拉酵母",
+      "乳酸菌BI-04",
+      "乳酸菌Bi-07",
+      "乳酸杆菌NCFM",
+      "嗜热链球菌St-21",
+      "唾液乳杆菌Ls-33",
+      "植物乳杆菌Lp-115"
+    ],
+    "candidate_use_cases": [
+      "菌群恢复",
+      "菌群平衡",
+      "抗生素后肠道调理",
+      "肠道黏膜屏障支持"
+    ],
+    "contraindications": [
+      "对益生菌、乳酸菌、酵母或布拉酵母明确过敏者禁用"
+    ],
+    "enabled": true,
+    "merge_status": null,
+    "indications": [
+      "goal:菌群恢复",
+      "goal:菌群平衡",
+      "symptom:菌群失衡",
+      "symptom:抗生素后",
+      "symptom:腹胀",
+      "symptom:腹泻",
+      "symptom:便秘"
+    ],
+    "exclusions": [],
+    "dosage_rule": "每日 1 粒，早餐后使用；强化和特殊场景由医生复核。",
+    "interaction_rule": [],
+    "warning_text": [
+      "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+    ],
+    "lifestyle_tags": [
+      "gut_support"
+    ],
+    "priority": 26
+  },
+  {
     "sku_id": "sku_bile_flow_support",
     "display_name": "支持胆汁分泌",
     "category": "digestive_support",

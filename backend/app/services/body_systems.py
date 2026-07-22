@@ -34,6 +34,7 @@ AXIS_SYSTEM_MAP: dict[str, tuple[str, ...]] = {
     "thyroid_axis": ("endocrine_metabolic", "immune_inflammation"),
     "glycemic_balance": ("endocrine_metabolic",),
     "weight_metabolism": ("endocrine_metabolic",),
+    "nutrition_repletion": ("endocrine_metabolic", "digestive_gut", "bone_muscle"),
     "vitamin_d_repletion": ("bone_muscle", "immune_inflammation"),
     "hormone_axis": ("endocrine_metabolic", "reproductive_breast"),
     "female_hormone": ("reproductive_breast",),

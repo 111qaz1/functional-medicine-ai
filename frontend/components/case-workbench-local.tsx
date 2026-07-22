@@ -10,6 +10,7 @@ import {
   fetchCase,
   fetchCurrentUser,
   fetchLatestCaseAnalysis,
+  retryDraftGeneration,
   reviewAndGenerate,
   startCaseAnalysis,
   updateClinicalSummary,
@@ -27,6 +28,40 @@ import { OperationProgress, OperationProgressState } from "./operation-progress"
 import { MarkdownEditor, MarkdownViewMode } from "./markdown-editor";
 
 const ACTIVE_ANALYSIS = new Set(["queued", "preparing", "analyzing_documents", "synthesizing", "validating"]);
+const ACTIVE_FINAL_GENERATION = new Set([
+  "queued",
+  "final_synthesizing",
+  "validating_support_needs",
+  "mapping_products",
+  "checking_safety",
+  "generating_draft"
+]);
+
+const FINAL_GENERATION_LABELS: Record<string, string> = {
+  idle: "等待医生校对",
+  queued: "医生校对已保存，任务排队中",
+  final_synthesizing: "最终病例深度综合",
+  validating_support_needs: "支持需求校验",
+  mapping_products: "产品能力匹配",
+  checking_safety: "禁忌与安全检查",
+  generating_draft: "生成营养素草案",
+  ready: "草案生成完成",
+  failed: "草案生成失败"
+};
+
+const BODY_SYSTEM_LABELS: Record<string, string> = {
+  digestive_gut: "消化系统/肠道",
+  liver_detox: "肝脏/解毒系统",
+  immune_inflammation: "免疫/炎症系统",
+  endocrine_metabolic: "内分泌/代谢系统",
+  cardiovascular: "心血管系统",
+  respiratory: "呼吸系统",
+  neuro_sleep: "神经/认知/睡眠系统",
+  bone_muscle: "骨骼/肌肉系统",
+  urinary_renal: "泌尿/肾脏系统",
+  reproductive_breast: "生殖/妇科/乳腺系统",
+  skin_mucosa: "皮肤/黏膜系统"
+};
 
 const ANALYSIS_LABELS: Record<string, string> = {
   queued: "排队中",
@@ -211,7 +246,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   }, [publishableEditorExpanded]);
 
   useEffect(() => {
-    if (!analysis || !ACTIVE_ANALYSIS.has(analysis.status)) return;
+    const shouldPoll = analysis && (
+      ACTIVE_ANALYSIS.has(analysis.status)
+      || ACTIVE_FINAL_GENERATION.has(analysis.final_generation_status)
+    );
+    if (!shouldPoll) return;
     let stopped = false;
     let inFlight = false;
     async function poll() {
@@ -219,7 +258,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       inFlight = true;
       await loadLatestAnalysis()
         .then((next) => {
-          if (next && !ACTIVE_ANALYSIS.has(next.status)) void loadCase();
+          if (next && !ACTIVE_ANALYSIS.has(next.status) && !ACTIVE_FINAL_GENERATION.has(next.final_generation_status)) {
+            void loadCase();
+          }
         })
         .catch((err) => setError(err instanceof Error ? err.message : "读取分析进度失败"))
         .finally(() => { inFlight = false; });
@@ -230,7 +271,42 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [analysis?.id, analysis?.status]);
+  }, [analysis?.id, analysis?.status, analysis?.final_generation_status]);
+
+  useEffect(() => {
+    if (!analysis || analysis.status !== "reviewed") return;
+    const finalStatus = analysis.final_generation_status;
+    if (ACTIVE_FINAL_GENERATION.has(finalStatus)) {
+      setOperation({
+        placement: "draft",
+        title: "生成结构化草案",
+        stage: FINAL_GENERATION_LABELS[finalStatus] ?? finalStatus,
+        percent: analysis.final_generation_progress,
+        status: "running"
+      });
+      setReviewActionNotice(FINAL_GENERATION_LABELS[finalStatus] ?? finalStatus);
+      setReviewActionError(null);
+      return;
+    }
+    if (finalStatus === "ready") {
+      setOperation({
+        placement: "draft",
+        title: "生成结构化草案",
+        stage: "结构化草案已生成，等待医生审核。",
+        percent: 100,
+        status: "success"
+      });
+      setReviewActionNotice("异常校对已保存，营养素草案已生成并进入待审核状态。");
+      setReviewActionError(null);
+      return;
+    }
+    if (finalStatus === "failed") {
+      const message = `校对已保存，草案生成失败：${analysis.final_generation_error ?? "未知错误"}。可直接重试，不会重新读取 PDF。`;
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: message, percent: 100, status: "error" });
+      setReviewActionError(message);
+      setReviewActionNotice(null);
+    }
+  }, [analysis?.final_generation_status, analysis?.final_generation_progress, analysis?.final_generation_error]);
 
   useEffect(() => {
     if (!analysis) return;
@@ -395,23 +471,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setReviewActionNotice(null);
       return;
     }
-    let progressTimer: number | null = null;
     try {
       setBusy(true);
-      const stages = [
-        [12, "保存医生校对"],
-        [35, "整理结构化病例上下文"],
-        [62, "匹配营养素与安全规则"],
-        [82, "生成可审核草案"]
-      ] as const;
-      let stageIndex = 0;
-      setOperation({ placement: "draft", title: "生成结构化草案", stage: stages[0][1], percent: stages[0][0], status: "running" });
-      progressTimer = window.setInterval(() => {
-        const nextStage = stages[Math.min(++stageIndex, stages.length - 1)];
-        setOperation({ placement: "draft", title: "生成结构化草案", stage: nextStage[1], percent: nextStage[0], status: "running" });
-      }, 1400);
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: "保存医生校对", percent: 3, status: "running" });
       setReviewActionError(null);
-      setReviewActionNotice("正在保存医生校对并生成营养素草案，请稍候……");
+      setReviewActionNotice("正在保存医生校对……");
       const result = await reviewAndGenerate(
         caseId,
         analysis.id,
@@ -420,19 +484,10 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         findings
       );
       setAnalysis(result.analysis);
-      if (result.draft_generated) {
-        await loadCase();
-        const message = "异常校对已保存，营养素草案已生成并进入待审核状态。";
-        setNotice(message);
-        setReviewActionNotice(message);
-        setOperation({ placement: "draft", title: "生成结构化草案", stage: "结构化草案已生成，等待医生审核。", percent: 100, status: "success" });
-      } else {
-        const message = `校对已保存，草案生成失败：${result.generation_error ?? "未知错误"}。可直接重试，不会重新读取 PDF。`;
-        setNotice(message);
-        setReviewActionError(message);
-        setReviewActionNotice(null);
-        setOperation({ placement: "draft", title: "生成结构化草案", stage: message, percent: 100, status: "error" });
-      }
+      const message = "异常校对已保存，草案生成任务已进入后台队列。可以刷新页面或离开后再回来查看进度。";
+      setNotice(message);
+      setReviewActionNotice(message);
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: "任务已排队", percent: result.analysis.final_generation_progress, status: "running" });
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "保存校对并生成草案失败";
@@ -441,7 +496,24 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setReviewActionError(message);
       setReviewActionNotice(null);
     } finally {
-      if (progressTimer !== null) window.clearInterval(progressTimer);
+      setBusy(false);
+    }
+  }
+
+  async function handleRetryDraftGeneration() {
+    if (!analysis) return;
+    try {
+      setBusy(true);
+      setReviewActionError(null);
+      const next = await retryDraftGeneration(caseId, analysis.id);
+      setAnalysis(next);
+      setReviewActionNotice("草案生成任务已重新排队；已完成的深度综合会直接复用。");
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: "任务已重新排队", percent: next.final_generation_progress, status: "running" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "重试草案生成失败";
+      setReviewActionError(message);
+      setOperation({ placement: "draft", title: "生成结构化草案", stage: message, percent: 100, status: "error" });
+    } finally {
       setBusy(false);
     }
   }
@@ -499,8 +571,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const caseRecord = payload.case;
   const latestDraft = payload.latest_draft;
   const canStart = validFiles.length > 0 && (!analysis || ["failed", "stale"].includes(analysis.status));
-  const canReview = analysis &&
-    ["ready_for_review", "reviewed"].includes(analysis.status);
+  const canReview = analysis
+    && ["ready_for_review", "reviewed"].includes(analysis.status)
+    && !ACTIVE_FINAL_GENERATION.has(analysis.final_generation_status);
   const includedRecommendationCount = latestDraft
     ? latestDraft.recommended_skus.filter((item) => !excludedSkuIds.includes(item.sku_id)).length
     : 0;
@@ -578,7 +651,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             <p className="muted">确认资料后才调用大模型。第一次分析不会生成 SKU、剂量或疗程。</p>
           </div>
           <label className="file-row">
-            <span><input type="checkbox" checked={thirdPartyConfirmed} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} /> 已确认获得将本病例资料发送至 Doubao 第三方模型处理的授权</span>
+            <span><input type="checkbox" checked={thirdPartyConfirmed} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} /> 已确认获得将本病例资料发送至配置的第三方大模型处理的授权</span>
           </label>
           <button type="button" className="primary-button" disabled={busy || !canStart || !thirdPartyConfirmed} onClick={() => void handleStartAnalysis()}>
             {analysis?.status === "failed" || analysis?.status === "stale" ? "重新开始综合分析" : "确认资料并开始综合分析"}
@@ -673,6 +746,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                               <label className="field"><span>页码</span><input type="number" min={1} value={finding.source_page} onChange={(event) => updateFinding(index, { source_page: Number(event.target.value) || 1 })} /></label>
                             </div>
                             <label className="field"><span>原文证据</span><textarea rows={3} value={finding.source_text} onChange={(event) => updateFinding(index, { source_text: event.target.value })} /></label>
+                            {finding.report_explanation ? <p className="muted"><strong>报告解释：</strong>{finding.report_explanation}</p> : null}
+                            {finding.neutral_interpretation ? <p className="muted"><strong>中性医学解释：</strong>{finding.neutral_interpretation}</p> : null}
                             <p className="muted">{evidenceLabel(finding.evidence_status)}{finding.evidence_notes.length ? ` · ${finding.evidence_notes.join("；")}` : ""}</p>
                           </div>
                         </details>
@@ -686,10 +761,29 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
               </div>
               <div className="button-row">
                 <button type="button" className="secondary-button" disabled={busy || !validFiles.length} onClick={addFinding}>补充异常</button>
-                <button type="button" className="primary-button" disabled={busy || !canReview} onClick={() => void handleReviewAndGenerate()}>
-                  {analysis.status === "reviewed" ? "重试生成营养素草案" : "保存校对并生成营养素草案"}
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={busy || !canReview}
+                  onClick={() => void (analysis.final_generation_status === "failed" ? handleRetryDraftGeneration() : handleReviewAndGenerate())}
+                >
+                  {analysis.final_generation_status === "failed"
+                    ? "重试生成营养素草案"
+                    : analysis.status === "reviewed"
+                      ? "重新生成营养素草案"
+                      : "保存校对并生成营养素草案"}
                 </button>
               </div>
+              {analysis.status === "reviewed" && analysis.final_generation_status !== "idle" ? (
+                <div className="analysis-status-panel">
+                  <div className="file-row">
+                    <strong>{FINAL_GENERATION_LABELS[analysis.final_generation_status] ?? analysis.final_generation_status}</strong>
+                    <span className="indicator-status indicator-status--info">{analysis.final_generation_progress}%</span>
+                  </div>
+                  <progress className="analysis-progress" max={100} value={analysis.final_generation_progress} aria-label="营养素草案生成进度" />
+                  {analysis.final_generation_error ? <p className="error-text">{analysis.final_generation_error}</p> : null}
+                </div>
+              ) : null}
               <div aria-live="polite">
                 {reviewActionError ? <p className="error-text">{reviewActionError}</p> : null}
                 {reviewActionNotice ? <p className="muted">{reviewActionNotice}</p> : null}
@@ -705,7 +799,13 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
             <div className="draft-recommendation-list">
               {latestDraft.recommended_skus.map((item) => (
                 <label className="draft-recommendation-card" key={item.sku_id}>
-                  <div><strong>{item.display_name}</strong><p className="muted">{item.dosage} · {item.reason}</p></div>
+                  <div>
+                    <strong>{item.display_name}</strong>
+                    <p className="muted">{item.dosage} · {item.reason}</p>
+                    {item.primary_system_id ? <p className="muted">对应身体系统：{BODY_SYSTEM_LABELS[item.primary_system_id] ?? item.primary_system_id}</p> : null}
+                    {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
+                    {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
+                  </div>
                   <span><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</span>
                 </label>
               ))}

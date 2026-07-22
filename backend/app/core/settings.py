@@ -36,6 +36,7 @@ class AppSettings:
     llm_model: str | None = None
     llm_api_style: str = "auto"
     llm_timeout_seconds: float = 45.0
+    llm_thinking_timeout_seconds: float = 600.0
     llm_temperature: float = 0.1
     llm_draft_composer_enabled: bool = False
     rag_enabled: bool = True
@@ -95,6 +96,9 @@ def load_settings() -> AppSettings:
     llm_model = os.getenv("LLM_MODEL") or None
     llm_api_style = os.getenv("LLM_API_STYLE", "auto").strip().lower() or "auto"
     llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+    llm_thinking_timeout_seconds = float(
+        os.getenv("LLM_THINKING_TIMEOUT_SECONDS", str(max(llm_timeout_seconds, 600.0)))
+    )
     llm_temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
     llm_draft_composer_enabled = os.getenv("FM_LLM_DRAFT_COMPOSER_ENABLED", "0").strip().lower() in {
         "1",
@@ -128,6 +132,7 @@ def load_settings() -> AppSettings:
         llm_model=llm_model,
         llm_api_style=llm_api_style,
         llm_timeout_seconds=llm_timeout_seconds,
+        llm_thinking_timeout_seconds=llm_thinking_timeout_seconds,
         llm_temperature=llm_temperature,
         llm_draft_composer_enabled=llm_draft_composer_enabled,
         rag_enabled=rag_enabled,

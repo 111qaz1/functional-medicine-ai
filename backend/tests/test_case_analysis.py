@@ -27,6 +27,7 @@ from app.domain.models import (
     DraftRecommendationItem,
     EvidenceStatus,
     FileIntakeStatus,
+    FinalGenerationStatus,
     FindingStandardizationStatus,
     PageText,
     Questionnaire,
@@ -235,6 +236,15 @@ class CaseAnalysisTests(unittest.TestCase):
                 return analysis
             time.sleep(0.02)
         self.fail("analysis did not finish")
+
+    def _wait_final(self, analysis_id: str) -> CaseAnalysis:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            analysis = self.repository.get_case_analysis(analysis_id)
+            if analysis and analysis.final_generation_status not in self.service.ACTIVE_FINAL_GENERATION_STATUSES:
+                return analysis
+            time.sleep(0.02)
+        self.fail("final draft generation did not finish")
 
     def test_light_intake_only_prechecks_and_irrelevant_hint_does_not_block(self) -> None:
         service = DocumentIntakeService(max_upload_bytes=1024, max_pdf_pages=20)
@@ -478,14 +488,33 @@ class CaseAnalysisTests(unittest.TestCase):
         self.case_service.update_clinical_summary(case.id, clinical_summary_text="新的医生总结")
         self.assertEqual(self.repository.get_case_analysis(analysis.id).status, AnalysisStatus.stale)
 
+    def test_restart_marks_only_active_final_generation_as_failed(self) -> None:
+        case = self._create_case()
+        analysis = CaseAnalysis(
+            id="analysis-final-restart",
+            case_id=case.id,
+            status=AnalysisStatus.reviewed,
+            snapshot_hash="synthetic",
+            model_version="synthetic",
+            final_generation_status=FinalGenerationStatus.final_synthesizing,
+            final_generation_progress=20,
+        )
+        self.repository.save_case_analysis(analysis)
+        self.assertEqual(self.repository.mark_active_analyses_interrupted(), 1)
+        interrupted = self.repository.get_case_analysis(analysis.id)
+        self.assertEqual(interrupted.status, AnalysisStatus.reviewed)
+        self.assertEqual(interrupted.final_generation_status, FinalGenerationStatus.failed)
+        self.assertIn("重启", interrupted.final_generation_error)
+
     def test_review_is_durable_when_draft_generation_fails(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
         analysis = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
+        failing_recommendation = FakeRecommendationService(self.repository, self.case_service, fail=True)
         failing_service = CaseAnalysisService(
             repository=self.repository,
             case_service=self.case_service,
-            recommendation_service=FakeRecommendationService(self.repository, self.case_service, fail=True),
+            recommendation_service=failing_recommendation,
             provider=self.provider,
             model_version="synthetic-model",
         )
@@ -497,14 +526,25 @@ class CaseAnalysisTests(unittest.TestCase):
                 expected_revision=analysis.revision,
                 abnormal_findings=analysis.abnormal_findings,
             )
+            completed = self._wait_final(saved.id)
+            self.assertEqual(completed.status, AnalysisStatus.reviewed)
+            self.assertIsNone(draft)
+            self.assertIsNone(error)
+            self.assertEqual(completed.final_generation_status, FinalGenerationStatus.failed)
+            self.assertIn("synthetic draft failure", completed.final_generation_error)
+            self.assertEqual(len(completed.reviewed_abnormal_findings), 2)
+
+            synthesis_calls = self.provider.synthesis_calls
+            failing_recommendation.fail = False
+            queued = failing_service.retry_draft_generation(case_id=case.id, analysis_id=analysis.id)
+            retried = self._wait_final(queued.id)
+            self.assertEqual(retried.final_generation_status, FinalGenerationStatus.ready)
+            self.assertIsNotNone(retried.draft_id)
+            self.assertEqual(self.provider.synthesis_calls, synthesis_calls)
         finally:
             failing_service.executor.shutdown(wait=True, cancel_futures=True)
-        self.assertEqual(saved.status, AnalysisStatus.reviewed)
-        self.assertIsNone(draft)
-        self.assertIn("synthetic draft failure", error)
-        self.assertEqual(len(saved.reviewed_abnormal_findings), 2)
 
-    def test_unchanged_findings_run_review_synthesis_with_thinking(self) -> None:
+    def test_unchanged_findings_run_review_synthesis_without_thinking(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
         analysis = self._wait(
@@ -522,10 +562,13 @@ class CaseAnalysisTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+        self.assertIsNone(draft)
+        completed = self._wait_final(saved.id)
+        draft = self.repository.get_draft(completed.draft_id)
         self.assertIsNotNone(draft)
         self.assertEqual(self.provider.synthesis_calls, 2)
-        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "enabled"])
-        self.assertEqual(saved.reviewed_case_summary, "医生确认后的病例总结")
+        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "disabled"])
+        self.assertEqual(completed.reviewed_case_summary, "医生确认后的病例总结")
 
     def test_changed_findings_run_review_synthesis(self) -> None:
         case = self._create_case()
@@ -549,10 +592,13 @@ class CaseAnalysisTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+        self.assertIsNone(draft)
+        completed = self._wait_final(saved.id)
+        draft = self.repository.get_draft(completed.draft_id)
         self.assertIsNotNone(draft)
         self.assertEqual(self.provider.synthesis_calls, 2)
-        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "enabled"])
-        self.assertEqual(saved.reviewed_case_summary, "医生确认后的病例总结")
+        self.assertEqual(self.provider.synthesis_thinking_types, ["disabled", "disabled"])
+        self.assertEqual(completed.reviewed_case_summary, "医生确认后的病例总结")
 
     def test_reviewed_findings_can_regenerate_draft_and_preserve_report_order(self) -> None:
         case = self._create_case()
@@ -566,6 +612,9 @@ class CaseAnalysisTests(unittest.TestCase):
             abnormal_findings=analysis.abnormal_findings,
         )
         self.assertIsNone(error)
+        self.assertIsNone(draft)
+        saved = self._wait_final(saved.id)
+        draft = self.repository.get_draft(saved.draft_id)
         self.assertIsNotNone(draft)
         self.assertEqual(
             list(draft.report_sections),
@@ -612,6 +661,9 @@ class CaseAnalysisTests(unittest.TestCase):
             abnormal_findings=[],
         )
         self.assertIsNone(repeated_error)
+        self.assertIsNone(repeated_draft)
+        repeated = self._wait_final(repeated.id)
+        repeated_draft = self.repository.get_draft(repeated.draft_id)
         self.assertNotEqual(repeated_draft.id, draft.id)
         self.assertGreater(repeated.revision, saved.revision)
 
@@ -631,7 +683,7 @@ class CaseAnalysisTests(unittest.TestCase):
         )
         analysis = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
 
-        _, draft, error = self.service.review_and_generate(
+        queued, draft, error = self.service.review_and_generate(
             case_id=case.id,
             analysis_id=analysis.id,
             reviewer_id="synthetic-reviewer",
@@ -640,6 +692,9 @@ class CaseAnalysisTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+        self.assertIsNone(draft)
+        completed = self._wait_final(queued.id)
+        draft = self.repository.get_draft(completed.draft_id)
         grouped = draft.report_sections["异常指标汇总"]
         headings = [item for item in grouped if item.startswith("### ")]
         self.assertEqual(headings, ["### 1. first-report.txt", "### 2. second-report.txt"])
@@ -674,6 +729,9 @@ class CaseAnalysisTests(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+        self.assertIsNone(draft)
+        saved = self._wait_final(saved.id)
+        draft = self.repository.get_draft(saved.draft_id)
         self.assertNotEqual(draft.id, legacy_empty.id)
         self.assertTrue(draft.recommended_skus)
         self.assertEqual(saved.draft_id, draft.id)
@@ -841,6 +899,65 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(client.calls[0][0], "https://synthetic.invalid/v1/responses")
         self.assertEqual(client.calls[0][1]["json"]["thinking"], {"type": "disabled"})
 
+    def test_kimi_chat_style_maps_multimodal_content_and_thinking_timeout(self) -> None:
+        class StubResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": '{"status":"connected"}'}}]}
+
+        class StubClient:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return StubResponse()
+
+        client = StubClient()
+        provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://api.moonshot.cn/v1",
+            api_key="synthetic",
+            model="kimi-k2.6",
+            api_style="chat",
+            timeout_seconds=90,
+            thinking_timeout_seconds=600,
+            temperature=0.1,
+            http_client=client,
+        )
+
+        result = provider._call_json(
+            instructions="synthetic",
+            content=[
+                {"type": "input_text", "text": "synthetic"},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,AAAA"},
+            ],
+            schema={
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+                "required": ["status"],
+                "additionalProperties": False,
+            },
+            schema_name="synthetic_connection",
+            thinking_type="enabled",
+        )
+
+        self.assertEqual(result, {"status": "connected"})
+        self.assertEqual(client.calls[0][0], "https://api.moonshot.cn/v1/chat/completions")
+        request = client.calls[0][1]
+        self.assertEqual(request["timeout"], 600)
+        self.assertEqual(request["json"]["thinking"], {"type": "enabled"})
+        self.assertNotIn("temperature", request["json"])
+        self.assertEqual(
+            request["json"]["messages"][1]["content"][1],
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,AAAA"},
+            },
+        )
+        self.assertEqual(request["json"]["response_format"]["type"], "json_schema")
+
     def test_scanned_input_images_are_each_sent_once(self) -> None:
         provider = OpenAICompatibleCaseAnalysisProvider(
             base_url="https://synthetic.invalid",
@@ -972,6 +1089,26 @@ class InternalWorkbenchApiTests(unittest.TestCase):
                 break
             time.sleep(0.02)
         self.assertEqual(latest.json()["status"], "ready_for_review")
+
+        reviewed = self.client.post(
+            f"/cases/{self.case_id}/analyses/{latest.json()['id']}:review-and-generate",
+            json={
+                "reviewer_id": "synthetic-reviewer",
+                "expected_revision": latest.json()["revision"],
+                "abnormal_findings": latest.json()["abnormal_findings"],
+            },
+        )
+        self.assertEqual(reviewed.status_code, 202, reviewed.text)
+        self.assertTrue(reviewed.json()["review_saved"])
+        self.assertFalse(reviewed.json()["draft_generated"])
+        self.assertIn(reviewed.json()["analysis"]["final_generation_status"], {"queued", "final_synthesizing", "validating_support_needs", "mapping_products", "checking_safety", "generating_draft", "ready"})
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            latest = self.client.get(f"/cases/{self.case_id}/analyses/latest")
+            if latest.json()["final_generation_status"] in {"ready", "failed"}:
+                break
+            time.sleep(0.02)
+        self.assertEqual(latest.json()["final_generation_status"], "ready")
 
         deleted = self.client.delete(f"/cases/{self.case_id}/files/{file_payload['id']}")
         self.assertEqual(deleted.status_code, 200, deleted.text)

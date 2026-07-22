@@ -13,6 +13,7 @@ from xml.etree import ElementTree as ET
 import httpx
 from pypdf import PdfReader
 
+from app.core.llm_compat import chat_generation_options
 from app.core.settings import LLMConfig, llm_config_validation_error
 from app.domain.models import KnowledgeStatement, SourceSpan
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, KnowledgeHit, OCRExtraction
@@ -417,7 +418,11 @@ class DocumentOCRProvider:
     def _build_chat_payload(self, data_uri: str) -> dict[str, object]:
         return {
             "model": self.model,
-            "temperature": 0,
+            **chat_generation_options(
+                model=self.model,
+                temperature=0,
+                thinking_type="disabled",
+            ),
             "messages": [
                 {
                     "role": "user",

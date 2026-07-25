@@ -87,6 +87,7 @@ def apply_product_catalog_migrations(repository: LocalRepository, products: list
     products_by_id = {product.sku_id: product for product in products}
     sku_migrations = {
         "sku_liposomal_vitamin_c_300": "sku_liposomal_vitamin_c_500",
+        "sku_probiotics": "sku_probiotic_complex",
     }
     for legacy_sku_id, canonical_sku_id in sku_migrations.items():
         canonical_product = products_by_id.get(canonical_sku_id)
@@ -259,7 +260,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         recommendation_service=recommendation_service,
         provider=case_analysis_provider,
         model_version=settings.llm_model or "unconfigured",
-        prompt_version="case-analysis-v7-evidence-priority",
+        prompt_version="case-analysis-v8-digestive-product-goals",
         standardization_service=finding_standardization_service,
         semantic_support_service=semantic_support_service,
         questionnaire_import_service=questionnaire_import_service,

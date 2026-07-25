@@ -48,8 +48,33 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertEqual(by_sequence["21"]["product_name"], "支持胆汁分泌")
         self.assertNotIn("谷胱甘肽", by_sequence["21"]["product_name"])
         self.assertEqual(by_sequence["31"]["product_name"], "肝脏氨基酸解毒支持")
-        self.assertNotIn("26", by_sequence)
-        self.assertFalse(any(profile["product_name"] == "复合益生菌" for profile in products.values()))
+        self.assertEqual(by_sequence["25"]["product_name"], "综合消化酶")
+        self.assertEqual(by_sequence["26"]["product_name"], "复合益生菌")
+        self.assertIn("11种消化酶", by_sequence["25"]["description"])
+        self.assertIn("7种菌株", by_sequence["26"]["description"])
+
+    def test_digestive_products_are_not_filtered_from_pdf_rows(self) -> None:
+        rows = self.exporter._nutrition_table_rows(
+            [
+                SimpleNamespace(
+                    sku_id="sku_digestive_enzymes",
+                    display_name="综合消化酶",
+                    dosage="每日 1 粒，随主餐使用。",
+                    reason="结合消化酶支持需求使用。",
+                    warnings=[],
+                ),
+                SimpleNamespace(
+                    sku_id="sku_probiotic_complex",
+                    display_name="复合益生菌",
+                    dosage="每日 1 粒，早餐后使用。",
+                    reason="结合菌群恢复需求使用。",
+                    warnings=[],
+                ),
+            ]
+        )
+
+        self.assertEqual([row["sequence"] for row in rows], ["25", "26"])
+        self.assertEqual([row["product_name"] for row in rows], ["综合消化酶", "复合益生菌"])
 
     def test_customer_catalog_uses_full_product_description(self) -> None:
         self.exporter.product_report_catalog = {

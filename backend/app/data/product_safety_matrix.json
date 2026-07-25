@@ -1,5 +1,5 @@
 {
-  "version": "product-safety-matrix-v2-2026-07-18",
+  "version": "product-safety-matrix-v3-digestive-products-2026-07-22",
   "source_note": "Derived from customer-provided product contraindication summary. Original DOCX is not stored in Git.",
   "severity_policy": {
     "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
@@ -72,6 +72,28 @@
       "source_ref": "product_safety_matrix.cautions",
       "enabled": true,
       "version": "2.0.0"
+    },
+    {
+      "rule_id": "digestive_enzymes_component_allergy_excludes",
+      "sku_ids": ["sku_digestive_enzymes"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["allergy:消化酶", "allergy:蛋白酶", "allergy:真菌发酵产物", "allergy:酵母发酵产物"],
+      "message": "已记录消化酶、蛋白酶或相关发酵来源成分过敏，综合消化酶不适用于当前方案。",
+      "source_ref": "营养素剂量说明.xlsx#单粒泡罩（中文）!B179:J189",
+      "enabled": true,
+      "version": "3.0.0"
+    },
+    {
+      "rule_id": "probiotic_complex_component_allergy_excludes",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["allergy:益生菌", "allergy:乳酸菌", "allergy:乳杆菌", "allergy:酵母", "allergy:布拉酵母"],
+      "message": "已记录益生菌、乳酸菌、酵母或布拉酵母过敏，复合益生菌不适用于当前方案。",
+      "source_ref": "营养素剂量说明.xlsx#单粒泡罩（中文）!B190:J196",
+      "enabled": true,
+      "version": "3.0.0"
     }
   ],
   "products": [
@@ -536,6 +558,32 @@
       ]
     },
     {
+      "sku_id": "sku_digestive_enzymes",
+      "source_sequence": "25",
+      "source_product_name": "综合消化酶",
+      "contraindications": [
+        "对消化酶、蛋白酶或相关发酵来源成分明确过敏者禁用。"
+      ],
+      "cautions": [
+        "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_probiotic_complex",
+      "source_sequence": "26",
+      "source_product_name": "复合益生菌",
+      "contraindications": [
+        "对益生菌、乳酸菌、酵母或布拉酵母明确过敏者禁用。"
+      ],
+      "cautions": [
+        "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
+    },
+    {
       "sku_id": "sku_liver_detox_support",
       "source_sequence": "27",
       "source_product_name": "肝脏排毒支持",
@@ -631,16 +679,5 @@
       "exclusion_rules": []
     }
   ],
-  "skipped_products": [
-    {
-      "sequence": "25",
-      "product_name": "复合消化营养素",
-      "reason": "not_in_active_catalog"
-    },
-    {
-      "sequence": "26",
-      "product_name": "复合益生菌",
-      "reason": "not_in_active_catalog"
-    }
-  ]
+  "skipped_products": []
 }

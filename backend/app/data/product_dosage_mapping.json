@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_file": "营养素剂量说明.xlsx",
-  "generated_at": "2026-07-19",
-  "matching_note": "按 Excel 序号与现有产品目录人工确认映射；未纳入目录的产品保留为 source-only 记录，运行时不会自动推荐。",
+  "generated_at": "2026-07-22",
+  "matching_note": "按 Excel 序号与现有产品目录人工确认映射；综合消化酶和复合益生菌已纳入正式产品目录。",
   "products": [
     {
       "sku_id": "sku_super_anti_inflammatory",
@@ -389,13 +389,14 @@
       "source": "营养素剂量说明.xlsx"
     },
     {
-      "sku_id": null,
+      "sku_id": "sku_digestive_enzymes",
       "source_sheet": "单粒泡罩（中文）",
       "source_row": 27,
       "source_sequence": 25,
       "category": "综合消化酶",
       "excel_product_name": "复合消化营养素",
       "aliases": [
+        "综合消化酶",
         "复合消化营养素",
         "Digestive Enzymes"
       ],
@@ -405,7 +406,7 @@
       "source": "营养素剂量说明.xlsx"
     },
     {
-      "sku_id": null,
+      "sku_id": "sku_probiotic_complex",
       "source_sheet": "单粒泡罩（中文）",
       "source_row": 28,
       "source_sequence": 26,
@@ -417,7 +418,7 @@
       ],
       "active_ingredient": "布拉酵母",
       "per_serving_amount": "50亿 CFU",
-      "dosage_text": "日常肠道养护（预防菌群紊乱、饮食不规律）\n每日1 粒，早餐后服用，长期维持肠道健康生态。\n强化调理（腹胀 / 腹泻 / 便秘、乳糖不耐、感染恢复期）\n每日2 粒，早晚餐后各 1 粒，连续2-4 周；症状缓解后减至每日 1 粒，巩固菌群平衡。\n特殊场景（旅行水土不服、大餐后、抗生素后调理）\n出发前 1 天 + 旅行期间每日2 粒；大餐 / 抗生素后每日2 粒，连续 1 周，快速恢复肠道菌群，避免紊",
+      "dosage_text": "日常肠道养护（预防菌群紊乱、饮食不规律）\n每日1 粒，早餐后服用，长期维持肠道健康生态。\n强化调理（腹胀 / 腹泻 / 便秘、乳糖不耐、感染恢复期）\n每日2 粒，早晚餐后各 1 粒，连续2-4 周；症状缓解后减至每日 1 粒，巩固菌群平衡。\n特殊场景（旅行水土不服、大餐后、抗生素后调理）\n出发前 1 天 + 旅行期间每日2 粒；大餐 / 抗生素后每日2 粒，连续 1 周，快速恢复肠道菌群，避免紊乱。",
       "source": "营养素剂量说明.xlsx"
     },
     {

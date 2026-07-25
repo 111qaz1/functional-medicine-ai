@@ -453,11 +453,17 @@ class RecommendationServiceTests(unittest.TestCase):
         enabled_ids = {product.sku_id for product in self.container.repository.list_products()}
         canonical = self.container.repository.get_product("sku_liposomal_vitamin_c_500")
         legacy = self.container.repository.get_product("sku_liposomal_vitamin_c_300")
+        probiotic = self.container.repository.get_product("sku_probiotic_complex")
+        legacy_probiotic = self.container.repository.get_product("sku_probiotics")
 
         self.assertIn("sku_liposomal_vitamin_c_500", enabled_ids)
         self.assertNotIn("sku_liposomal_vitamin_c_300", enabled_ids)
+        self.assertIn("sku_probiotic_complex", enabled_ids)
+        self.assertNotIn("sku_probiotics", enabled_ids)
         self.assertEqual(canonical.display_name, "脂质体维生素C")
+        self.assertEqual(probiotic.display_name, "复合益生菌")
         self.assertIsNone(legacy)
+        self.assertIsNone(legacy_probiotic)
 
     def test_product_sku_migration_rewrites_existing_draft_references(self) -> None:
         case = self._prepare_case(
@@ -597,6 +603,7 @@ class RecommendationServiceTests(unittest.TestCase):
             goal_code="gut_microbiome",
             system_id="digestive_gut",
             text="肠道菌群生态与相关代谢支持需求。",
+            support_direction=SupportDirection.decrease,
         )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
@@ -605,6 +612,217 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("sku_herbal_antimicrobial", recommended_ids)
         self.assertNotIn("sku_blood_sugar_complex", recommended_ids)
         self.assertNotIn("sku_weight_support", recommended_ids)
+
+    def test_gut_microbiome_direction_selects_probiotic_instead_of_antimicrobial(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="菌群恢复方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=36, sex="female", medications=[], allergies=[]),
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="gut_microbiome",
+            system_id="digestive_gut",
+            text="菌群结构失衡并存在恢复与平衡肠道生态的支持需求。",
+            support_direction=SupportDirection.restore,
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertIn("sku_probiotic_complex", recommended_ids)
+        self.assertNotIn("sku_herbal_antimicrobial", recommended_ids)
+
+    def test_digestive_enzyme_goal_does_not_activate_stomach_acid_product(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="消化酶方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=40, sex="male", medications=[], allergies=[]),
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="digestive_enzyme",
+            system_id="digestive_gut",
+            text="餐后食物分解负担明显，需要消化酶与营养吸收支持。",
+            support_direction=SupportDirection.increase,
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertIn("sku_digestive_enzymes", recommended_ids)
+        self.assertNotIn("sku_stomach_acid_support", recommended_ids)
+
+    def test_gastric_acid_goal_does_not_activate_digestive_enzyme_product(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="胃酸方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=40, sex="male", medications=[], allergies=[]),
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="gastric_acid",
+            system_id="digestive_gut",
+            text="存在明确的低胃酸表现，需要恢复胃酸分泌支持。",
+            support_direction=SupportDirection.restore,
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertIn("sku_stomach_acid_support", recommended_ids)
+        self.assertNotIn("sku_digestive_enzymes", recommended_ids)
+
+    def test_unknown_gut_microbiome_direction_does_not_activate_direction_bound_products(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="菌群未知方向测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=36, sex="female", medications=[], allergies=[]),
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="gut_microbiome",
+            system_id="digestive_gut",
+            text="报告仅提示菌群相关变化，未明确需要补充、恢复或抑制。",
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertNotIn("sku_probiotic_complex", recommended_ids)
+        self.assertNotIn("sku_herbal_antimicrobial", recommended_ids)
+
+    def test_independent_enzyme_and_microbiome_needs_can_recommend_both_products(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="消化酶与菌群联合测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=38, sex="female", medications=[], allergies=[]),
+        )
+        needs = [
+            SemanticSupportNeed(
+                id=f"support-{case.id}-digestive-enzyme",
+                support_need_text="餐后食物分解负担明显，需要消化酶支持。",
+                support_goal_code="digestive_enzyme",
+                support_direction=SupportDirection.increase,
+                system_id="digestive_gut",
+                evidence_refs=[
+                    SemanticEvidenceReference(
+                        ref="clinical_summary:digestive_enzyme",
+                        evidence_strength=SemanticEvidenceStrength.contextual,
+                    )
+                ],
+                evidence_strength=SemanticEvidenceStrength.contextual,
+                corroboration_count=1,
+                rationale="消化酶支持需求",
+                model_confidence=0.7,
+                eligibility_status=SupportEligibilityStatus.eligible,
+            ),
+            SemanticSupportNeed(
+                id=f"support-{case.id}-microbiome",
+                support_need_text="菌群结构失衡，需要恢复肠道生态。",
+                support_goal_code="gut_microbiome",
+                support_direction=SupportDirection.restore,
+                system_id="digestive_gut",
+                evidence_refs=[
+                    SemanticEvidenceReference(
+                        ref="clinical_summary:microbiome",
+                        evidence_strength=SemanticEvidenceStrength.contextual,
+                    )
+                ],
+                evidence_strength=SemanticEvidenceStrength.contextual,
+                corroboration_count=1,
+                rationale="菌群恢复支持需求",
+                model_confidence=0.7,
+                eligibility_status=SupportEligibilityStatus.eligible,
+            ),
+        ]
+        analysis = CaseAnalysis(
+            id=f"analysis-{case.id}-digestive-combination",
+            case_id=case.id,
+            status=AnalysisStatus.reviewed,
+            snapshot_hash="synthetic",
+            model_version="synthetic",
+            reviewed_case_summary="同时存在消化酶和菌群恢复支持需求。",
+            support_goal_version="support-goals-v5-digestive-products-2026-07-22",
+            support_needs=needs,
+            final_structured_system_findings=[
+                StructuredSystemFinding(
+                    system_id="digestive_gut",
+                    system_name="digestive_gut",
+                    priority_level="最高优先级",
+                    priority_score=70,
+                    summary="消化系统存在两项相互独立的支持需求。",
+                )
+            ],
+        )
+        self.container.repository.save_case_analysis(analysis)
+        self.container.case_analysis_service._project_review_to_case(case, analysis)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+
+        self.assertIn("sku_digestive_enzymes", recommended_ids)
+        self.assertIn("sku_probiotic_complex", recommended_ids)
+
+    def test_probiotic_allergy_excludes_only_probiotic_product(self) -> None:
+        case = self.container.case_service.create_case(
+            customer_name="益生菌过敏安全测试",
+            consultant_id="nutrition-team",
+            notes=None,
+            consent=None,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=36, sex="female", medications=[], allergies=["布拉酵母"]),
+        )
+        case = self.container.case_service.get_case(case.id)
+        self._project_semantic_support(
+            case,
+            goal_code="gut_microbiome",
+            system_id="digestive_gut",
+            text="菌群结构失衡并存在恢复肠道生态的支持需求。",
+            support_direction=SupportDirection.restore,
+        )
+        self.container.case_service.submit_questionnaire(
+            case.id,
+            Questionnaire(age=36, sex="female", medications=[], allergies=["布拉酵母"]),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        recommended_ids = {item.sku_id for item in draft.recommended_skus}
+        decisions = [item for item in draft.safety_decisions if item.sku_id == "sku_probiotic_complex"]
+
+        self.assertNotIn("sku_probiotic_complex", recommended_ids)
+        self.assertTrue(any(item.rule_id == "probiotic_complex_component_allergy_excludes" for item in decisions))
 
     def test_doubao_config_does_not_enable_draft_composer_by_default(self) -> None:
         root = Path(self.temp_dir.name)
@@ -1338,15 +1556,17 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("sku_blood_sugar_complex", recommended_ids)
         self.assertTrue({"sku_cardiac_support", "sku_weight_support"} & set(recommended_ids))
 
-    def test_product_tag_matrix_has_customer_sequences_and_disabled_boundaries(self) -> None:
+    def test_product_tag_matrix_has_customer_sequences_and_digestive_products(self) -> None:
         profiles = self.container.recommendation_service.product_tag_profiles
 
         self.assertEqual(profiles["sku_liver_detox_support"].sequence, "27")
         self.assertEqual(profiles["sku_amino_acid_detox"].sequence, "31")
         self.assertEqual(profiles["sku_bile_flow_support"].sequence, "21")
         self.assertEqual(profiles["sku_immune_support"].product_name, "槲皮素复合物")
-        self.assertNotIn("sku_digestive_enzymes", profiles)
-        self.assertNotIn("sku_probiotic_complex", profiles)
+        self.assertEqual(profiles["sku_digestive_enzymes"].sequence, "25")
+        self.assertEqual(profiles["sku_probiotic_complex"].sequence, "26")
+        self.assertEqual(profiles["sku_digestive_enzymes"].primary_axes, ("digestive_enzyme",))
+        self.assertEqual(profiles["sku_probiotic_complex"].primary_axes, ("gut_microbiome",))
 
     def test_signal_scoring_still_recommends_for_lipid_case_without_explicit_pattern_rule(self) -> None:
         fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")

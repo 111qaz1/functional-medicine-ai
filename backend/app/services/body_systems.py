@@ -25,6 +25,7 @@ AXIS_SYSTEM_MAP: dict[str, tuple[str, ...]] = {
     "gut_bile": ("digestive_gut", "liver_detox"),
     "gut_microbiome": ("digestive_gut",),
     "gut_mucosa": ("digestive_gut", "skin_mucosa"),
+    "gastric_acid": ("digestive_gut",),
     "digestive_enzyme": ("digestive_gut",),
     "liver_detox": ("liver_detox",),
     "methylation": ("liver_detox", "cardiovascular"),

@@ -394,7 +394,6 @@ class PdfReportExporter:
 
     def _nutrition_table_rows(self, recommended_skus: list[Any]) -> list[dict[str, Any]]:
         products = self.product_report_catalog.get("products", {})
-        ignored_names = {"综合消化酶", "复合益生菌"}
         rows: list[dict[str, Any]] = []
         seen_skus: set[str] = set()
 
@@ -404,14 +403,8 @@ class PdfReportExporter:
                 continue
             seen_skus.add(sku_id)
             display_name = self._clean_customer_text(self._sku_value(sku, "display_name"))
-            if display_name in ignored_names:
-                continue
-
             product_profile = products.get(sku_id, {}) if sku_id else {}
             product_name = self._clean_customer_text(product_profile.get("product_name") or display_name or "营养素")
-            if product_name in ignored_names:
-                continue
-
             sequence = self._clean_customer_text(product_profile.get("sequence") or "待确认")
             dosage = self._clean_customer_text(self._sku_value(sku, "dosage") or "请按顾问建议使用")
             reason = self._clean_customer_text(self._sku_value(sku, "reason"))

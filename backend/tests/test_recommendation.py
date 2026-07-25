@@ -13,7 +13,6 @@ from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
 from app.domain.models import (
     AbnormalFinding,
-    AnalysisMode,
     AnalysisStatus,
     CaseAnalysis,
     CaseIndicator,
@@ -58,10 +57,10 @@ class CaptureLLMProvider:
         return DraftCompositionResult(
             selected_sku_ids=selected,
             product_reason_overrides={},
-            rationale=["大模型优先模式测试。"],
+            rationale=["统一分析流程测试。"],
             lifestyle_actions=["保持基础生活方式干预。"],
             section_overrides={
-                "总体健康画像": ["模型优先判断当前应先围绕代谢与恢复能力做整体支持。"],
+                "总体健康画像": ["模型判断当前应先围绕代谢与恢复能力做整体支持。"],
                 "系统功能深度分析": ["模型结合报告和问卷信息，提示当前代谢负担与生活方式因素相互叠加。"],
             },
             confidence=0.66,
@@ -1946,24 +1945,23 @@ class RecommendationServiceTests(unittest.TestCase):
         self.container.recommendation_service.prompt_version = "grounded-remote-report-v1"
 
         case = self.container.case_service.create_case(
-            customer_name="LLM优先案例",
+            customer_name="统一分析流程案例",
             consultant_id="nutrition-team",
             notes=None,
             consent=None,
-            analysis_mode=AnalysisMode.llm_primary,
         )
         report_text = "非高密度脂蛋白胆固醇 5.84 mmol/L 0-4.1\n甘油三酯 1.45 mmol/L 0.56-1.71\n高密度胆固醇 1.39 mmol/L 0.91-1.55"
         uploaded_file = UploadedFile(
-            id="file_llm_primary",
+            id="file_model_primary",
             case_id=case.id,
-            filename="llm-primary.txt",
+            filename="model-primary.txt",
             content_type="text/plain",
             size_bytes=len(report_text.encode("utf-8")),
-            storage_uri="memory://llm-primary.txt",
+            storage_uri="memory://model-primary.txt",
         )
         self.container.case_service.add_uploaded_file(case.id, uploaded_file)
         extraction, lab_items = self.container.parsing_service.parse(
-            filename="llm-primary.txt",
+            filename="model-primary.txt",
             content_type="text/plain",
             content=report_text.encode("utf-8"),
         )

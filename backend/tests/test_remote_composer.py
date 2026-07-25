@@ -35,7 +35,6 @@ class RemoteComposerSanitizationTests(unittest.TestCase):
         )
         self.input = DraftCompositionInput(
             customer_name="杨25",
-            analysis_mode="llm_primary",
             case_summary=["25-羟维生素D偏低"],
             key_lab_highlights=["25-羟维生素D: 22.75 ng/mL（需关注）"],
             candidate_products=[self.product],

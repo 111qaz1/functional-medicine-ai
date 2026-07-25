@@ -586,7 +586,6 @@ class RecommendationService:
             if getattr(need.eligibility_status, "value", need.eligibility_status) == "eligible"
         }
         customer_name = self._resolve_customer_name(case)
-        analysis_mode = getattr(case.analysis_mode, "value", str(case.analysis_mode))
         context = self._build_context(case)
         support_profiles = self._build_support_profiles(context)
         case_summary = self._build_case_summary(case, customer_name=customer_name)
@@ -604,30 +603,21 @@ class RecommendationService:
         knowledge_hits = []
         if reviewed_knowledge:
             retrieval_query = self._build_query(case, context, support_profiles)
-            knowledge_hits = self.vector_store.search(retrieval_query, top_k=12 if analysis_mode == "llm_primary" else 8)
+            knowledge_hits = self.vector_store.search(retrieval_query, top_k=12)
 
         knowledge_by_id = {item.statement_id: item for item in reviewed_knowledge}
         product_by_id = {item.sku_id: item for item in self._list_products(enabled_only=True)}
         matched_clinician_rules = self.list_matched_clinician_rules(case, context=context, support_profiles=support_profiles)
         clinician_rule_by_id = {item.id: item for item in matched_clinician_rules}
 
-        if analysis_mode == "llm_primary":
-            ranked_products, product_evidence_map, contraindications, safety_decisions_by_sku = self._rank_products_for_llm_primary(
-                case,
-                context,
-                knowledge_hits,
-                support_profiles,
-                matched_clinician_rules,
-                priority_findings=priority_findings,
-            )
-        else:
-            ranked_products, product_evidence_map, contraindications, safety_decisions_by_sku = self._rank_products(
-                context,
-                knowledge_hits,
-                support_profiles,
-                matched_clinician_rules,
-                priority_findings=priority_findings,
-            )
+        ranked_products, product_evidence_map, contraindications, safety_decisions_by_sku = self._rank_products(
+            case,
+            context,
+            knowledge_hits,
+            support_profiles,
+            matched_clinician_rules,
+            priority_findings=priority_findings,
+        )
         rag_hits, rag_audit = self._retrieve_safe_rag_hits(
             case,
             context=context,
@@ -801,7 +791,6 @@ class RecommendationService:
         report_sections = self._apply_report_section_overrides(
             report_sections,
             composition.section_overrides,
-            analysis_mode=analysis_mode,
         )
         report_sections = self._apply_rag_enhancements(report_sections, rag_hits, rag_audit)
         rag_audit_items = report_sections.pop("RAG内部审查", [])
@@ -1298,7 +1287,6 @@ class RecommendationService:
     ) -> dict:
         questionnaire = case.questionnaire
         return {
-            "analysis_mode": getattr(case.analysis_mode, "value", str(case.analysis_mode)),
             "support_profiles": [profile.title for profile in support_profiles],
             "markers": {
                 marker_code: [
@@ -1608,7 +1596,7 @@ class RecommendationService:
                 notes.append(f"医生规则建议当前阶段优先考虑 {product.display_name}")
         return round(score, 3), list(dict.fromkeys(evidence_ids)), list(dict.fromkeys(notes))
 
-    def _rank_products_for_llm_primary(
+    def _rank_products(
         self,
         case,
         context: RecommendationContext,
@@ -1748,115 +1736,6 @@ class RecommendationService:
         if overlap == 0:
             return 0.0
         return round(min(overlap, 5) * 0.12, 3)
-
-    def _rank_products(
-        self,
-        context: RecommendationContext,
-        knowledge_hits,
-        support_profiles: list[SupportProfile],
-        matched_clinician_rules: list[ClinicianRule],
-        priority_findings: list[SystemPriority] | None = None,
-    ):
-        ranked: list[tuple[float, ProductRule, list[str]]] = []
-        contraindications: list[str] = []
-        safety_decisions_by_sku: dict[str, list[SafetyDecision]] = {}
-        products = self._list_products(enabled_only=True)
-
-        for product in products:
-            safety_decisions = self._evaluate_product_safety(product, context)
-            safety_decisions_by_sku[product.sku_id] = safety_decisions
-            exclusions = [item for item in safety_decisions if item.action == SafetyRuleAction.exclude]
-            if exclusions:
-                contraindications.extend([f"{product.display_name} 被排除：{item.message}" for item in exclusions])
-                continue
-
-            score = max(0.05, (100 - product.priority) / 100)
-            evidence_ids: list[str] = []
-            direct_hits = 0
-            supportive_evidence = 0
-
-            tag_score, tag_evidence_ids = self._score_product_from_tag_matrix(
-                product,
-                context,
-                priority_findings=priority_findings,
-            )
-            score += tag_score
-            evidence_ids.extend(tag_evidence_ids)
-            supportive_evidence += len(tag_evidence_ids)
-            product_system_id = self._primary_system_for_product(product, priority_findings)
-            product_system_rank = self._system_priority_rank_for_product(product, priority_findings)
-            if product_system_id and product_system_rank is not None:
-                evidence_ids.extend(
-                    [f"signal:body_system_{product_system_id}", f"signal:body_system_rank_{product_system_rank}"]
-                )
-
-            for indication in product.indications:
-                if self._matches_rule(indication, context):
-                    direct_hits += 1
-                    supportive_evidence += 1
-                    score += 0.9
-                    evidence_ids.append("signal:direct_product_rule")
-                    if indication.startswith("marker:"):
-                        marker_code = indication.split(":", 2)[1]
-                        evidence_ids.append(f"signal:direct_marker_rule_{marker_code}")
-
-            signal_score, signal_evidence_ids = self._score_product_from_profiles(product, support_profiles)
-            score += signal_score
-            evidence_ids.extend(signal_evidence_ids)
-            supportive_evidence += len(signal_evidence_ids)
-
-            clinical_score, clinical_evidence_ids = self._score_product_from_clinical_patterns(product, context)
-            score += clinical_score
-            evidence_ids.extend(clinical_evidence_ids)
-            supportive_evidence += len(clinical_evidence_ids)
-
-            clinician_score, clinician_evidence_ids, clinician_notes = self._score_product_from_clinician_rules(
-                product,
-                matched_clinician_rules,
-            )
-            score += clinician_score
-            evidence_ids.extend(clinician_evidence_ids)
-            supportive_evidence += len(clinician_evidence_ids)
-            contraindications.extend(clinician_notes)
-
-            nutrient_score, nutrient_evidence_ids = self._score_product_from_summary_nutrients(
-                product,
-                context.summary_nutrient_hints,
-            )
-            score += nutrient_score
-            evidence_ids.extend(nutrient_evidence_ids)
-            supportive_evidence += len(nutrient_evidence_ids)
-
-            for hit in knowledge_hits:
-                statement = hit.statement
-                if product.sku_id in statement.related_skus:
-                    score += 0.7 + hit.score
-                    evidence_ids.append(statement.statement_id)
-                    supportive_evidence += 1
-                elif self._statement_supports_product(statement, product):
-                    score += hit.score * 0.35
-                    evidence_ids.append(statement.statement_id)
-                    supportive_evidence += 1
-
-            if supportive_evidence == 0 or not self._has_eligible_product_evidence(evidence_ids):
-                continue
-
-            ranked.append(
-                (
-                    round(score, 3),
-                    product,
-                    [f"product:{product.sku_id}", *list(dict.fromkeys(evidence_ids))],
-                )
-            )
-
-        ranked.sort(key=self._ranked_product_sort_key, reverse=True)
-        product_evidence_map = {product.sku_id: evidence for _, product, evidence in ranked}
-        return (
-            [product for _, product, _ in ranked],
-            product_evidence_map,
-            list(dict.fromkeys(contraindications)),
-            safety_decisions_by_sku,
-        )
 
     @staticmethod
     def _has_eligible_product_evidence(evidence_ids: list[str]) -> bool:
@@ -3498,10 +3377,8 @@ class RecommendationService:
         self,
         report_sections: dict[str, list[str] | str],
         overrides: dict[str, list[str]],
-        *,
-        analysis_mode: str,
     ) -> dict[str, list[str] | str]:
-        if analysis_mode != "llm_primary" or not overrides:
+        if not overrides:
             return report_sections
 
         merged = dict(report_sections)
@@ -3565,11 +3442,6 @@ class RecommendationService:
         questionnaire = case.questionnaire
         summary_nutrient_hints = self._extract_summary_nutrient_hints(case.clinical_summary_text)
         summary = [f"客户姓名: {customer_name or case.customer_name}"]
-        summary.append(
-            "分析模式: 大模型优先，本地知识辅助"
-            if getattr(case.analysis_mode, "value", str(case.analysis_mode)) == "llm_primary"
-            else "分析模式: 本地知识优先"
-        )
         if questionnaire:
             if questionnaire.age is not None:
                 summary.append(f"年龄: {questionnaire.age}")

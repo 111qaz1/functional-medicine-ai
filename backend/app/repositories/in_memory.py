@@ -292,12 +292,20 @@ class LocalRepository:
             sql += " WHERE " + " AND ".join(clauses)
         with self._lock, closing(self._connect()) as connection, connection:
             rows = connection.execute(sql, tuple(params)).fetchall()
-        return [CaseRecord.model_validate_json(row["payload"]) for row in rows]
+        return [self._load_case_record(row["payload"]) for row in rows]
 
     def get_case(self, case_id: str) -> CaseRecord | None:
         with self._lock, closing(self._connect()) as connection, connection:
             row = connection.execute("SELECT payload FROM cases WHERE id = ?", (case_id,)).fetchone()
-        return CaseRecord.model_validate_json(row["payload"]) if row else None
+        return self._load_case_record(row["payload"]) if row else None
+
+    @staticmethod
+    def _load_case_record(payload: str) -> CaseRecord:
+        data = json.loads(payload)
+        # Historical records may contain the removed analysis-mode selector.
+        # All cases now use the single LLM-primary workflow.
+        data.pop("analysis_mode", None)
+        return CaseRecord.model_validate(data)
 
     def save_case(self, record: CaseRecord) -> CaseRecord:
         with self._lock, closing(self._connect()) as connection, connection:

@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from app.domain.models import (
     AbnormalFinding,
-    AnalysisMode,
     AuditLog,
     CaseIndicator,
     CaseRecord,
@@ -35,7 +34,6 @@ class CreateCaseRequest(BaseModel):
     workspace_scope: WorkspaceScope = WorkspaceScope.public
     notes: str | None = None
     consent: ConsentRecord | None = None
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
 
 
 class GenerateDraftRequest(BaseModel):
@@ -95,7 +93,6 @@ class ReviewAndGenerateResponse(BaseModel):
 class CaseSummaryResponse(BaseModel):
     id: str
     customer_name: str
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
     status: str
     consultant_id: str | None = None
     workspace_scope: WorkspaceScope = WorkspaceScope.public

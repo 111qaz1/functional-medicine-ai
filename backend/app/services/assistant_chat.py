@@ -165,7 +165,6 @@ class CaseAssistantService:
         return {
             "case_id": case.id,
             "customer_name": case.customer_name,
-            "analysis_mode": getattr(case.analysis_mode, "value", str(case.analysis_mode)),
             "case_status": getattr(case.status, "value", str(case.status)),
             "parsing_review_completed": case.parsing_review_completed,
             "questionnaire_completed": questionnaire is not None,

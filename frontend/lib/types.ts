@@ -7,7 +7,6 @@ export type CaseStatus =
   | "under_review"
   | "approved";
 
-export type AnalysisMode = "local_grounded" | "llm_primary";
 export type WorkspaceScope = "public" | "doctor";
 export type RuleScope = "public" | "private";
 export type DoctorRole = "admin" | "doctor";
@@ -234,7 +233,6 @@ export interface CaseRecord {
   consultant_id?: string | null;
   workspace_scope: WorkspaceScope;
   owner_doctor_id?: string | null;
-  analysis_mode: AnalysisMode;
   status: CaseStatus;
   created_at: string;
   updated_at: string;
@@ -366,7 +364,6 @@ export interface AuditLog {
 export interface CaseSummary {
   id: string;
   customer_name: string;
-  analysis_mode: AnalysisMode;
   status: CaseStatus;
   consultant_id?: string | null;
   workspace_scope: WorkspaceScope;

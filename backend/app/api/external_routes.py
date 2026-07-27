@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from app.domain.models import AnalysisMode, DoctorAccount, UploadedFile, WorkspaceScope
+from app.domain.models import DoctorAccount, UploadedFile, WorkspaceScope
 from app.services.prescription_advice import PrescriptionAdviceService
 
 
@@ -43,7 +43,6 @@ class ExternalCaseCreateRequest(BaseModel):
     customer_name: str = Field(min_length=1)
     consultant_id: str | None = None
     notes: str | None = None
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
 
 
 class ExternalCaseResponse(BaseModel):
@@ -241,7 +240,6 @@ def create_external_case(
         consultant_id=payload.consultant_id or doctor.display_name or doctor.username,
         notes=payload.notes,
         consent=None,
-        analysis_mode=payload.analysis_mode,
         workspace_scope=WorkspaceScope.doctor,
         owner_doctor_id=doctor.id,
     )

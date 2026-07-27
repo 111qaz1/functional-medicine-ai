@@ -6,7 +6,6 @@ from pathlib import Path
 
 from app.domain.models import (
     AnalysisStatus,
-    AnalysisMode,
     AuditLog,
     CaseIndicator,
     CaseRecord,
@@ -52,7 +51,6 @@ class CaseService:
         consultant_id: str | None,
         notes: str | None,
         consent: ConsentRecord | None,
-        analysis_mode: AnalysisMode = AnalysisMode.llm_primary,
         workspace_scope: WorkspaceScope = WorkspaceScope.public,
         owner_doctor_id: str | None = None,
     ) -> CaseRecord:
@@ -62,7 +60,6 @@ class CaseService:
             consultant_id=consultant_id,
             workspace_scope=workspace_scope,
             owner_doctor_id=owner_doctor_id,
-            analysis_mode=analysis_mode,
             notes=notes,
             consent=consent,
         )
@@ -72,7 +69,6 @@ class CaseService:
             "case_created",
             "system",
             {
-                "analysis_mode": analysis_mode.value,
                 "workspace_scope": workspace_scope.value,
                 "owner_doctor_id": owner_doctor_id,
             },

@@ -1,7 +1,6 @@
 import {
   AssistantCaseChatResponse,
   AssistantChatHistoryMessage,
-  AnalysisMode,
   AuthMeResponse,
   AuthResponse,
   CaseDetailResponse,
@@ -110,12 +109,11 @@ export async function fetchCases(workspace: WorkspaceScope = "public"): Promise<
 export async function createCase(
   customer_name: string,
   consultant_id?: string,
-  analysis_mode: AnalysisMode = "llm_primary",
   workspace_scope: WorkspaceScope = "public"
 ) {
   return apiFetch<CaseDetailResponse>("/cases", {
     method: "POST",
-    body: JSON.stringify({ customer_name, consultant_id, analysis_mode, workspace_scope })
+    body: JSON.stringify({ customer_name, consultant_id, workspace_scope })
   });
 }
 

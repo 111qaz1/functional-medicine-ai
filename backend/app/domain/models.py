@@ -31,11 +31,6 @@ class DraftStatus(str, Enum):
     abstained = "abstained"
 
 
-class AnalysisMode(str, Enum):
-    local_grounded = "local_grounded"
-    llm_primary = "llm_primary"
-
-
 class WorkspaceScope(str, Enum):
     public = "public"
     doctor = "doctor"
@@ -419,7 +414,6 @@ class CaseRecord(StrictModel):
     consultant_id: str | None = None
     workspace_scope: WorkspaceScope = WorkspaceScope.public
     owner_doctor_id: str | None = None
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
     status: CaseStatus = CaseStatus.intake
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

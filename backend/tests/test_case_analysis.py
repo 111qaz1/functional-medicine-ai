@@ -19,7 +19,6 @@ from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
 from app.domain.models import (
     AbnormalFinding,
-    AnalysisMode,
     AnalysisStatus,
     CaseAnalysis,
     ChronicFoodSensitivityResult,
@@ -201,7 +200,6 @@ class CaseAnalysisTests(unittest.TestCase):
             consultant_id=None,
             notes=None,
             consent=None,
-            analysis_mode=AnalysisMode.llm_primary,
             workspace_scope=WorkspaceScope.doctor if owner else WorkspaceScope.public,
             owner_doctor_id=owner,
         )

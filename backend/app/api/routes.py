@@ -378,7 +378,6 @@ def list_cases(request: Request):
             CaseSummaryResponse(
                 id=item.id,
                 customer_name=item.customer_name,
-                analysis_mode=item.analysis_mode,
                 status=item.status.value,
                 consultant_id=item.consultant_id,
                 workspace_scope=item.workspace_scope,
@@ -409,7 +408,6 @@ def create_case(payload: CreateCaseRequest, request: Request):
         consultant_id=consultant_id,
         notes=payload.notes,
         consent=payload.consent,
-        analysis_mode=payload.analysis_mode,
         workspace_scope=workspace_scope,
         owner_doctor_id=owner_doctor_id,
     )

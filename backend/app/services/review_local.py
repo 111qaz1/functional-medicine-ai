@@ -280,7 +280,6 @@ class ReviewService:
             "## 证据来源",
             "## 审核备注",
             "## 审计信息",
-            "分析模式:",
             "模型版本:",
         )
         return any(marker in report_text for marker in internal_markers)

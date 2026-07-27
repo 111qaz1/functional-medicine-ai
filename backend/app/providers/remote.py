@@ -267,7 +267,7 @@ class OpenAICompatibleGroundedComposer:
 
         try:
             payload = self._build_request_payload(draft_input)
-            raw_response = self._call_remote_model(payload, draft_input.analysis_mode)
+            raw_response = self._call_remote_model(payload)
             parsed = self._parse_response(raw_response)
             return self._sanitize_response(parsed, draft_input)
         except (httpx.HTTPError, ValidationError, ValueError, KeyError, json.JSONDecodeError):
@@ -282,8 +282,7 @@ class OpenAICompatibleGroundedComposer:
 
     def _build_request_payload(self, draft_input: DraftCompositionInput) -> dict[str, Any]:
         candidate_products = []
-        candidate_limit = 12 if draft_input.analysis_mode == "llm_primary" else 6
-        for product in draft_input.candidate_products[:candidate_limit]:
+        for product in draft_input.candidate_products[:12]:
             candidate_products.append(
                 {
                     "sku_id": product.sku_id,
@@ -299,8 +298,7 @@ class OpenAICompatibleGroundedComposer:
             )
 
         knowledge_hits = []
-        knowledge_limit = 10 if draft_input.analysis_mode == "llm_primary" else 6
-        for hit in draft_input.knowledge_hits[:knowledge_limit]:
+        for hit in draft_input.knowledge_hits[:10]:
             knowledge_hits.append(
                 {
                     "statement_id": hit.statement.statement_id,
@@ -317,7 +315,6 @@ class OpenAICompatibleGroundedComposer:
 
         return {
             "customer_name": draft_input.customer_name,
-            "analysis_mode": draft_input.analysis_mode,
             "case_summary": draft_input.case_summary,
             "key_lab_highlights": draft_input.key_lab_highlights,
             "reviewed_report_text": draft_input.reviewed_report_text,
@@ -330,7 +327,7 @@ class OpenAICompatibleGroundedComposer:
             "output_language": "zh-CN",
         }
 
-    def _call_remote_model(self, grounded_payload: dict[str, Any], analysis_mode: str) -> str:
+    def _call_remote_model(self, grounded_payload: dict[str, Any]) -> str:
         client = self.http_client or httpx.Client(timeout=self.timeout_seconds)
         close_client = self.http_client is None
         try:
@@ -339,7 +336,7 @@ class OpenAICompatibleGroundedComposer:
                     response = client.post(
                         f"{self.base_url}/responses",
                         headers=self._headers(),
-                        json=self._build_responses_payload(grounded_payload, analysis_mode),
+                        json=self._build_responses_payload(grounded_payload),
                         timeout=self.timeout_seconds,
                     )
                     response.raise_for_status()
@@ -351,7 +348,7 @@ class OpenAICompatibleGroundedComposer:
             response = client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
-                json=self._build_chat_payload(grounded_payload, analysis_mode),
+                json=self._build_chat_payload(grounded_payload),
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
@@ -360,7 +357,7 @@ class OpenAICompatibleGroundedComposer:
             if close_client:
                 client.close()
 
-    def _build_chat_payload(self, grounded_payload: dict[str, Any], analysis_mode: str) -> dict[str, Any]:
+    def _build_chat_payload(self, grounded_payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
             **chat_generation_options(
@@ -372,7 +369,7 @@ class OpenAICompatibleGroundedComposer:
             "messages": [
                 {
                     "role": "system",
-                    "content": self._system_prompt(analysis_mode),
+                    "content": self._system_prompt(),
                 },
                 {
                     "role": "user",
@@ -381,11 +378,11 @@ class OpenAICompatibleGroundedComposer:
             ],
         }
 
-    def _build_responses_payload(self, grounded_payload: dict[str, Any], analysis_mode: str) -> dict[str, Any]:
+    def _build_responses_payload(self, grounded_payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
             "temperature": self.temperature,
-            "instructions": self._system_prompt(analysis_mode),
+            "instructions": self._system_prompt(),
             "input": [
                 {
                     "role": "user",
@@ -399,7 +396,7 @@ class OpenAICompatibleGroundedComposer:
             ],
         }
 
-    def _system_prompt(self, analysis_mode: str) -> str:
+    def _system_prompt(self) -> str:
         base_prompt = (
             "You are assisting an internal clinical reviewer. "
             "Use only the structured facts, candidate products, and reviewed evidence provided. "
@@ -417,21 +414,19 @@ class OpenAICompatibleGroundedComposer:
             "When you do recommend products, abstain_reason must be null or an empty string; "
             "do not put positive recommendation rationale in abstain_reason."
         )
-        if analysis_mode == "llm_primary":
-            return (
-                base_prompt
-                + " When analysis_mode is llm_primary, you are the primary synthesis engine. "
-                + "Use reviewed_report_text, structured_case_context, case_summary, and key_lab_highlights "
-                + "to infer the most relevant support priorities. "
-                + "Treat reviewed local knowledge as auxiliary supporting context rather than the sole trigger. "
-                + "Keep recommendations conservative when data is incomplete, but do not abstain solely because "
-                + "knowledge_hits are sparse if the case evidence itself is strong. "
-                + "If helpful, you may populate section_overrides for these exact Chinese section keys only: "
-                + "总体健康画像, 系统功能深度分析, 生活方式干预重点, 功能医学检测建议, 随访计划. "
-                + "Each section_overrides value must be an array of short Simplified Chinese bullet lines. "
-                + "Do not introduce unverified diagnoses; use cautious language such as '提示', '倾向', '建议结合复核'."
-            )
-        return base_prompt
+        return (
+            base_prompt
+            + " You are the primary synthesis engine. "
+            + "Use reviewed_report_text, structured_case_context, case_summary, and key_lab_highlights "
+            + "to infer the most relevant support priorities. "
+            + "Treat reviewed local knowledge as auxiliary supporting context rather than the sole trigger. "
+            + "Keep recommendations conservative when data is incomplete, but do not abstain solely because "
+            + "knowledge_hits are sparse if the case evidence itself is strong. "
+            + "If helpful, you may populate section_overrides for these exact Chinese section keys only: "
+            + "总体健康画像, 系统功能深度分析, 生活方式干预重点, 功能医学检测建议, 随访计划. "
+            + "Each section_overrides value must be an array of short Simplified Chinese bullet lines. "
+            + "Do not introduce unverified diagnoses; use cautious language such as '提示', '倾向', '建议结合复核'."
+        )
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         if isinstance(payload.get("output_text"), str) and payload["output_text"].strip():
@@ -635,17 +630,15 @@ class OpenAICompatibleGroundedComposer:
         if abstain_reason and self._looks_like_non_abstain_reason(abstain_reason):
             abstain_reason = None
         if abstain_reason and not draft_input.candidate_products:
-            if draft_input.analysis_mode == "llm_primary":
-                return DraftCompositionResult(
-                    selected_sku_ids=[],
-                    product_reason_overrides=product_reason_overrides,
-                    rationale=rationale,
-                    lifestyle_actions=lifestyle_actions,
-                    section_overrides=section_overrides,
-                    confidence=confidence,
-                    abstain_reason=abstain_reason,
-                )
-            return self.fallback.compose(draft_input)
+            return DraftCompositionResult(
+                selected_sku_ids=[],
+                product_reason_overrides=product_reason_overrides,
+                rationale=rationale,
+                lifestyle_actions=lifestyle_actions,
+                section_overrides=section_overrides,
+                confidence=confidence,
+                abstain_reason=abstain_reason,
+            )
         abstain_reason = None
 
         return DraftCompositionResult(

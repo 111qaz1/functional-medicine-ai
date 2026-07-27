@@ -258,8 +258,7 @@ Content-Type: application/json
 {
   "customer_name": "客户姓名",
   "consultant_id": "顾问姓名",
-  "notes": "备注",
-  "analysis_mode": "llm_primary"
+  "notes": "备注"
 }
 ```
 

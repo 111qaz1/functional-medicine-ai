@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -96,7 +98,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
 
         private_case = self.client_a.post(
             "/cases",
-            json={"customer_name": "A的客户", "workspace_scope": "doctor", "analysis_mode": "llm_primary"},
+            json={"customer_name": "A的客户", "workspace_scope": "doctor"},
         )
         self.assertEqual(private_case.status_code, 200, private_case.text)
         case_id = private_case.json()["case"]["id"]
@@ -104,7 +106,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
 
         public_case = self.public_client.post(
             "/cases",
-            json={"customer_name": "公共客户", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "公共客户", "workspace_scope": "public"},
         )
         self.assertEqual(public_case.status_code, 200, public_case.text)
 
@@ -115,6 +117,32 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         public_list = self.public_client.get("/cases", params={"workspace": "public"})
         self.assertEqual(public_list.status_code, 200, public_list.text)
         self.assertEqual(public_list.json()["cases"][0]["customer_name"], "公共客户")
+
+    def test_removed_analysis_mode_is_ignored_and_legacy_records_still_load(self) -> None:
+        response = self.public_client.post(
+            "/cases",
+            json={
+                "customer_name": "统一分析流程病例",
+                "workspace_scope": "public",
+                "analysis_mode": "local_grounded",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        case_payload = response.json()["case"]
+        self.assertNotIn("analysis_mode", case_payload)
+
+        case_id = case_payload["id"]
+        legacy_payload = dict(case_payload)
+        legacy_payload["analysis_mode"] = "local_grounded"
+        with sqlite3.connect(self.container.repository.database_path) as connection:
+            connection.execute(
+                "UPDATE cases SET payload = ? WHERE id = ?",
+                (json.dumps(legacy_payload, ensure_ascii=False), case_id),
+            )
+
+        loaded = self.container.repository.get_case(case_id)
+        self.assertIsNotNone(loaded)
+        self.assertFalse(hasattr(loaded, "analysis_mode"))
 
     def test_rule_scope_controls_matching_for_future_reports(self) -> None:
         doctor_a = self.container.auth_service.register(username="doctor-a", password="secret123")
@@ -220,7 +248,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
     def test_anonymous_user_cannot_create_rule_from_public_workspace(self) -> None:
         case = self.public_client.post(
             "/cases",
-            json={"customer_name": "公共匿名病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "公共匿名病例", "workspace_scope": "public"},
         )
         self.assertEqual(case.status_code, 200, case.text)
 
@@ -263,7 +291,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
     def test_upload_response_reports_preparse_success(self) -> None:
         created = self.public_client.post(
             "/cases",
-            json={"customer_name": "上传反馈病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "上传反馈病例", "workspace_scope": "public"},
         )
         self.assertEqual(created.status_code, 200, created.text)
         case_id = created.json()["case"]["id"]
@@ -282,7 +310,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
     def test_parsing_review_manual_indicator_is_persisted_and_displayed(self) -> None:
         created = self.public_client.post(
             "/cases",
-            json={"customer_name": "人工补录病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "人工补录病例", "workspace_scope": "public"},
         )
         self.assertEqual(created.status_code, 200, created.text)
         case_id = created.json()["case"]["id"]

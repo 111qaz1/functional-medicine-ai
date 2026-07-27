@@ -14,6 +14,8 @@ from app.domain.models import (
     ClinicalEvidenceClass,
     ClinicianRule,
     ClinicianRuleAction,
+    DosageOptionSummary,
+    DosageRegimen,
     DraftRecommendationItem,
     DraftStatus,
     ProductRule,
@@ -36,6 +38,7 @@ from app.services.body_systems import (
 )
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.evidence_policy import classify_confirmed_evidence
+from app.services.dosage_rules import select_dosage_option
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
 
 
@@ -61,6 +64,7 @@ class RecommendationContext:
     clinical_summary_text: str
     summary_nutrient_hints: list[str]
     structured_system_findings: list[StructuredSystemFinding] = field(default_factory=list)
+    sex: str | None = None
 
 
 @dataclass
@@ -678,11 +682,19 @@ class RecommendationService:
                         default_reason,
                     )
                 )
+                dosage_payload = self._resolve_dosage_payload(
+                    product,
+                    context,
+                    requires_review=any(
+                        decision.action == SafetyRuleAction.requires_review
+                        for decision in safety_decisions_by_sku.get(product.sku_id, [])
+                    ),
+                )
                 recommended_items.append(
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
                         display_name=self._canonical_product_name(product),
-                        dosage=self._resolve_dosage(product, context),
+                        **dosage_payload,
                         reason=final_reason,
                         evidence_ids=evidence_ids,
                         evidence_details=list(
@@ -1018,6 +1030,7 @@ class RecommendationService:
             clinical_summary_text=clinical_summary_text,
             summary_nutrient_hints=summary_nutrient_hints,
             structured_system_findings=structured_system_findings,
+            sex=self._normalize(questionnaire.sex) if questionnaire and questionnaire.sex else None,
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
@@ -3624,9 +3637,15 @@ class RecommendationService:
         return formatted
 
     def _first_month_dosage(self, product: ProductRule) -> str:
-        excel_rule = self.product_dosage_mapping.get(product.sku_id, {}).get("dosage_text")
-        if isinstance(excel_rule, str) and excel_rule.strip():
-            return excel_rule.strip()
+        mapping = self.product_dosage_mapping.get(product.sku_id, {})
+        options = [
+            option
+            for option in mapping.get("dose_options", [])
+            if isinstance(option, dict) and option.get("enabled", True)
+        ]
+        default = next((option for option in options if option.get("is_default")), options[0] if options else None)
+        if default and str(default.get("display_text") or "").strip():
+            return str(default["display_text"]).strip()
         first_month_rules = {
             "sku_liver_detox_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；连续 4 周后根据肝胆指标和胃肠耐受调整。",
             "sku_amino_acid_detox": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；用于首月二阶段解毒支持，需结合肝肾功能人工确认。",
@@ -3711,8 +3730,61 @@ class RecommendationService:
         return reasons
 
     def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
-        base = self._first_month_dosage(product).strip() or "请按医生建议使用"
-        return f"医生复核剂量；产品规则基准：{base}" if self._dosage_review_reasons(context) else base
+        return str(self._resolve_dosage_payload(product, context)["dosage"])
+
+    def _resolve_dosage_payload(
+        self,
+        product: ProductRule,
+        context: RecommendationContext,
+        *,
+        requires_review: bool = False,
+    ) -> dict[str, object]:
+        mapping = self.product_dosage_mapping.get(product.sku_id, {})
+        if not mapping.get("dose_options"):
+            base = self._first_month_dosage(product).strip() or "请按医生建议使用"
+            review_reasons = self._dosage_review_reasons(context)
+            if requires_review and "该产品需要医生复核剂量" not in review_reasons:
+                review_reasons.append("该产品需要医生复核剂量")
+            dosage = f"医生复核剂量；{base}" if review_reasons else base
+            return {
+                "dosage": dosage,
+                "dosage_match_reasons": review_reasons,
+            }
+
+        selection = select_dosage_option(mapping, context, self._normalize)
+        selected = selection.option
+        review_reasons = self._dosage_review_reasons(context)
+        if selected.get("requires_review"):
+            review_reasons.append("该剂量档位要求医生复核")
+        if requires_review:
+            review_reasons.append("该产品需要医生复核剂量")
+        review_reasons = list(dict.fromkeys(review_reasons))
+        display_text = str(selected.get("display_text") or "").strip() or "请按医生建议使用"
+        dosage = f"医生复核剂量；{display_text}" if review_reasons else display_text
+        match_reasons = list(selection.match_reasons)
+        if selection.fallback_reason:
+            match_reasons.append(selection.fallback_reason)
+        match_reasons.extend(review_reasons)
+
+        enabled_options = [
+            DosageOptionSummary(
+                option_id=str(option["option_id"]),
+                label=str(option.get("label") or "剂量档位"),
+                display_text=str(option.get("display_text") or ""),
+                requires_review=bool(option.get("requires_review")),
+                regimen=DosageRegimen.model_validate(option.get("regimen") or {}),
+            )
+            for option in mapping.get("dose_options", [])
+            if isinstance(option, dict) and option.get("enabled", True) and option.get("option_id")
+        ]
+        return {
+            "dosage": dosage,
+            "dosage_option_id": str(selected["option_id"]),
+            "dosage_option_label": str(selected.get("label") or "剂量档位"),
+            "dosage_match_reasons": list(dict.fromkeys(match_reasons)),
+            "dosage_options": enabled_options,
+            "dosage_regimen": DosageRegimen.model_validate(selected.get("regimen") or {}),
+        }
 
     def _product_safety_warnings(self, product: ProductRule, context: RecommendationContext | None = None) -> list[str]:
         dosage_reasons = self._dosage_review_reasons(context) if context is not None else []
@@ -4021,9 +4093,10 @@ class RecommendationService:
         recommended_items: list[DraftRecommendationItem],
         product_evidence_map: dict[str, list[str]],
         safety_decisions_by_sku: dict[str, list[SafetyDecision]],
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         recommended_ids = {item.sku_id for item in recommended_items}
-        audit: list[dict[str, str]] = []
+        recommended_by_id = {item.sku_id: item for item in recommended_items}
+        audit: list[dict[str, object]] = []
         for product in self._list_products(enabled_only=True):
             direct_match = self._product_has_direct_context_match(product, context)
             safety_exclusions = [
@@ -4041,7 +4114,28 @@ class RecommendationService:
                 reason = "ranking_or_model_selection_excluded"
             else:
                 reason = "no_qualified_evidence"
-            audit.append({"sku_id": product.sku_id, "result": reason})
+            entry: dict[str, object] = {"sku_id": product.sku_id, "result": reason}
+            selected = recommended_by_id.get(product.sku_id)
+            if selected and selected.dosage_option_id:
+                mapping = self.product_dosage_mapping.get(product.sku_id, {})
+                option = next(
+                    (
+                        candidate
+                        for candidate in mapping.get("dose_options", [])
+                        if candidate.get("option_id") == selected.dosage_option_id
+                    ),
+                    {},
+                )
+                entry.update(
+                    {
+                        "dosage_option_id": selected.dosage_option_id,
+                        "dosage_option_label": selected.dosage_option_label,
+                        "dosage_match_reasons": selected.dosage_match_reasons,
+                        "dosage_source": option.get("source"),
+                        "dosage_fallback": any("默认基础档" in item for item in selected.dosage_match_reasons),
+                    }
+                )
+            audit.append(entry)
         return audit
 
     def _is_reasonable_top_up_candidate(self, evidence_ids: list[str]) -> bool:

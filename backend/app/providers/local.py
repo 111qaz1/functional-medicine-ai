@@ -676,12 +676,17 @@ class DocumentOCRProvider:
 
 
 class LocalObjectStore:
+    _SAFE_SUFFIX_PATTERN = re.compile(r"^\.[a-z0-9]{1,10}$")
+
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save(self, filename: str, content: bytes) -> str:
-        target = self.root / f"{uuid.uuid4().hex}-{Path(filename).name}"
+        suffix = Path(filename or "").suffix.lower()
+        if not self._SAFE_SUFFIX_PATTERN.fullmatch(suffix):
+            suffix = ".bin"
+        target = self.root / f"{uuid.uuid4().hex}{suffix}"
         target.write_bytes(content)
         return str(target)
 

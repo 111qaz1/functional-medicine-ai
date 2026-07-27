@@ -51,6 +51,7 @@ from app.core.settings import (
     load_settings,
     save_llm_config,
 )
+from app.services.review_local import InvalidDosageOverrideError
 from app.domain.models import (
     AuditLog,
     CaseIndicator,
@@ -447,7 +448,13 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
     )
     storage_uri = None
     if intake.validation_error is None:
-        storage_uri = container.recommendation_service.object_store.save(filename, content)
+        try:
+            storage_uri = container.recommendation_service.object_store.save(filename, content)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="文件保存失败，请检查服务器存储空间或目录权限。",
+            ) from exc
     uploaded_file = UploadedFile(
         id=f"file_{uuid.uuid4().hex[:12]}",
         case_id=case_id,
@@ -793,6 +800,8 @@ def approve_draft(draft_id: str, payload: ApproveDraftRequest, request: Request)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidDosageOverrideError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return review

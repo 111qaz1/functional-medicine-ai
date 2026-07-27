@@ -116,6 +116,19 @@ class UnifiedSafetyRule:
     version: str
 
 
+@dataclass(frozen=True)
+class ClientRecallRule:
+    rule_id: str
+    sku_ids: tuple[str, ...]
+    all_conditions: tuple[str, ...]
+    any_conditions: tuple[str, ...]
+    message: str
+    guidance: str | None
+    source_ref: str | None
+    enabled: bool
+    version: str
+
+
 class RecommendationService:
     _ADMIN_METADATA_PREFIXES = (
         "医嘱名",
@@ -177,6 +190,8 @@ class RecommendationService:
         self.product_report_profiles = self._load_product_report_profiles()
         self.product_safety_profiles = self._load_product_safety_profiles()
         self.unified_safety_rules = self._load_unified_safety_rules()
+        self.client_recall_rules = self._load_client_recall_rules()
+        self.client_recall_rules_by_id = {rule.rule_id: rule for rule in self.client_recall_rules}
         self._validate_product_marker_codes()
 
     def _load_product_capabilities(self) -> tuple[str, dict[str, dict], dict[str, dict]]:
@@ -374,6 +389,88 @@ class RecommendationService:
             )
         return tuple(rules)
 
+    def _load_client_recall_rules(self) -> tuple[ClientRecallRule, ...]:
+        matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_recall_matrix.json"
+        if not matrix_path.exists():
+            return ()
+        try:
+            payload = json.loads(matrix_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return ()
+
+        def tuple_value(item: dict, key: str) -> tuple[str, ...]:
+            value = item.get(key)
+            if not isinstance(value, list):
+                return ()
+            return tuple(str(entry).strip() for entry in value if str(entry).strip())
+
+        rules: list[ClientRecallRule] = []
+        for item in payload.get("rules", []):
+            if not isinstance(item, dict):
+                continue
+            rule_id = str(item.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            rules.append(
+                ClientRecallRule(
+                    rule_id=rule_id,
+                    sku_ids=tuple_value(item, "sku_ids"),
+                    all_conditions=tuple_value(item, "all_conditions"),
+                    any_conditions=tuple_value(item, "any_conditions"),
+                    message=str(item.get("message") or "").strip(),
+                    guidance=str(item.get("guidance") or "").strip() or None,
+                    source_ref=str(item.get("source_ref") or "").strip() or None,
+                    enabled=bool(item.get("enabled", True)),
+                    version=str(item.get("version") or payload.get("version") or "").strip(),
+                )
+            )
+        return tuple(rules)
+
+    def _rule_matches_context(
+        self,
+        *,
+        all_conditions: tuple[str, ...],
+        any_conditions: tuple[str, ...],
+        context: RecommendationContext,
+    ) -> bool:
+        if all_conditions and not all(self._matches_rule(condition, context) for condition in all_conditions):
+            return False
+        if any_conditions and not any(self._matches_rule(condition, context) for condition in any_conditions):
+            return False
+        return bool(all_conditions or any_conditions)
+
+    def _matched_client_recall_rules(
+        self,
+        product: ProductRule,
+        context: RecommendationContext,
+    ) -> list[ClientRecallRule]:
+        return [
+            rule
+            for rule in self.client_recall_rules
+            if rule.enabled
+            and product.sku_id in rule.sku_ids
+            and self._rule_matches_context(
+                all_conditions=rule.all_conditions,
+                any_conditions=rule.any_conditions,
+                context=context,
+            )
+        ]
+
+    def _client_recall_guidance(self, context: RecommendationContext) -> list[str]:
+        return list(
+            dict.fromkeys(
+                rule.guidance
+                for rule in self.client_recall_rules
+                if rule.enabled
+                and rule.guidance
+                and self._rule_matches_context(
+                    all_conditions=rule.all_conditions,
+                    any_conditions=rule.any_conditions,
+                    context=context,
+                )
+            )
+        )
+
     def _list_products(self, *, enabled_only: bool = True) -> list[ProductRule]:
         return [
             self._apply_product_safety_profile(product)
@@ -422,13 +519,13 @@ class RecommendationService:
             )
 
         for rule in self.unified_safety_rules:
-            if not rule.enabled or product.sku_id not in rule.sku_ids:
+            if not rule.enabled or (product.sku_id not in rule.sku_ids and "*" not in rule.sku_ids):
                 continue
-            if rule.all_conditions and not all(self._matches_rule(condition, context) for condition in rule.all_conditions):
-                continue
-            if rule.any_conditions and not any(self._matches_rule(condition, context) for condition in rule.any_conditions):
-                continue
-            if not rule.all_conditions and not rule.any_conditions:
+            if not self._rule_matches_context(
+                all_conditions=rule.all_conditions,
+                any_conditions=rule.any_conditions,
+                context=context,
+            ):
                 continue
             decisions.append(
                 SafetyDecision(
@@ -597,7 +694,14 @@ class RecommendationService:
             report_guidance=report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
-        risk_notices = self._evaluate_risk_notices(context, case.questionnaire.age if case.questionnaire else None)
+        risk_notices = list(
+            dict.fromkeys(
+                [
+                    *self._evaluate_risk_notices(context, case.questionnaire.age if case.questionnaire else None),
+                    *self._client_recall_guidance(context),
+                ]
+            )
+        )
         missing_info = self._collect_missing_info(case)
         reviewed_knowledge = self.repository.list_knowledge(reviewed_only=True)
         knowledge_hits = []
@@ -704,12 +808,12 @@ class RecommendationService:
                         warnings=list(
                             dict.fromkeys(
                                 [
-                                    *self._product_safety_warnings(product, context),
                                     *[
                                         decision.message
                                         for decision in safety_decisions_by_sku.get(product.sku_id, [])
                                         if decision.action != SafetyRuleAction.exclude
                                     ],
+                                    *self._product_safety_warnings(product, context),
                                 ]
                             )
                         )[:6],
@@ -776,7 +880,10 @@ class RecommendationService:
             "异常指标汇总": key_lab_highlights,
             "原报告小结与建议": report_guidance,
             "功能医学系统失衡分析": system_analysis,
-            "风险提示": list(dict.fromkeys(risk_notices + contraindications)),
+            # Product exclusions are doctor-side audit information. They remain
+            # available in draft.contraindications and safety_decisions, but are
+            # not copied into the customer-facing report body.
+            "风险提示": risk_notices,
             "首月营养素干预方案": first_month_protocol,
             "总医嘱说明": total_advice,
             "生活方式干预处方": lifestyle_focus,
@@ -1631,6 +1738,14 @@ class RecommendationService:
             score = max(0.08, (100 - product.priority) / 160)
             evidence_ids = [f"product:{product.sku_id}"]
             supportive_evidence = 0
+            matched_recall_rules = self._matched_client_recall_rules(product, context)
+            if matched_recall_rules:
+                recall_evidence_ids = [
+                    f"signal:client_recall_{rule.rule_id}"
+                    for rule in matched_recall_rules
+                ]
+                evidence_ids.extend(recall_evidence_ids)
+                supportive_evidence += len(recall_evidence_ids)
 
             tag_score, tag_evidence_ids = self._score_product_from_tag_matrix(
                 product,
@@ -1745,6 +1860,7 @@ class RecommendationService:
                     "signal:model_support_goal_",
                     "signal:tag_marker_",
                     "signal:direct_marker_rule_",
+                    "signal:client_recall_",
                 )
             )
             for evidence_id in evidence_ids
@@ -2773,6 +2889,10 @@ class RecommendationService:
         if signal_id.startswith("model_support_goal_"):
             axis = signal_id.replace("model_support_goal_", "", 1)
             return f"医生确认异常的营养支持方向：{axis_labels.get(axis, axis)}"
+        if signal_id.startswith("client_recall_"):
+            rule_id = signal_id.replace("client_recall_", "", 1)
+            rule = self.client_recall_rules_by_id.get(rule_id)
+            return f"既定召回规则：{rule.message}" if rule else "既定召回规则"
         if signal_id == "top_system_primary_axis":
             return "最高优先系统主轴匹配"
         if signal_id == "tag_context_match":
@@ -2879,6 +2999,34 @@ class RecommendationService:
             return value in context.lifestyle_tags
         if kind == "pregnancy":
             return context.pregnancy
+        if kind == "age":
+            if context.age is None:
+                return False
+            try:
+                threshold = int(extra)
+            except (TypeError, ValueError):
+                return False
+            if value == "lt":
+                return context.age < threshold
+            if value == "lte":
+                return context.age <= threshold
+            if value == "gt":
+                return context.age > threshold
+            if value == "gte":
+                return context.age >= threshold
+            return False
+        if kind == "med_count":
+            try:
+                threshold = int(extra)
+            except (TypeError, ValueError):
+                return False
+            if value == "gte":
+                return len(context.medications) >= threshold
+            if value == "gt":
+                return len(context.medications) > threshold
+            return False
+        if kind == "support_goal":
+            return value in context.support_goal_findings
         if kind == "pattern":
             return self._matches_pattern(value, context)
         return False
@@ -2972,6 +3120,16 @@ class RecommendationService:
 
     def _build_product_reason(self, product: ProductRule, evidence_ids: list[str]) -> str:
         use_case = "、".join(product.candidate_use_cases[:2]) if product.candidate_use_cases else "当前病例目标"
+        recall_rules = [
+            self.client_recall_rules_by_id.get(
+                evidence_id.replace("signal:client_recall_", "", 1)
+            )
+            for evidence_id in evidence_ids
+            if evidence_id.startswith("signal:client_recall_")
+        ]
+        recall_rules = [rule for rule in recall_rules if rule]
+        if recall_rules:
+            return f"病例命中既定营养支持规则：{recall_rules[0].message}，并已通过本地安全检查。"
         association_percent = self._association_percent(evidence_ids)
         profile = self.product_tag_profiles.get(product.sku_id)
         system_name = (
@@ -3902,10 +4060,24 @@ class RecommendationService:
         must_cover_products: dict[str, ProductRule] = {}
         for product in ranked_products:
             evidence_ids = product_evidence_map.get(product.sku_id, [])
+            if not any(evidence_id.startswith("signal:client_recall_") for evidence_id in evidence_ids):
+                continue
+            selected_products.append(product)
+            primary_goal = self._selection_primary_goal(evidence_ids)
+            if primary_goal:
+                covered_goals.add(primary_goal)
+            system_id = self._selection_system_id(evidence_ids)
+            if system_id:
+                system_counts[system_id] = system_counts.get(system_id, 0) + 1
+            if len(selected_products) >= 10:
+                return selected_products
+        for product in ranked_products:
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
             for goal in self._must_cover_goals(evidence_ids):
                 must_cover_products.setdefault(goal, product)
         for goal, product in must_cover_products.items():
-            selected_products.append(product)
+            if product not in selected_products:
+                selected_products.append(product)
             covered_goals.add(goal)
             system_id = self._selection_system_id(product_evidence_map.get(product.sku_id, []))
             if system_id:
@@ -3986,6 +4158,8 @@ class RecommendationService:
         )
 
     def _product_has_direct_context_match(self, product: ProductRule, context: RecommendationContext) -> bool:
+        if self._matched_client_recall_rules(product, context):
+            return True
         if any(rule.startswith("marker:") and self._matches_rule(rule, context) for rule in product.indications):
             return True
         profile = self.product_tag_profiles.get(product.sku_id)

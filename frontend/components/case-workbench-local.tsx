@@ -577,6 +577,9 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const includedRecommendationCount = latestDraft
     ? latestDraft.recommended_skus.filter((item) => !excludedSkuIds.includes(item.sku_id)).length
     : 0;
+  const ruleExcludedDecisions = (latestDraft?.safety_decisions ?? []).filter(
+    (decision) => decision.action === "exclude"
+  );
   const workflowStep = payload.review_decision ? 5 : latestDraft ? 4 : analysis && ["ready_for_review", "reviewed"].includes(analysis.status) ? 3 : analysis ? 2 : caseRecord.files.length ? 1 : 0;
 
   return (
@@ -796,19 +799,43 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         {latestDraft ? (
           <SectionCard title="营养素草案审核与发布" subtitle="04 · Draft and publish" tone="draft">
             <p className="muted">草案 {latestDraft.id} · 状态 {latestDraft.status} · 置信度 {Math.round(latestDraft.confidence * 100)}%</p>
+            {ruleExcludedDecisions.length ? (
+              <details className="rule-exclusion-record">
+                <summary>规则排除记录（{ruleExcludedDecisions.length}）</summary>
+                <ul className="flat-list">
+                  {ruleExcludedDecisions.map((decision) => (
+                    <li key={`${decision.rule_id}-${decision.sku_id ?? "unknown"}`}>{decision.message}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
             <div className="draft-recommendation-list">
-              {latestDraft.recommended_skus.map((item) => (
-                <label className="draft-recommendation-card" key={item.sku_id}>
-                  <div>
-                    <strong>{item.display_name}</strong>
-                    <p className="muted">{item.dosage} · {item.reason}</p>
-                    {item.primary_system_id ? <p className="muted">对应身体系统：{BODY_SYSTEM_LABELS[item.primary_system_id] ?? item.primary_system_id}</p> : null}
-                    {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
-                    {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
-                  </div>
-                  <span><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</span>
-                </label>
-              ))}
+              {latestDraft.recommended_skus.map((item) => {
+                const reviewDecisions = (item.safety_decisions ?? []).filter(
+                  (decision) => decision.action === "requires_review"
+                );
+                const warningDecisions = (item.safety_decisions ?? []).filter(
+                  (decision) => decision.action === "warn"
+                );
+                return (
+                  <label className="draft-recommendation-card" key={item.sku_id}>
+                    <div>
+                      <strong>{item.display_name}</strong>
+                      {reviewDecisions.length || warningDecisions.length ? (
+                        <div className="rule-badge-list">
+                          {reviewDecisions.length ? <span className="rule-badge rule-badge--review">需医生确认</span> : null}
+                          {warningDecisions.length ? <span className="rule-badge rule-badge--warn">注意事项</span> : null}
+                        </div>
+                      ) : null}
+                      <p className="muted">{item.dosage} · {item.reason}</p>
+                      {item.primary_system_id ? <p className="muted">对应身体系统：{BODY_SYSTEM_LABELS[item.primary_system_id] ?? item.primary_system_id}</p> : null}
+                      {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
+                      {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
+                    </div>
+                    <span><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</span>
+                  </label>
+                );
+              })}
               {!latestDraft.recommended_skus.length ? (
                 <p className="error-text">当前草案没有营养素推荐，不能审核发布，请重新生成草案。</p>
               ) : null}

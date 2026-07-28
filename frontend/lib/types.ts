@@ -264,10 +264,39 @@ export interface CaseRecord {
   latest_analysis_id?: string | null;
 }
 
+export interface DosageRegimen {
+  unit: string;
+  single_dose_min?: number | null;
+  single_dose_max?: number | null;
+  daily_frequency_min?: number | null;
+  daily_frequency_max?: number | null;
+  weekly_frequency_min?: number | null;
+  weekly_frequency_max?: number | null;
+  timing: string[];
+  interval_hours_min?: number | null;
+  interval_hours_max?: number | null;
+  daily_max?: number | null;
+  duration?: string | null;
+  maintenance?: string | null;
+}
+
+export interface DosageOption {
+  option_id: string;
+  label: string;
+  display_text: string;
+  requires_review: boolean;
+  regimen: DosageRegimen;
+}
+
 export interface DraftRecommendationItem {
   sku_id: string;
   display_name: string;
   dosage: string;
+  dosage_option_id?: string | null;
+  dosage_option_label?: string | null;
+  dosage_match_reasons?: string[];
+  dosage_options?: DosageOption[];
+  dosage_regimen?: DosageRegimen | null;
   reason: string;
   evidence_ids: string[];
   evidence_details: string[];

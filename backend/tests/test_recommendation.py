@@ -1448,15 +1448,16 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertNotIn("免疫系统/甲状腺", analysis_text)
         self.assertNotIn("消化系统/肠道", analysis_text)
 
-    def test_first_month_dosage_rules_override_default_product_dosage(self) -> None:
+    def test_first_month_dosage_uses_single_structured_default_tier(self) -> None:
         fish_oil = self.container.repository.get_product("sku_fish_oil_rtg")
         glutathione_support = self.container.repository.get_product("sku_amino_acid_detox")
 
         fish_oil_dosage = self.container.recommendation_service._first_month_dosage(fish_oil)
         glutathione_dosage = self.container.recommendation_service._first_month_dosage(glutathione_support)
-        self.assertIn("日常心血管养护", fish_oil_dosage)
-        self.assertIn("每日2 粒", fish_oil_dosage)
-        self.assertIn("首月二阶段解毒支持", glutathione_dosage)
+        self.assertIn("每日1 粒", fish_oil_dosage)
+        self.assertNotIn("血脂偏高", fish_oil_dosage)
+        self.assertIn("每日1 粒", glutathione_dosage)
+        self.assertNotIn("强化调理", glutathione_dosage)
 
     def test_product_tag_matrix_prioritizes_precise_liver_detox_products(self) -> None:
         case = self._prepare_case(

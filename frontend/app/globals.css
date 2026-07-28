@@ -767,6 +767,18 @@ textarea {
 
 .draft-recommendation-card > div > strong { color: #554582; font-size: 16px; }
 
+.draft-recommendation-card > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.dosage-review-fields {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+  margin: 12px 0;
+}
+
 .draft-reference {
   border-top: 1px solid rgba(36, 52, 42, 0.08);
   padding-top: 14px;

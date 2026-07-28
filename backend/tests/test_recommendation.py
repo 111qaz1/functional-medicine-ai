@@ -550,6 +550,125 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("降糖药物", warnings_text)
         self.assertIn("监测血糖", warnings_text)
 
+    def test_client_metformin_rule_recalls_b_complex(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=45,
+                sex="male",
+                medications=["二甲双胍"],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        b_complex = next(item for item in draft.recommended_skus if item.sku_id == "sku_b_complex")
+
+        self.assertTrue(
+            any(evidence_id == "signal:client_recall_rcl_metformin_b12" for evidence_id in b_complex.evidence_ids)
+        )
+        self.assertIn("二甲双胍", b_complex.reason)
+
+    def test_client_coronary_or_statin_rule_recalls_fish_oil_and_coq10_with_warnings(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=58,
+                sex="male",
+                known_conditions=["冠心病", "支架术后"],
+                medications=["阿托伐他汀"],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        by_sku = {item.sku_id: item for item in draft.recommended_skus}
+
+        self.assertIn("sku_fish_oil_rtg", by_sku)
+        self.assertIn("sku_coq10", by_sku)
+        self.assertTrue(any("不能替代" in warning for warning in by_sku["sku_fish_oil_rtg"].warnings))
+        self.assertTrue(any("个体差异" in warning for warning in by_sku["sku_coq10"].warnings))
+
+    def test_client_gut_dysbiosis_rule_recalls_probiotic_with_evidence_warning(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=38,
+                sex="female",
+                known_conditions=["菌群多样性低"],
+                medications=[],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        probiotic = next(item for item in draft.recommended_skus if item.sku_id == "sku_probiotic_complex")
+
+        self.assertTrue(any("菌群多样性低" in item for item in probiotic.warnings))
+        self.assertTrue(
+            any(
+                evidence_id == "signal:client_recall_rcl_gut_dysbiosis_probiotic"
+                for evidence_id in probiotic.evidence_ids
+            )
+        )
+
+    def test_client_hashimoto_rule_recalls_selenium_with_warning(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=41,
+                sex="female",
+                known_conditions=["桥本氏甲状腺炎"],
+                medications=[],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        selenium = next(item for item in draft.recommended_skus if item.sku_id == "sku_selenium_vitamin_e")
+
+        self.assertTrue(any("不能替代甲状腺治疗" in warning for warning in selenium.warnings))
+
+    def test_client_safety_exclusion_overrides_recall(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=67,
+                sex="female",
+                known_conditions=["骨质疏松"],
+                medications=["华法林"],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertNotIn("sku_vitamin_d3_k", {item.sku_id for item in draft.recommended_skus})
+        self.assertTrue(
+            any(
+                decision.rule_id == "client_h9_warfarin_vitamin_k_excludes"
+                and decision.action.value == "exclude"
+                for decision in draft.safety_decisions
+            )
+        )
+        self.assertNotIn("VD3+K 被排除", " ".join(draft.report_sections.get("风险提示", [])))
+
+    def test_client_infant_rule_excludes_all_adult_formulas(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(age=2, sex="male", medications=[], allergies=[]),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+
+        self.assertFalse(draft.recommended_skus)
+        infant_decisions = [
+            decision
+            for decision in draft.safety_decisions
+            if decision.rule_id == "client_h8_infant_adult_formula_excludes"
+        ]
+        self.assertEqual(len(infant_decisions), 31)
+
     def test_validated_symptom_support_need_promotes_directly_relevant_nutrients(self) -> None:
         case = self._prepare_case(
             "基础体检未见明显急性异常。",

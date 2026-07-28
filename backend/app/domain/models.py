@@ -512,10 +512,39 @@ class ClinicianRule(StrictModel):
     notes: str | None = None
 
 
+class DosageRegimen(StrictModel):
+    unit: str = "粒"
+    single_dose_min: float | None = None
+    single_dose_max: float | None = None
+    daily_frequency_min: float | None = None
+    daily_frequency_max: float | None = None
+    weekly_frequency_min: float | None = None
+    weekly_frequency_max: float | None = None
+    timing: list[str] = Field(default_factory=list)
+    interval_hours_min: float | None = None
+    interval_hours_max: float | None = None
+    daily_max: float | None = None
+    duration: str | None = None
+    maintenance: str | None = None
+
+
+class DosageOptionSummary(StrictModel):
+    option_id: str
+    label: str
+    display_text: str
+    requires_review: bool = False
+    regimen: DosageRegimen = Field(default_factory=DosageRegimen)
+
+
 class DraftRecommendationItem(StrictModel):
     sku_id: str
     display_name: str
     dosage: str
+    dosage_option_id: str | None = None
+    dosage_option_label: str | None = None
+    dosage_match_reasons: list[str] = Field(default_factory=list)
+    dosage_options: list[DosageOptionSummary] = Field(default_factory=list)
+    dosage_regimen: DosageRegimen | None = None
     reason: str
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)

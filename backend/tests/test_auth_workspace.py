@@ -307,6 +307,54 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertTrue(operation["parsing_succeeded"])
         self.assertEqual(operation["progress_percent"], 100)
 
+    def test_upload_accepts_long_unicode_filename_without_using_it_on_disk(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "长文件名上传病例", "workspace_scope": "public"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+        original_name = f"{'病例总结' * 80}.txt"
+
+        uploaded = self.public_client.post(
+            f"/cases/{case_id}/files",
+            files={"file": (original_name, "合成临床总结", "text/plain")},
+        )
+
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        file_payload = uploaded.json()["case"]["files"][0]
+        self.assertEqual(file_payload["filename"], original_name)
+        self.assertEqual(file_payload["raw_extracted_text"], "合成临床总结")
+        stored_path = Path(file_payload["storage_uri"])
+        self.assertTrue(stored_path.exists())
+        self.assertRegex(stored_path.name, r"^[0-9a-f]{32}\.txt$")
+        self.assertNotIn("病例总结", stored_path.name)
+
+    def test_upload_storage_failure_returns_safe_json_without_case_file(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "存储失败病例", "workspace_scope": "public"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+
+        with patch.object(
+            self.container.recommendation_service.object_store,
+            "save",
+            side_effect=OSError("sensitive server path"),
+        ):
+            uploaded = self.public_client.post(
+                f"/cases/{case_id}/files",
+                files={"file": ("summary.txt", "合成临床总结", "text/plain")},
+            )
+
+        self.assertEqual(uploaded.status_code, 500, uploaded.text)
+        self.assertEqual(
+            uploaded.json(),
+            {"detail": "文件保存失败，请检查服务器存储空间或目录权限。"},
+        )
+        self.assertEqual(self.container.case_service.get_case(case_id).files, [])
+
     def test_parsing_review_manual_indicator_is_persisted_and_displayed(self) -> None:
         created = self.public_client.post(
             "/cases",

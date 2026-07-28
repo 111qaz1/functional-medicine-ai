@@ -171,7 +171,15 @@ def _require_owned_draft(container, draft_id: str, doctor: DoctorAccount):
     return case, draft
 
 
+def _effective_external_draft(container, draft):
+    review = container.repository.get_review_decision(draft.id)
+    if not review:
+        return draft
+    return container.review_service._draft_with_filtered_recommendations(draft, review.edits)
+
+
 def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResponse:
+    draft = _effective_external_draft(container, draft)
     product_by_id = {product.sku_id: product for product in container.repository.list_products(enabled_only=False)}
     recommendations: list[ExternalNutritionRecommendation] = []
     for item in draft.recommended_skus:
@@ -199,6 +207,7 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
 
 
 def _prescription_items_response(container, draft) -> ExternalPrescriptionItemsResponse:
+    draft = _effective_external_draft(container, draft)
     advice = PrescriptionAdviceService(container.settings).build_advice(draft)
     return ExternalPrescriptionItemsResponse(
         case_id=draft.case_id,
@@ -286,13 +295,21 @@ async def upload_external_attachments(
             )
             continue
 
+        try:
+            storage_uri = container.recommendation_service.object_store.save(filename, content)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="文件保存失败，请检查服务器存储空间或目录权限。",
+            ) from exc
+
         uploaded_file = UploadedFile(
             id=f"file_{uuid.uuid4().hex[:12]}",
             case_id=case.id,
             filename=filename,
             content_type=content_type,
             size_bytes=len(content),
-            storage_uri=container.recommendation_service.object_store.save(filename, content),
+            storage_uri=storage_uri,
         )
         case = container.case_service.add_uploaded_file(case.id, uploaded_file)
         extraction, lab_items = container.parsing_service.parse(

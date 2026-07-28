@@ -14,6 +14,10 @@ from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
 
 
+class InvalidDosageOverrideError(ValueError):
+    pass
+
+
 class ReviewService:
     def __init__(
         self,
@@ -49,6 +53,7 @@ class ReviewService:
             raise ValueError("至少保留一项营养素推荐后才能审核发布。")
         draft.status = DraftStatus.approved
         report = self._select_publishable_report(effective_draft, case, publishable_summary)
+        report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, edits)
         report = self._ensure_prescription_advice_section(
             report,
@@ -75,6 +80,7 @@ class ReviewService:
                 actor_id=reviewer_id,
                 payload={
                     "excluded_sku_ids": sorted(self._excluded_sku_ids(edits)),
+                    "dosage_overrides": self._dosage_override_audit(draft, edits),
                     "pdf_generated": True,
                 },
             )
@@ -108,6 +114,7 @@ class ReviewService:
         effective_draft = self._draft_with_filtered_recommendations(draft, review.edits)
         if self.is_stale_publishable_report(report):
             report = self._render_report(effective_draft, case)
+        report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
         report = self._ensure_prescription_advice_section(report, effective_draft)
         report = self._normalize_customer_visible_report_text(report)
@@ -137,12 +144,91 @@ class ReviewService:
 
     def _draft_with_filtered_recommendations(self, draft, edits: dict[str, Any] | None):
         excluded_ids = self._excluded_sku_ids(edits)
-        if not excluded_ids:
-            return draft
-        recommended_skus = [
-            sku for sku in getattr(draft, "recommended_skus", []) if getattr(sku, "sku_id", "") not in excluded_ids
+        original_skus = list(getattr(draft, "recommended_skus", []))
+        dosage_overrides = self._dosage_overrides(edits)
+        known_skus = {sku.sku_id for sku in original_skus}
+        unknown_skus = sorted(set(dosage_overrides) - known_skus)
+        if unknown_skus:
+            raise InvalidDosageOverrideError(f"剂量改档包含不属于当前草案的 SKU：{'、'.join(unknown_skus)}")
+
+        validated_skus = [
+            self._recommendation_with_dosage_override(sku, dosage_overrides.get(sku.sku_id))
+            for sku in original_skus
         ]
-        return draft.model_copy(update={"recommended_skus": recommended_skus})
+        effective_skus = [sku for sku in validated_skus if sku.sku_id not in excluded_ids]
+        if not excluded_ids and not dosage_overrides:
+            return draft
+        return draft.model_copy(update={"recommended_skus": effective_skus})
+
+    def _dosage_overrides(self, edits: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+        if not isinstance(edits, dict):
+            return {}
+        raw = edits.get("dosage_overrides") or {}
+        if not isinstance(raw, dict):
+            raise InvalidDosageOverrideError("dosage_overrides 必须是以 SKU 为键的对象")
+        overrides: dict[str, dict[str, str]] = {}
+        for sku_id, value in raw.items():
+            normalized_sku_id = str(sku_id or "").strip()
+            if not normalized_sku_id or not isinstance(value, dict):
+                raise InvalidDosageOverrideError("剂量改档格式不正确")
+            option_id = str(value.get("option_id") or "").strip()
+            note = str(value.get("note") or "").strip()
+            if not option_id:
+                raise InvalidDosageOverrideError(f"{normalized_sku_id} 缺少 option_id")
+            overrides[normalized_sku_id] = {"option_id": option_id, "note": note}
+        return overrides
+
+    def _recommendation_with_dosage_override(self, sku, override: dict[str, str] | None):
+        if not override:
+            return sku
+        options = {option.option_id: option for option in getattr(sku, "dosage_options", [])}
+        option = options.get(override["option_id"])
+        if not option:
+            raise InvalidDosageOverrideError(
+                f"{sku.sku_id} 的剂量档位无效、未启用或不属于该 SKU"
+            )
+        changed = option.option_id != getattr(sku, "dosage_option_id", None)
+        if changed and not override["note"]:
+            raise InvalidDosageOverrideError(f"{sku.display_name} 改为非系统默认档位时必须填写调整备注")
+
+        review_prefix = str(getattr(sku, "dosage", "")).startswith("医生复核剂量；") or option.requires_review
+        dosage = f"医生复核剂量；{option.display_text}" if review_prefix else option.display_text
+        reasons = list(getattr(sku, "dosage_match_reasons", []) or [])
+        if changed:
+            reasons.append(f"医生人工改档：{option.label}；备注：{override['note']}")
+        return sku.model_copy(
+            update={
+                "dosage": dosage,
+                "dosage_option_id": option.option_id,
+                "dosage_option_label": option.label,
+                "dosage_regimen": option.regimen,
+                "dosage_match_reasons": list(dict.fromkeys(reasons)),
+            }
+        )
+
+    def _dosage_override_audit(self, draft, edits: dict[str, Any] | None) -> dict[str, dict[str, str | None]]:
+        overrides = self._dosage_overrides(edits)
+        by_sku = {sku.sku_id: sku for sku in getattr(draft, "recommended_skus", [])}
+        return {
+            sku_id: {
+                "system_option_id": getattr(by_sku.get(sku_id), "dosage_option_id", None),
+                "effective_option_id": override["option_id"],
+                "note": override["note"],
+            }
+            for sku_id, override in overrides.items()
+        }
+
+    def _replace_overridden_dosages(self, report: str, original_draft, effective_draft) -> str:
+        if not report:
+            return report
+        originals = {sku.sku_id: sku for sku in getattr(original_draft, "recommended_skus", [])}
+        updated = report
+        for effective in getattr(effective_draft, "recommended_skus", []):
+            original = originals.get(effective.sku_id)
+            if not original or original.dosage == effective.dosage:
+                continue
+            updated = updated.replace(original.dosage, effective.dosage)
+        return updated
 
     def _remove_excluded_nutrition_lines(self, report: str, draft, edits: dict[str, Any] | None) -> str:
         excluded_ids = self._excluded_sku_ids(edits)

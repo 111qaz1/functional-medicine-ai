@@ -20,6 +20,7 @@ import {
   AbnormalFinding,
   CaseAnalysis,
   CaseDetailResponse,
+  DraftRecommendationItem,
   RecommendationDraft
 } from "../lib/types";
 import { SectionCard } from "./section-card";
@@ -83,6 +84,23 @@ function reportText(draft: RecommendationDraft | null | undefined) {
       return [`## ${title}`, ...items.filter(Boolean).map((item) => `- ${item}`)].join("\n");
     })
     .join("\n\n");
+}
+
+type DosageOverrideDraft = {
+  option_id: string;
+  note: string;
+};
+
+function effectiveDosageOption(item: DraftRecommendationItem, overrides: Record<string, DosageOverrideDraft>) {
+  const selectedId = overrides[item.sku_id]?.option_id || item.dosage_option_id;
+  return item.dosage_options?.find((option) => option.option_id === selectedId);
+}
+
+function effectiveDosageText(item: DraftRecommendationItem, overrides: Record<string, DosageOverrideDraft>) {
+  const option = effectiveDosageOption(item, overrides);
+  if (!option) return item.dosage;
+  const requiresReview = item.dosage.startsWith("医生复核剂量；") || option.requires_review;
+  return `${requiresReview ? "医生复核剂量；" : ""}${option.display_text}`;
 }
 
 function cloneFindings(items: AbnormalFinding[]) {
@@ -159,6 +177,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [publishableEditorExpanded, setPublishableEditorExpanded] = useState(false);
   const [publishableEditorMode, setPublishableEditorMode] = useState<MarkdownViewMode>("split");
   const [excludedSkuIds, setExcludedSkuIds] = useState<string[]>([]);
+  const [dosageOverrides, setDosageOverrides] = useState<Record<string, DosageOverrideDraft>>({});
   const [thirdPartyConfirmed, setThirdPartyConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -189,6 +208,18 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
     setPayload(next);
     setClinicalSummary(next.case.clinical_summary_text ?? "");
     setPublishableSummary(reportText(next.latest_draft));
+    const systemSelections = Object.fromEntries(
+      (next.latest_draft?.recommended_skus ?? [])
+        .filter((item) => item.dosage_option_id)
+        .map((item) => [item.sku_id, { option_id: item.dosage_option_id as string, note: "" }])
+    );
+    const reviewedSelections = (
+      next.review_decision?.edits?.dosage_overrides
+      && typeof next.review_decision.edits.dosage_overrides === "object"
+    )
+      ? next.review_decision.edits.dosage_overrides as Record<string, DosageOverrideDraft>
+      : {};
+    setDosageOverrides({ ...systemSelections, ...reviewedSelections });
     return next;
   }
 
@@ -526,10 +557,27 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setError("至少保留一项营养素推荐后才能审核发布。");
       return;
     }
+    const changedDosageOverrides = Object.fromEntries(
+      includedRecommendations
+        .map((item) => [item, dosageOverrides[item.sku_id]] as const)
+        .filter(([item, override]) => override && override.option_id !== item.dosage_option_id)
+        .map(([item, override]) => [item.sku_id, override])
+    );
+    const missingNote = includedRecommendations.find((item) => {
+      const override = dosageOverrides[item.sku_id];
+      return override && override.option_id !== item.dosage_option_id && !override.note.trim();
+    });
+    if (missingNote) {
+      setError(`${missingNote.display_name} 改为非系统默认档位时必须填写调整备注。`);
+      return;
+    }
     try {
       setBusy(true);
       setOperation({ placement: "report", title: "审核并生成报告", stage: "正在保存审核结果并生成报告文件……", percent: 55, status: "running" });
-      await approveDraft(draft.id, reviewerId, publishableSummary, { excluded_sku_ids: excludedSkuIds });
+      await approveDraft(draft.id, reviewerId, publishableSummary, {
+        excluded_sku_ids: excludedSkuIds,
+        dosage_overrides: changedDosageOverrides
+      });
       await loadCase();
       setNotice("报告已审核发布，正在自动导出 PDF。");
       const downloaded = await handleDownloadReport(draft.id);
@@ -797,18 +845,62 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
           <SectionCard title="营养素草案审核与发布" subtitle="04 · Draft and publish" tone="draft">
             <p className="muted">草案 {latestDraft.id} · 状态 {latestDraft.status} · 置信度 {Math.round(latestDraft.confidence * 100)}%</p>
             <div className="draft-recommendation-list">
-              {latestDraft.recommended_skus.map((item) => (
-                <label className="draft-recommendation-card" key={item.sku_id}>
+              {latestDraft.recommended_skus.map((item) => {
+                const selectedOption = effectiveDosageOption(item, dosageOverrides);
+                const changed = Boolean(selectedOption && selectedOption.option_id !== item.dosage_option_id);
+                return (
+                <div className="draft-recommendation-card" key={item.sku_id}>
                   <div>
                     <strong>{item.display_name}</strong>
-                    <p className="muted">{item.dosage} · {item.reason}</p>
+                    <p className="muted">{effectiveDosageText(item, dosageOverrides)} · {item.reason}</p>
+                    {(item.dosage_options?.length ?? 0) > 0 ? (
+                      <div className="dosage-review-fields">
+                        <label className="field">
+                          <span>批准剂量档位</span>
+                          <select
+                            value={selectedOption?.option_id ?? item.dosage_option_id ?? ""}
+                            disabled={busy || Boolean(payload.review_decision)}
+                            onChange={(event) => setDosageOverrides((current) => ({
+                              ...current,
+                              [item.sku_id]: {
+                                option_id: event.target.value,
+                                note: current[item.sku_id]?.note ?? ""
+                              }
+                            }))}
+                          >
+                            {item.dosage_options?.map((option) => (
+                              <option value={option.option_id} key={option.option_id}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {changed ? (
+                          <label className="field">
+                            <span>调整备注（必填）</span>
+                            <textarea
+                              rows={2}
+                              value={dosageOverrides[item.sku_id]?.note ?? ""}
+                              disabled={busy || Boolean(payload.review_decision)}
+                              onChange={(event) => setDosageOverrides((current) => ({
+                                ...current,
+                                [item.sku_id]: {
+                                  option_id: current[item.sku_id]?.option_id ?? item.dosage_option_id ?? "",
+                                  note: event.target.value
+                                }
+                              }))}
+                              placeholder="请说明人工改档依据"
+                            />
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {item.primary_system_id ? <p className="muted">对应身体系统：{BODY_SYSTEM_LABELS[item.primary_system_id] ?? item.primary_system_id}</p> : null}
                     {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
                     {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
                   </div>
-                  <span><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</span>
-                </label>
-              ))}
+                  <label><input type="checkbox" checked={!excludedSkuIds.includes(item.sku_id)} onChange={(event) => setExcludedSkuIds((current) => event.target.checked ? current.filter((id) => id !== item.sku_id) : [...current, item.sku_id])} /> 纳入</label>
+                </div>
+              );
+              })}
               {!latestDraft.recommended_skus.length ? (
                 <p className="error-text">当前草案没有营养素推荐，不能审核发布，请重新生成草案。</p>
               ) : null}

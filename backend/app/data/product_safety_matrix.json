@@ -1,6 +1,6 @@
 {
-  "version": "product-safety-matrix-v4-client-v2-2026-07-27",
-  "source_note": "融合既有产品禁忌与甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第四、五节的一次性结构化规则。",
+  "version": "product-safety-matrix-v5-client-v3-2026-07-29",
+  "source_note": "融合既有产品禁忌与甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第四、五节的一次性结构化规则，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关提示。",
   "severity_policy": {
     "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
     "caution": "慎用/注意/需咨询医生/需监测；不阻断推荐，但必须进入医生审核和客户可见安全提示。",
@@ -562,11 +562,11 @@
       "sku_ids": ["sku_fish_oil_rtg"],
       "action": "warn",
       "all_conditions": [],
-      "any_conditions": ["condition:冠心病", "condition:心肌梗死", "condition:心梗史", "condition:支架术后", "med:他汀"],
-      "message": "鱼油不能替代冠心病或调脂治疗；如同时使用抗凝或抗血小板药，应由医生确认剂量并监测出血风险。",
-      "source_ref": "甲方禁忌矩阵V2#七-冠心病召回补充警告",
+      "any_conditions": ["condition:冠心病", "condition:心肌梗死", "condition:心梗史", "condition:支架术后"],
+      "message": "鱼油不能替代冠心病、心梗或支架术后的规范治疗；如同时使用抗凝或抗血小板药，应由医生确认剂量并监测出血风险。",
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-冠心病",
       "enabled": true,
-      "version": "4.0.0"
+      "version": "5.0.0"
     },
     {
       "rule_id": "client_recall_statin_coq10_evidence_warn",
@@ -574,10 +574,10 @@
       "action": "warn",
       "all_conditions": [],
       "any_conditions": ["med:他汀", "med:阿托伐他汀", "med:瑞舒伐他汀", "med:辛伐他汀"],
-      "message": "他汀相关辅酶Q10补充的获益存在个体差异，不替代调脂治疗；应结合肌肉症状和用药情况评估。",
-      "source_ref": "甲方禁忌矩阵V2#七-他汀召回补充警告",
+      "message": "仅有他汀用药不构成辅酶Q10常规召回；如拟用于他汀相关肌肉症状，应先排除其他病因，记录试用依据并复查症状，且不得替代调脂治疗。",
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-他汀相关肌肉症状",
       "enabled": true,
-      "version": "4.0.0"
+      "version": "5.0.0"
     },
     {
       "rule_id": "client_recall_hashimoto_selenium_evidence_warn",

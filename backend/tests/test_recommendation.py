@@ -569,14 +569,14 @@ class RecommendationServiceTests(unittest.TestCase):
         )
         self.assertIn("二甲双胍", b_complex.reason)
 
-    def test_client_coronary_or_statin_rule_recalls_fish_oil_and_coq10_with_warnings(self) -> None:
+    def test_client_coronary_rule_recalls_fish_oil_without_forcing_coq10(self) -> None:
         case = self._prepare_case(
             "基础体检未见明显急性异常。",
             Questionnaire(
                 age=58,
                 sex="male",
                 known_conditions=["冠心病", "支架术后"],
-                medications=["阿托伐他汀"],
+                medications=[],
                 allergies=[],
             ),
         )
@@ -585,9 +585,60 @@ class RecommendationServiceTests(unittest.TestCase):
         by_sku = {item.sku_id: item for item in draft.recommended_skus}
 
         self.assertIn("sku_fish_oil_rtg", by_sku)
-        self.assertIn("sku_coq10", by_sku)
+        self.assertTrue(
+            any(
+                evidence_id == "signal:client_recall_rcl_coronary_cardiovascular_fish_oil"
+                for evidence_id in by_sku["sku_fish_oil_rtg"].evidence_ids
+            )
+        )
+        self.assertNotIn("sku_coq10", by_sku)
         self.assertTrue(any("不能替代" in warning for warning in by_sku["sku_fish_oil_rtg"].warnings))
-        self.assertTrue(any("个体差异" in warning for warning in by_sku["sku_coq10"].warnings))
+
+    def test_client_statin_use_alone_does_not_recall_fish_oil_or_coq10(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=58,
+                sex="male",
+                medications=["阿托伐他汀"],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        by_sku = {item.sku_id: item for item in draft.recommended_skus}
+
+        self.assertNotIn("sku_fish_oil_rtg", by_sku)
+        self.assertNotIn("sku_coq10", by_sku)
+
+    def test_client_statin_muscle_symptoms_add_nonmandatory_coq10_guidance(self) -> None:
+        case = self._prepare_case(
+            "基础体检未见明显急性异常。",
+            Questionnaire(
+                age=58,
+                sex="male",
+                symptoms=["近期肌肉酸痛"],
+                medications=["阿托伐他汀"],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        guidance = " ".join(draft.report_sections.get("风险提示", []))
+        coq10 = next(
+            (item for item in draft.recommended_skus if item.sku_id == "sku_coq10"),
+            None,
+        )
+
+        self.assertIn("排除其他病因后", guidance)
+        self.assertIn("不属于常规或强制推荐", guidance)
+        if coq10 is not None:
+            self.assertFalse(
+                any(
+                    evidence_id.startswith("signal:client_recall_")
+                    for evidence_id in coq10.evidence_ids
+                )
+            )
 
     def test_client_gut_dysbiosis_rule_recalls_probiotic_with_evidence_warning(self) -> None:
         case = self._prepare_case(

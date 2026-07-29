@@ -331,6 +331,34 @@ export interface RecommendationDraft {
   key_lab_highlights: string[];
   recommended_skus: DraftRecommendationItem[];
   lifestyle_actions: string[];
+  lifestyle_plan?: {
+    status: "ready" | "partial" | "needs_review" | "blocked";
+    rule_version: string;
+    selected_protocols: Array<{
+      protocol_id: string;
+      title: string;
+      admission: "direct" | "review" | "referral";
+      reason: string;
+      anchor_refs: string[];
+    }>;
+    sections: Array<{
+      domain: "diet" | "movement" | "sleep" | "stress";
+      title: string;
+      actions: Array<{
+        action_id: string;
+        domain: "diet" | "movement" | "sleep" | "stress";
+        category: string;
+        text: string;
+        anchor_refs: string[];
+        quantity?: string | null;
+        safety_level: "standard" | "review" | "referral";
+        clinician_review_required: boolean;
+      }>;
+    }>;
+    monitoring: string[];
+    missing_info: string[];
+    clinician_review_required: boolean;
+  } | null;
   rationale: string[];
   evidence_ids: string[];
   evidence_details: string[];

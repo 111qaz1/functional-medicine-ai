@@ -79,9 +79,15 @@ const ANALYSIS_LABELS: Record<string, string> = {
 function reportText(draft: RecommendationDraft | null | undefined) {
   if (!draft) return "";
   return Object.entries(draft.report_sections)
+    .filter(([, raw]) => (Array.isArray(raw) ? raw.some(Boolean) : Boolean(raw)))
     .map(([title, raw]) => {
       const items = Array.isArray(raw) ? raw : [raw];
-      return [`## ${title}`, ...items.filter(Boolean).map((item) => `- ${item}`)].join("\n");
+      return [
+        `## ${title}`,
+        ...items
+          .filter(Boolean)
+          .map((item) => (String(item).trim().startsWith("### ") ? String(item).trim() : `- ${item}`))
+      ].join("\n");
     })
     .join("\n\n");
 }

@@ -573,6 +573,41 @@ class StructuredSystemFinding(StrictModel):
     finding_ids: list[str] = Field(default_factory=list)
 
 
+class LifestyleAction(StrictModel):
+    action_id: str
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    category: str
+    text: str
+    anchor_refs: list[str] = Field(default_factory=list)
+    quantity: str | None = None
+    safety_level: Literal["standard", "review", "referral"] = "standard"
+    clinician_review_required: bool = False
+
+
+class LifestyleSection(StrictModel):
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    title: str
+    actions: list[LifestyleAction] = Field(default_factory=list)
+
+
+class LifestyleProtocolSelection(StrictModel):
+    protocol_id: str
+    title: str
+    admission: Literal["direct", "review", "referral"]
+    reason: str
+    anchor_refs: list[str] = Field(default_factory=list)
+
+
+class LifestylePlan(StrictModel):
+    status: Literal["ready", "partial", "needs_review", "blocked"] = "partial"
+    rule_version: str = "lifestyle-v2"
+    selected_protocols: list[LifestyleProtocolSelection] = Field(default_factory=list)
+    sections: list[LifestyleSection] = Field(default_factory=list)
+    monitoring: list[str] = Field(default_factory=list)
+    missing_info: list[str] = Field(default_factory=list)
+    clinician_review_required: bool = False
+
+
 class RecommendationDraft(StrictModel):
     id: str
     case_id: str
@@ -581,6 +616,7 @@ class RecommendationDraft(StrictModel):
     key_lab_highlights: list[str] = Field(default_factory=list)
     recommended_skus: list[DraftRecommendationItem] = Field(default_factory=list)
     lifestyle_actions: list[str] = Field(default_factory=list)
+    lifestyle_plan: LifestylePlan | None = None
     rationale: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)

@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
+import random
 import re
 import threading
+import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -47,6 +51,17 @@ from app.services.body_systems import (
 )
 from app.services.finding_standardization import STANDARDIZATION_VERSION
 from app.services.evidence_policy import classify_finding_evidence, system_evidence_score
+
+
+logger = logging.getLogger(__name__)
+
+_RETRYABLE_MODEL_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+_MODEL_CONNECTION_ERRORS = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
 
 
 def utc_now() -> datetime:
@@ -154,6 +169,9 @@ class OpenAICompatibleCaseAnalysisProvider:
         support_goal_codes: tuple[str, ...] = (),
         support_goal_definitions: list[dict[str, str]] | None = None,
         http_client: httpx.Client | None = None,
+        retry_attempts: int = 2,
+        retry_base_delay_seconds: float = 1.0,
+        retry_max_delay_seconds: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -171,6 +189,12 @@ class OpenAICompatibleCaseAnalysisProvider:
         self.support_goal_codes = support_goal_codes
         self.support_goal_definitions = support_goal_definitions or []
         self.http_client = http_client
+        self.retry_attempts = max(0, min(int(retry_attempts), 5))
+        self.retry_base_delay_seconds = max(0.0, float(retry_base_delay_seconds))
+        self.retry_max_delay_seconds = max(
+            self.retry_base_delay_seconds,
+            float(retry_max_delay_seconds),
+        )
 
     def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
         batches = self._document_batches(uploaded_file)
@@ -469,41 +493,72 @@ class OpenAICompatibleCaseAnalysisProvider:
             self.thinking_timeout_seconds if thinking_type == "enabled" else self.timeout_seconds
         )
         try:
-            if self.api_style == "chat":
-                response = client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json=self._chat_json_payload(
-                        instructions=instructions,
-                        content=content,
-                        schema=schema,
-                        schema_name=schema_name,
-                        thinking_type=thinking_type,
-                    ),
-                    timeout=request_timeout,
-                )
-            else:
-                response = client.post(
-                    f"{self.base_url}/responses",
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": self.model,
-                        "temperature": self.temperature,
-                        "thinking": {"type": thinking_type},
-                        "instructions": instructions,
-                        "input": [{"role": "user", "content": content}],
-                        "text": {
-                            "format": {
-                                "type": "json_schema",
-                                "name": schema_name,
-                                "strict": True,
-                                "schema": schema,
-                            }
-                        },
-                    },
-                    timeout=request_timeout,
-                )
-            response.raise_for_status()
+            for attempt in range(self.retry_attempts + 1):
+                try:
+                    if self.api_style == "chat":
+                        response = client.post(
+                            f"{self.base_url}/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {self.api_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json=self._chat_json_payload(
+                                instructions=instructions,
+                                content=content,
+                                schema=schema,
+                                schema_name=schema_name,
+                                thinking_type=thinking_type,
+                            ),
+                            timeout=request_timeout,
+                        )
+                    else:
+                        response = client.post(
+                            f"{self.base_url}/responses",
+                            headers={
+                                "Authorization": f"Bearer {self.api_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={
+                                "model": self.model,
+                                "temperature": self.temperature,
+                                "thinking": {"type": thinking_type},
+                                "instructions": instructions,
+                                "input": [{"role": "user", "content": content}],
+                                "text": {
+                                    "format": {
+                                        "type": "json_schema",
+                                        "name": schema_name,
+                                        "strict": True,
+                                        "schema": schema,
+                                    }
+                                },
+                            },
+                            timeout=request_timeout,
+                        )
+                    response.raise_for_status()
+                    break
+                except Exception as exc:
+                    if attempt >= self.retry_attempts or not self._is_retryable_request_error(exc):
+                        raise
+                    retry_number = attempt + 1
+                    delay = self._retry_delay_seconds(exc, retry_number)
+                    status_code = (
+                        exc.response.status_code
+                        if isinstance(exc, httpx.HTTPStatusError)
+                        else None
+                    )
+                    logger.warning(
+                        "case analysis model request retry schema=%s retry=%s/%s "
+                        "error_type=%s status=%s delay_seconds=%.2f",
+                        schema_name,
+                        retry_number,
+                        self.retry_attempts,
+                        exc.__class__.__name__,
+                        status_code,
+                        delay,
+                    )
+                    if delay > 0:
+                        time.sleep(delay)
             text = self._extract_response_text(response.json())
             try:
                 parsed = self._parse_json_object(text)
@@ -531,6 +586,50 @@ class OpenAICompatibleCaseAnalysisProvider:
         finally:
             if close_client:
                 client.close()
+
+    @staticmethod
+    def _is_retryable_request_error(exc: Exception) -> bool:
+        if isinstance(exc, httpx.ReadTimeout):
+            return False
+        if isinstance(exc, httpx.ConnectTimeout):
+            return True
+        if isinstance(exc, _MODEL_CONNECTION_ERRORS):
+            return True
+        return (
+            isinstance(exc, httpx.HTTPStatusError)
+            and exc.response.status_code in _RETRYABLE_MODEL_HTTP_STATUSES
+        )
+
+    def _retry_delay_seconds(self, exc: Exception, retry_number: int) -> float:
+        retry_after = self._retry_after_seconds(exc)
+        if retry_after is not None:
+            return min(self.retry_max_delay_seconds, max(0.0, retry_after))
+        delay = min(
+            self.retry_max_delay_seconds,
+            self.retry_base_delay_seconds * (3 ** max(retry_number - 1, 0)),
+        )
+        if delay <= 0:
+            return 0.0
+        jitter = random.uniform(0.0, min(0.25, delay * 0.25))
+        return min(self.retry_max_delay_seconds, delay + jitter)
+
+    @staticmethod
+    def _retry_after_seconds(exc: Exception) -> float | None:
+        if not isinstance(exc, httpx.HTTPStatusError):
+            return None
+        value = exc.response.headers.get("Retry-After")
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return None
 
     def _chat_json_payload(
         self,
@@ -1656,6 +1755,7 @@ class CaseAnalysisService:
         semantic_support_service=None,
         questionnaire_import_service=None,
         worker_count: int = 1,
+        document_worker_count: int = 2,
     ) -> None:
         self.repository = repository
         self.case_service = case_service
@@ -1666,6 +1766,7 @@ class CaseAnalysisService:
         self.standardization_service = standardization_service
         self.semantic_support_service = semantic_support_service
         self.questionnaire_import_service = questionnaire_import_service
+        self.document_worker_count = max(1, min(int(document_worker_count), 4))
         self.executor = ThreadPoolExecutor(max_workers=max(1, worker_count), thread_name_prefix="case-analysis")
         self._submit_lock = threading.Lock()
         self._review_lock = threading.Lock()
@@ -1743,11 +1844,10 @@ class CaseAnalysisService:
 
             results_by_id = {item.file_id: item for item in results}
             if pending_files:
-                worker_count = min(2, len(pending_files))
-                analysis.current_file_name = (
-                    pending_files[0].filename
-                    if worker_count == 1
-                    else f"并行处理 {len(pending_files)} 份资料"
+                worker_count = min(self.document_worker_count, len(pending_files))
+                analysis.current_file_name = self._document_progress_label(
+                    len(pending_files),
+                    worker_count,
                 )
                 self._save(analysis)
                 document_executor = ThreadPoolExecutor(
@@ -1771,8 +1871,9 @@ class CaseAnalysisService:
                         analysis.document_results = results
                         analysis.progress_current = len(results)
                         remaining = len(pending_files) - (len(results_by_id) - len(completed_ids))
-                        analysis.current_file_name = (
-                            f"并行处理 {remaining} 份资料" if remaining > 1 else None
+                        analysis.current_file_name = self._document_progress_label(
+                            remaining,
+                            min(self.document_worker_count, remaining),
                         )
                         self._save(analysis)
                 except Exception:
@@ -1827,6 +1928,11 @@ class CaseAnalysisService:
         except Exception as exc:
             # Every background failure must become a terminal state. Otherwise an
             # unexpected parser/provider exception leaves the UI polling forever.
+            logger.error(
+                "case analysis failed analysis_id=%s error_type=%s",
+                analysis.id,
+                exc.__class__.__name__,
+            )
             analysis.status = AnalysisStatus.failed
             analysis.error_code = self._error_code(exc)
             analysis.error_message = self._analysis_error_message(exc)
@@ -2745,9 +2851,28 @@ class CaseAnalysisService:
         return float(match.group()) if match else None
 
     @staticmethod
+    def _document_progress_label(remaining: int, parallel_count: int) -> str | None:
+        if remaining <= 0:
+            return None
+        if parallel_count <= 1:
+            return f"正在处理 {remaining} 份资料"
+        return f"正在处理 {remaining} 份资料（最多并行 {parallel_count} 份）"
+
+    @staticmethod
     def _error_code(exc: Exception) -> str:
         if isinstance(exc, httpx.TimeoutException):
             return "model_timeout"
+        if isinstance(exc, _MODEL_CONNECTION_ERRORS):
+            return "model_connection_interrupted"
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            if status in {401, 403}:
+                return "model_auth_failed"
+            if status == 429:
+                return "model_rate_limited"
+            if status in _RETRYABLE_MODEL_HTTP_STATUSES:
+                return "model_service_unavailable"
+            return f"model_http_{status}"
         if isinstance(exc, json.JSONDecodeError):
             return "invalid_json"
         if isinstance(exc, ValidationError):
@@ -2769,10 +2894,21 @@ class CaseAnalysisService:
             return f"模型返回的结构化字段不完整或格式不正确{suffix}，请重新开始综合分析。"
         if isinstance(exc, httpx.TimeoutException):
             return "大模型响应超时，请重新开始综合分析。"
+        if isinstance(exc, _MODEL_CONNECTION_ERRORS):
+            return (
+                "大模型服务连接暂时中断，自动重试后仍未恢复。"
+                "已完成的资料将被保留，请稍后重新开始综合分析。"
+            )
         if isinstance(exc, json.JSONDecodeError):
             return "大模型未返回有效JSON，请重新开始综合分析。"
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
+            if status in {401, 403}:
+                return "大模型认证失败，请管理员检查 API Key 和模型权限。"
+            if status == 429:
+                return "大模型请求过于频繁或当前额度不足，请稍后重新开始综合分析。"
+            if status in _RETRYABLE_MODEL_HTTP_STATUSES:
+                return "大模型服务暂时不可用，自动重试后仍未恢复，请稍后重新开始综合分析。"
             return f"大模型服务请求失败（HTTP {status}），请检查模型配置或稍后重试。"
         return (str(exc).strip() or exc.__class__.__name__)[:300]
 
@@ -2780,6 +2916,8 @@ class CaseAnalysisService:
     def _final_generation_error_message(exc: Exception) -> str:
         if isinstance(exc, httpx.TimeoutException):
             return "model_timeout: 最终病例综合等待模型响应超时，请直接重试草案生成。"
+        if isinstance(exc, _MODEL_CONNECTION_ERRORS):
+            return "model_connection_interrupted: 大模型服务连接暂时中断，请直接重试草案生成。"
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
             if status in {401, 403}:

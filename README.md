@@ -137,9 +137,13 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `LLM_API_STYLE`
 - `LLM_TIMEOUT_SECONDS`
 - `LLM_TEMPERATURE`
+- `FM_LLM_RETRY_ATTEMPTS`（默认 `2`，表示初次请求失败后最多重试两次）
+- `FM_LLM_RETRY_BASE_DELAY_SECONDS`（默认 `1`）
+- `FM_LLM_RETRY_MAX_DELAY_SECONDS`（默认 `10`）
 - `FM_MAX_UPLOAD_MB`（默认 `50`）
 - `FM_MAX_PDF_PAGES`（默认 `200`）
 - `FM_ANALYSIS_WORKERS`（默认 `1`）
+- `FM_CASE_DOCUMENT_WORKERS`（默认 `2`，限制范围 `1-4`）
 
 前端：
 - `NEXT_PUBLIC_API_BASE_URL`

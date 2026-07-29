@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
@@ -402,6 +404,27 @@ class CaseAnalysisTests(unittest.TestCase):
             [item.file_id for item in analysis.document_results],
             [f"file-{index}" for index in range(4)],
         )
+
+    def test_connection_failure_uses_safe_error_code_and_message(self) -> None:
+        class DisconnectingProvider(FakeAnalysisProvider):
+            def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
+                raise httpx.RemoteProtocolError(
+                    "Server disconnected without sending a response.",
+                    request=httpx.Request("POST", "https://synthetic.invalid/v1/responses"),
+                )
+
+        case = self._create_case()
+        self._add_text_file(case.id)
+        self.service.provider = DisconnectingProvider()
+
+        analysis = self._wait(
+            self.service.create_analysis(case.id, third_party_processing_confirmed=True).id
+        )
+
+        self.assertEqual(analysis.status, AnalysisStatus.failed)
+        self.assertEqual(analysis.error_code, "model_connection_interrupted")
+        self.assertIn("大模型服务连接暂时中断", analysis.error_message)
+        self.assertNotIn("Server disconnected", analysis.error_message)
 
     def test_cache_is_isolated_by_doctor_scope(self) -> None:
         first_case = self._create_case(owner="doctor-a")
@@ -896,6 +919,136 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(result, {"status": "connected"})
         self.assertEqual(client.calls[0][0], "https://synthetic.invalid/v1/responses")
         self.assertEqual(client.calls[0][1]["json"]["thinking"], {"type": "disabled"})
+
+    def test_model_request_retries_remote_protocol_disconnect(self) -> None:
+        attempts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise httpx.RemoteProtocolError(
+                    "Server disconnected without sending a response.",
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"output_text": '{"status":"connected"}'},
+                request=request,
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://synthetic.invalid/v1",
+            api_key="synthetic",
+            model="synthetic",
+            http_client=client,
+            retry_attempts=2,
+            retry_base_delay_seconds=0,
+            retry_max_delay_seconds=0,
+        )
+        try:
+            result = provider._call_json(
+                instructions="synthetic",
+                content=[{"type": "input_text", "text": "synthetic"}],
+                schema={
+                    "type": "object",
+                    "properties": {"status": {"type": "string"}},
+                    "required": ["status"],
+                    "additionalProperties": False,
+                },
+                schema_name="synthetic_connection",
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(result, {"status": "connected"})
+        self.assertEqual(attempts, 3)
+
+    def test_model_request_does_not_retry_auth_failure(self) -> None:
+        attempts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            return httpx.Response(401, json={"error": "synthetic"}, request=request)
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://synthetic.invalid/v1",
+            api_key="synthetic",
+            model="synthetic",
+            http_client=client,
+            retry_attempts=2,
+            retry_base_delay_seconds=0,
+            retry_max_delay_seconds=0,
+        )
+        try:
+            with self.assertRaises(httpx.HTTPStatusError):
+                provider._call_json(
+                    instructions="synthetic",
+                    content=[{"type": "input_text", "text": "synthetic"}],
+                    schema={
+                        "type": "object",
+                        "properties": {"status": {"type": "string"}},
+                        "required": ["status"],
+                        "additionalProperties": False,
+                    },
+                    schema_name="synthetic_connection",
+                )
+        finally:
+            client.close()
+
+        self.assertEqual(attempts, 1)
+
+    def test_model_request_retries_503_and_honors_bounded_retry_after(self) -> None:
+        attempts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(
+                    503,
+                    headers={"Retry-After": "30"},
+                    json={"error": "synthetic"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"output_text": '{"status":"connected"}'},
+                request=request,
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://synthetic.invalid/v1",
+            api_key="synthetic",
+            model="synthetic",
+            http_client=client,
+            retry_attempts=2,
+            retry_base_delay_seconds=1,
+            retry_max_delay_seconds=10,
+        )
+        try:
+            with patch("app.services.case_analysis.time.sleep") as sleep:
+                result = provider._call_json(
+                    instructions="synthetic",
+                    content=[{"type": "input_text", "text": "synthetic"}],
+                    schema={
+                        "type": "object",
+                        "properties": {"status": {"type": "string"}},
+                        "required": ["status"],
+                        "additionalProperties": False,
+                    },
+                    schema_name="synthetic_connection",
+                )
+        finally:
+            client.close()
+
+        self.assertEqual(result, {"status": "connected"})
+        self.assertEqual(attempts, 2)
+        sleep.assert_called_once_with(10)
 
     def test_kimi_chat_style_maps_multimodal_content_and_thinking_timeout(self) -> None:
         class StubResponse:

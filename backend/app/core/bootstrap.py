@@ -253,6 +253,9 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             system_codes=finding_standardization_service.system_codes,
             support_goal_codes=semantic_support_service.goal_codes,
             support_goal_definitions=semantic_support_service.prompt_catalog(),
+            retry_attempts=settings.llm_retry_attempts,
+            retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
+            retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
         )
     case_analysis_service = CaseAnalysisService(
         repository=repository,
@@ -265,6 +268,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         semantic_support_service=semantic_support_service,
         questionnaire_import_service=questionnaire_import_service,
         worker_count=settings.analysis_worker_count,
+        document_worker_count=settings.case_document_worker_count,
     )
     review_service = ReviewService(
         repository,

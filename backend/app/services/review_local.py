@@ -629,7 +629,11 @@ class ReviewService:
     def _normalize_report_heading_marker(self, text: str) -> str:
         normalized = str(text or "").strip()
         normalized = re.sub(r"^(#{1,3})(?!#)\s*(?=\S)", r"\1 ", normalized)
-        normalized = re.sub(r"^(#{2,3})\s+(\d+[\.\uFF0E、])\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(
+            r"^(#{2,3})\s+(\d+\.\d+|\d+[\.\uFF0E、])\s*",
+            r"\1 \2 ",
+            normalized,
+        )
         normalized = re.sub(r"^(#{2,3})\s+([A-Z]\.)\s*", r"\1 \2 ", normalized)
         normalized = re.sub(r"[ \t\f\v]+", " ", normalized).strip()
         return normalized

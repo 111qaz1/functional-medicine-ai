@@ -71,6 +71,7 @@ class RecommendationContext:
     summary_nutrient_hints: list[str]
     structured_system_findings: list[StructuredSystemFinding] = field(default_factory=list)
     sex: str | None = None
+    unresolved_questionnaire_fields: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -708,7 +709,7 @@ class RecommendationService:
         risk_notices = list(
             dict.fromkeys(
                 [
-                    *self._evaluate_risk_notices(context, case.questionnaire.age if case.questionnaire else None),
+                    *self._evaluate_risk_notices(context, context.age),
                     *self._client_recall_guidance(context),
                 ]
             )
@@ -1056,12 +1057,38 @@ class RecommendationService:
         )
         family_history = {self._normalize(text) for text in (questionnaire.family_history if questionnaire else [])}
         goals = {self._normalize(text) for text in (questionnaire.goals if questionnaire else [])}
-        medications = {self._normalize(text) for text in (questionnaire.medications if questionnaire else [])}
-        allergies = {self._normalize(text) for text in (questionnaire.allergies if questionnaire else [])}
+        unresolved_questionnaire_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        medications = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.medications if questionnaire else [])
+            }
+            if "medications" not in unresolved_questionnaire_fields
+            else set()
+        )
+        allergies = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.allergies if questionnaire else [])
+            }
+            if "allergies" not in unresolved_questionnaire_fields
+            else set()
+        )
+        if "symptoms" in unresolved_questionnaire_fields:
+            symptoms = set()
         food_sensitivities = {
             self._normalize(text) for text in (questionnaire.food_sensitivities if questionnaire else [])
         }
-        msq_system_scores = dict(questionnaire.msq_system_scores) if questionnaire else {}
+        msq_system_scores = (
+            dict(questionnaire.msq_system_scores)
+            if questionnaire
+            and "msq_system_scores" not in unresolved_questionnaire_fields
+            else {}
+        )
         summary_parts = [(case.clinical_summary_text or "").strip()]
         latest_analysis = self.repository.get_latest_case_analysis(case.id)
         structured_system_findings: list[StructuredSystemFinding] = []
@@ -1078,24 +1105,31 @@ class RecommendationService:
 
         lifestyle_tags: set[str] = set()
         if questionnaire:
-            if (
+            if "sleep_hours" not in unresolved_questionnaire_fields and (
                 questionnaire.sleep_hours is not None
                 and questionnaire.sleep_hours < 6
-            ) or self._normalize(questionnaire.sleep_quality or "") in {
-                "poor",
-                "\u5dee",
-            }:
+            ):
+                lifestyle_tags.add("sleep_recovery")
+            if (
+                "sleep_quality" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.sleep_quality or "")
+                in {"poor", "\u5dee"}
+            ):
                 lifestyle_tags.add("sleep_recovery")
             if questionnaire.stress_level == "high":
                 lifestyle_tags.add("stress_support")
-            if self._normalize(questionnaire.exercise_frequency or "") in {
-                "rare",
-                "none",
-                "很少",
-                "无",
-                "无规律运动",
-                "寰堝皯",
-            }:
+            if (
+                "exercise_frequency" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.exercise_frequency or "")
+                in {
+                    "rare",
+                    "none",
+                    "很少",
+                    "无",
+                    "无规律运动",
+                    "寰堝皯",
+                }
+            ):
                 lifestyle_tags.add("movement")
             if self._normalize(questionnaire.bowel_habits or "") in {"constipation", "便秘", "渚跨"}:
                 lifestyle_tags.add("gut_support")
@@ -1171,13 +1205,25 @@ class RecommendationService:
             allergies=allergies,
             food_sensitivities=food_sensitivities,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
-            age=questionnaire.age if questionnaire else None,
+            age=(
+                questionnaire.age
+                if questionnaire
+                and "age" not in unresolved_questionnaire_fields
+                else None
+            ),
             lifestyle_tags=lifestyle_tags,
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
             summary_nutrient_hints=summary_nutrient_hints,
             structured_system_findings=structured_system_findings,
-            sex=self._normalize(questionnaire.sex) if questionnaire and questionnaire.sex else None,
+            sex=(
+                self._normalize(questionnaire.sex)
+                if questionnaire
+                and questionnaire.sex
+                and "sex" not in unresolved_questionnaire_fields
+                else None
+            ),
+            unresolved_questionnaire_fields=unresolved_questionnaire_fields,
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
@@ -1304,6 +1350,10 @@ class RecommendationService:
             risk_notices.append("未成年案例需要医生重点审核营养素种类与剂量。")
         if context.pregnancy:
             risk_notices.append("孕期或哺乳期需要医生重点审核营养素种类与剂量。")
+        if "pregnant_or_lactating" in context.unresolved_questionnaire_fields:
+            risk_notices.append(
+                "妊娠或哺乳状态尚未确认，孕哺期禁用信息请见各营养素的“注意/禁忌”。"
+            )
         if any(
             term in condition
             for condition in context.conditions
@@ -1354,6 +1404,23 @@ class RecommendationService:
                 missing.append("尚未补充 MSQ 系统负担评分。")
         else:
             missing.append("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。")
+        unresolved_messages = {
+            "age": "患者年龄需补充确认。",
+            "sex": "患者性别需补充确认。",
+            "pregnant_or_lactating": "妊娠或哺乳状态需补充确认。",
+            "medications": "当前用药信息需补充确认。",
+            "allergies": "过敏信息需补充确认。",
+        }
+        unresolved_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        missing.extend(
+            unresolved_messages[field_name]
+            for field_name in sorted(unresolved_fields)
+            if field_name in unresolved_messages
+        )
         missing.extend(self._visible_parse_warnings(case.parsing_missing_fields, case=case))
         return list(dict.fromkeys(missing))
 

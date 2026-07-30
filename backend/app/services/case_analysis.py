@@ -56,6 +56,7 @@ from app.services.report_content import (
     build_plan_summary,
     group_abnormal_items,
 )
+from app.services.questionnaire_import import QuestionnaireParseResult
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,18 @@ class _DocumentPayload(_StrictPayload):
     questionnaire: Questionnaire | None = None
     food_sensitivity: _FoodPayload | None = None
     warnings: list[str] = Field(default_factory=list)
+
+
+class _QuestionnaireReviewItem(_StrictPayload):
+    field_name: str
+    supported: bool = False
+    value_json: str | None = None
+    source_text: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class _QuestionnaireReviewPayload(_StrictPayload):
+    reviews: list[_QuestionnaireReviewItem] = Field(default_factory=list)
 
 
 class _SynthesisPayload(_StrictPayload):
@@ -225,6 +238,13 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "所有摘要、解释、系统分析和警告必须使用简体中文；医学缩写和指标英文名可以保留。"
                 "如为 MSQ，questionnaire 必须映射为系统既有问卷字段；只能纳入明确勾选且分值大于 0 的症状，"
                 "不得把未勾选的症状选项当成患者症状，msq_system_scores 必须来自已选分值。"
+                "MSQ 的患者年龄只能来自姓名/性别/年龄/日期基本信息区域；初次月经年龄、停经年龄、"
+                "绝经年龄、生物年龄、代谢年龄、骨龄和系统年龄均不是患者年龄。患者年龄空白或有歧义时 age 必须为 null。"
+                "如果问卷基本信息区域明确出现多个不同患者年龄且无法消解，还必须在 warnings 中写入"
+                "__MSQ_UNRESOLVED__:age；合法空白年龄不写该标记。"
+                "妊娠、用药或过敏信息有勾选冲突且无法确认时不得猜测，并在 warnings 中分别写入"
+                "__MSQ_UNRESOLVED__:pregnant_or_lactating、__MSQ_UNRESOLVED__:medications 或"
+                "__MSQ_UNRESOLVED__:allergies。"
                 "如为慢性食物敏感报告，单独提取轻/中/重度食物和三条原文解读。"
             )
             raw = self._call_json(
@@ -257,6 +277,61 @@ class OpenAICompatibleCaseAnalysisProvider:
             payloads.append(payload)
 
         return self._merge_document_payloads(uploaded_file, payloads)
+
+    def review_questionnaire_fields(
+        self,
+        *,
+        file_name: str,
+        questionnaire: Questionnaire,
+        uncertain_fields: dict[str, list[str]],
+        candidate_values: dict[str, Any] | None = None,
+    ) -> list[_QuestionnaireReviewItem]:
+        requested_fields = list(uncertain_fields)
+        if not requested_fields:
+            return []
+        payload = {
+            "file_name": file_name,
+            "fields": [
+                {
+                    "field_name": field_name,
+                    "current_value": (candidate_values or {}).get(
+                        field_name,
+                        getattr(questionnaire, field_name, None),
+                    ),
+                    "questionnaire_excerpts": uncertain_fields[field_name],
+                }
+                for field_name in requested_fields
+            ],
+        }
+        raw = self._call_json(
+            instructions=(
+                "你是 MSQ 问卷字段复核器。输入只包含同一份 MSQ 问卷中的不确定字段及相关原文片段。"
+                "不得使用病例报告、检验结果、疾病、姓名常识或其他资料推测。"
+                "只能返回输入 fields 中列出的字段，不得重新分析整份病例。"
+                "患者年龄 age 只能来自姓名/性别/年龄/日期基本信息区域；"
+                "初次月经年龄、停经年龄、绝经年龄、生物年龄、代谢年龄、骨龄和系统年龄均不是患者年龄。"
+                "每个 supported=true 的结果必须返回可在对应 questionnaire_excerpts 中逐字找到的 source_text，"
+                "并将最终字段值编码为合法 JSON 字符串放入 value_json。"
+                "列表或字典字段的 value_json 必须包含 current_value 中已确认内容，并只按原文补充或修正不确定部分。"
+                "字段没有明确证据、选项冲突无法消解或只能推测时，必须返回 supported=false。"
+                "不得为了填满问卷而补写合法空白字段。严格按 JSON Schema 输出，不得输出 Markdown。"
+            ),
+            content=[
+                {
+                    "type": "input_text",
+                    "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                }
+            ],
+            schema=_QuestionnaireReviewPayload.model_json_schema(),
+            schema_name="msq_questionnaire_field_review",
+            thinking_type="disabled",
+        )
+        result = _QuestionnaireReviewPayload.model_validate(raw)
+        return [
+            item
+            for item in result.reviews
+            if item.field_name in requested_fields
+        ]
 
     def synthesize_case(
         self,
@@ -393,12 +468,20 @@ class OpenAICompatibleCaseAnalysisProvider:
     def _compact_document_for_synthesis(
         cls, result: DocumentAnalysisResult
     ) -> dict[str, Any]:
+        unresolved_msq = any(
+            warning.startswith("__MSQ_UNRESOLVED__:")
+            for warning in result.warnings
+        )
         return {
             "file_id": result.file_id,
             "file_name": result.file_name,
             "report_type": result.report_type,
             "medical_content": result.medical_content,
-            "summary": result.summary,
+            "summary": (
+                "该文件包含存在未确认字段的 MSQ 问卷；未确认字段不得用于病例事实。"
+                if unresolved_msq and result.questionnaire
+                else result.summary
+            ),
             "abnormal_findings": [
                 cls._compact_finding_for_synthesis(item)
                 for item in result.abnormal_findings
@@ -409,7 +492,11 @@ class OpenAICompatibleCaseAnalysisProvider:
                 if result.food_sensitivity is not None
                 else None
             ),
-            "warnings": result.warnings,
+            "warnings": [
+                warning
+                for warning in result.warnings
+                if not warning.startswith("__MSQ_UNRESOLVED__:")
+            ],
         }
 
     def _document_batches(self, uploaded_file) -> list[list[dict[str, Any]]]:
@@ -1139,6 +1226,8 @@ class OpenAICompatibleCaseAnalysisProvider:
             "并填写 0 到 1 的 mapping_confidence。结节、肿块、占位、BI-RADS、Lung-RADS、"
             "自身抗体阳性、肿瘤标志物及病理发现只能填写身体系统，不得填写营养支持目标。"
             "不得输出产品名称或 SKU。"
+            "识别 MSQ 时，questionnaire.age 只能来自患者基本信息栏；不得使用初次月经年龄、停经年龄、"
+            "绝经年龄、生物年龄、代谢年龄、骨龄或系统年龄。基本信息年龄空白或冲突时必须返回 null。"
             f"检验指标代码白名单：{marker_codes}。"
             f"临床发现代码白名单：{finding_codes}。"
             f"身体系统代码白名单：{system_codes}。"
@@ -1731,6 +1820,20 @@ class OpenAICompatibleCaseAnalysisProvider:
 
 
 class CaseAnalysisService:
+    MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
+    MSQ_FIELD_LABELS = {
+        "age": "患者年龄",
+        "sex": "患者性别",
+        "pregnant_or_lactating": "妊娠或哺乳状态",
+        "medications": "当前用药",
+        "allergies": "过敏信息",
+        "symptoms": "症状勾选",
+        "msq_system_scores": "MSQ 系统评分",
+        "sleep_hours": "睡眠时长",
+        "sleep_quality": "睡眠质量",
+        "diet_pattern": "饮食模式",
+        "exercise_frequency": "运动习惯",
+    }
     ACTIVE_STATUSES = {
         AnalysisStatus.queued,
         AnalysisStatus.preparing,
@@ -2317,8 +2420,22 @@ class CaseAnalysisService:
 
     def _analyze_with_cache(self, case, uploaded_file) -> DocumentAnalysisResult:
         owner_scope = f"doctor:{case.owner_doctor_id}" if case.owner_doctor_id else f"case:{case.id}"
+        parser_version = getattr(
+            self.questionnaire_import_service,
+            "PARSER_VERSION",
+            "msq-parser-unconfigured",
+        )
         raw_key = "|".join(
-            [uploaded_file.content_sha256 or uploaded_file.id, self.model_version, self.prompt_version]
+            [
+                uploaded_file.content_sha256 or uploaded_file.id,
+                self.model_version,
+                self.prompt_version,
+                *(
+                    [parser_version]
+                    if self._uses_msq_cache_version(uploaded_file)
+                    else []
+                ),
+            ]
         )
         cache_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
         cached = self.repository.get_document_analysis_cache(cache_key, owner_scope)
@@ -2360,6 +2477,28 @@ class CaseAnalysisService:
         )
         return result
 
+    @staticmethod
+    def _uses_msq_cache_version(uploaded_file) -> bool:
+        if uploaded_file.is_scanned:
+            return True
+        filename = (uploaded_file.filename or "").lower()
+        if Path(filename).suffix == ".docx":
+            return True
+        if "msq" in filename or "问卷" in filename:
+            return True
+        compact_text = re.sub(
+            r"\s+",
+            "",
+            "".join(page.text or "" for page in uploaded_file.page_texts[:3]),
+        )
+        markers = (
+            "症状评估",
+            "您希望以何种方式来促进健康",
+            "您的睡眠质量如何",
+            "您日常三餐主要食用",
+        )
+        return sum(marker in compact_text for marker in markers) >= 2
+
     def _structured_questionnaire_result(self, uploaded_file) -> DocumentAnalysisResult | None:
         service = self.questionnaire_import_service
         path = Path(uploaded_file.storage_uri or "")
@@ -2376,15 +2515,33 @@ class CaseAnalysisService:
         ):
             return None
         try:
-            questionnaire = service.parse(
-                filename=uploaded_file.filename,
-                content_type=uploaded_file.content_type,
-                content=content,
-            )
+            if hasattr(service, "parse_for_analysis"):
+                parse_result = service.parse_for_analysis(
+                    filename=uploaded_file.filename,
+                    content_type=uploaded_file.content_type,
+                    content=content,
+                )
+            else:
+                parse_result = QuestionnaireParseResult(
+                    questionnaire=service.parse(
+                        filename=uploaded_file.filename,
+                        content_type=uploaded_file.content_type,
+                        content=content,
+                    )
+                )
         except ValueError:
             # A recognized but structurally incomplete form falls back to the model and
             # is still subject to the MSQ quality gate below.
             return None
+        parse_result = self._review_questionnaire_uncertainties(
+            uploaded_file.filename,
+            parse_result,
+        )
+        warnings = list(parse_result.warnings)
+        warnings.extend(
+            f"{self.MSQ_UNRESOLVED_PREFIX}{field_name}"
+            for field_name in parse_result.uncertain_fields
+        )
         return DocumentAnalysisResult(
             file_id=uploaded_file.id,
             file_name=uploaded_file.filename,
@@ -2393,15 +2550,147 @@ class CaseAnalysisService:
             summary="已使用固定模板结构化提取 MSQ 问卷，病例级摘要由综合模型生成。",
             abnormal_findings=[],
             system_findings=[],
-            questionnaire=questionnaire.model_dump(mode="json"),
-            warnings=[],
+            questionnaire=parse_result.questionnaire.model_dump(mode="json"),
+            warnings=warnings,
         )
+
+    def _review_questionnaire_uncertainties(
+        self,
+        file_name: str,
+        parse_result: QuestionnaireParseResult,
+    ) -> QuestionnaireParseResult:
+        if not parse_result.uncertain_fields:
+            return parse_result
+        reviewer = getattr(self.provider, "review_questionnaire_fields", None)
+        if not callable(reviewer):
+            parse_result.warnings.append(
+                "MSQ 存在无法可靠定位的字段，自动复核不可用，已按未确认信息处理。"
+            )
+            return self._finalize_questionnaire_warnings(parse_result)
+        try:
+            reviews = reviewer(
+                file_name=file_name,
+                questionnaire=parse_result.questionnaire,
+                uncertain_fields=parse_result.uncertain_fields,
+                candidate_values=parse_result.candidate_values,
+            )
+        except Exception as exc:  # noqa: BLE001 - fallback failure must not abort analysis
+            logger.warning("MSQ field review unavailable for %s: %s", file_name, exc)
+            parse_result.warnings.append(
+                "MSQ 字段自动复核暂不可用，病例分析继续进行，相关字段已按未确认信息处理。"
+            )
+            return self._finalize_questionnaire_warnings(parse_result)
+
+        reviews_by_field = {item.field_name: item for item in reviews}
+        questionnaire = parse_result.questionnaire
+        for field_name, excerpts in list(parse_result.uncertain_fields.items()):
+            review = reviews_by_field.get(field_name)
+            if (
+                not review
+                or not review.supported
+                or review.confidence < 0.85
+                or not review.source_text
+                or review.value_json is None
+            ):
+                continue
+            compact_evidence = re.sub(r"\s+", "", "\n".join(excerpts))
+            source_text = review.source_text.strip()
+            if not source_text or re.sub(r"\s+", "", source_text) not in compact_evidence:
+                continue
+            if field_name == "age" and any(
+                label in source_text
+                for label in (
+                    "初次月经年龄",
+                    "停经年龄",
+                    "绝经年龄",
+                    "生物年龄",
+                    "代谢年龄",
+                    "骨龄",
+                    "系统年龄",
+                )
+            ):
+                continue
+            try:
+                raw_value = json.loads(review.value_json)
+                validated = Questionnaire.model_validate({field_name: raw_value})
+                value = getattr(validated, field_name)
+            except (json.JSONDecodeError, ValidationError, AttributeError, TypeError):
+                continue
+            if field_name == "age" and (value is None or value < 0 or value > 120):
+                continue
+            if field_name == "sleep_hours" and (
+                value is None or value < 0 or value > 24
+            ):
+                continue
+            if field_name == "msq_system_scores" and any(
+                score < 0 or score > 4 for score in value.values()
+            ):
+                continue
+            if not self._questionnaire_review_value_has_evidence(
+                value=value,
+                candidate_value=parse_result.candidate_values.get(field_name),
+                compact_evidence=compact_evidence,
+            ):
+                continue
+            questionnaire = questionnaire.model_copy(update={field_name: value})
+            parse_result.resolve_field(field_name)
+        parse_result.questionnaire = questionnaire
+        return self._finalize_questionnaire_warnings(parse_result)
+
+    @staticmethod
+    def _questionnaire_review_value_has_evidence(
+        *,
+        value: Any,
+        candidate_value: Any,
+        compact_evidence: str,
+    ) -> bool:
+        def compact(item: Any) -> str:
+            return re.sub(r"\s+", "", str(item or ""))
+
+        if isinstance(value, list):
+            accepted = {
+                compact(item)
+                for item in (candidate_value if isinstance(candidate_value, list) else [])
+                if compact(item)
+            }
+            returned = {compact(item) for item in value if compact(item)}
+            if not accepted.issubset(returned):
+                return False
+            return all(
+                item in compact_evidence
+                for item in returned - accepted
+            )
+        if isinstance(value, dict):
+            accepted = candidate_value if isinstance(candidate_value, dict) else {}
+            if any(value.get(key) != accepted_value for key, accepted_value in accepted.items()):
+                return False
+            return all(
+                compact(key) in compact_evidence
+                for key in value
+                if key not in accepted
+            )
+        return True
+
+    def _finalize_questionnaire_warnings(
+        self,
+        parse_result: QuestionnaireParseResult,
+    ) -> QuestionnaireParseResult:
+        for field_name in parse_result.uncertain_fields:
+            label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
+            unresolved_message = f"MSQ 的{label}仍无法确认，已从自动规则输入中隔离。"
+            previous = parse_result.field_warnings.get(field_name)
+            if previous and previous in parse_result.warnings:
+                parse_result.warnings.remove(previous)
+            parse_result.field_warnings[field_name] = unresolved_message
+            if unresolved_message not in parse_result.warnings:
+                parse_result.warnings.append(unresolved_message)
+        return parse_result
 
     def _assemble_and_validate(self, case, analysis: CaseAnalysis) -> None:
         files_by_id = {item.id: item for item in case.files}
         findings: list[AbnormalFinding] = []
         ignored_files: list[str] = []
-        questionnaires: list[tuple[int, dict[str, Any]]] = []
+        questionnaires: list[tuple[int, Questionnaire, DocumentAnalysisResult]] = []
         food_results: list[tuple[int, ChronicFoodSensitivityResult]] = []
         result_order = {item.id: index for index, item in enumerate(case.files)}
         seen: set[tuple[str, str, int, str]] = set()
@@ -2409,7 +2698,11 @@ class CaseAnalysisService:
             uploaded_file = files_by_id.get(result.file_id)
             if not result.medical_content:
                 ignored_files.append(result.file_name)
-            analysis.warnings.extend(result.warnings)
+            analysis.warnings.extend(
+                warning
+                for warning in result.warnings
+                if not warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
+            )
             is_food_sensitivity_file = is_chronic_food_sensitivity_filename(result.file_name)
             if is_food_sensitivity_file:
                 if result.food_sensitivity:
@@ -2428,7 +2721,7 @@ class CaseAnalysisService:
                 questionnaire, warning = self._validated_questionnaire(result)
                 if questionnaire:
                     questionnaires.append(
-                        (result_order.get(result.file_id, 0), questionnaire.model_dump(mode="json"))
+                        (result_order.get(result.file_id, 0), questionnaire, result)
                     )
                 elif warning:
                     analysis.warnings.append(warning)
@@ -2460,10 +2753,34 @@ class CaseAnalysisService:
         if questionnaires:
             if len(questionnaires) > 1:
                 analysis.warnings.append("检测到多份 MSQ，已采用最后上传且有效的一份。")
-            try:
-                analysis.questionnaire = Questionnaire.model_validate(sorted(questionnaires, key=lambda item: item[0])[-1][1])
-            except ValidationError:
-                analysis.warnings.append("MSQ 识别结果不符合问卷结构，已跳过。")
+            _, selected_questionnaire, selected_result = sorted(
+                questionnaires,
+                key=lambda item: item[0],
+            )[-1]
+            unresolved_fields = {
+                warning.removeprefix(self.MSQ_UNRESOLVED_PREFIX)
+                for warning in selected_result.warnings
+                if warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
+            }
+            analysis.questionnaire = self._isolate_unresolved_questionnaire_fields(
+                selected_questionnaire,
+                unresolved_fields,
+            )
+            for field_name in unresolved_fields:
+                label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
+                analysis.warnings.append(
+                    f"MSQ 的{label}尚未确认，相关自动规则已执行安全降级。"
+                )
+        else:
+            unresolved_fields = set()
+        case.flags = [
+            flag for flag in case.flags if not flag.startswith("msq_unresolved:")
+        ]
+        case.flags.extend(
+            f"msq_unresolved:{field_name}"
+            for field_name in sorted(unresolved_fields)
+        )
+        self.repository.save_case(case)
         if food_results:
             if len(food_results) > 1:
                 analysis.warnings.append("检测到多份慢性食物敏感报告，已采用最后上传且有效的一份。")
@@ -2471,6 +2788,31 @@ class CaseAnalysisService:
         analysis.abnormal_findings = findings
         analysis.ignored_files = ignored_files
         analysis.warnings = list(dict.fromkeys(analysis.warnings))
+
+    @staticmethod
+    def _isolate_unresolved_questionnaire_fields(
+        questionnaire: Questionnaire,
+        unresolved_fields: set[str],
+    ) -> Questionnaire:
+        safe_defaults: dict[str, Any] = {
+            "age": None,
+            "sex": "unknown",
+            "pregnant_or_lactating": None,
+            "medications": [],
+            "allergies": [],
+            "symptoms": [],
+            "msq_system_scores": {},
+            "sleep_hours": None,
+            "sleep_quality": None,
+            "diet_pattern": None,
+            "exercise_frequency": None,
+        }
+        updates = {
+            field_name: safe_defaults[field_name]
+            for field_name in unresolved_fields
+            if field_name in safe_defaults
+        }
+        return questionnaire.model_copy(update=updates) if updates else questionnaire
 
     def _validated_questionnaire(
         self,

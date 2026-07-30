@@ -156,12 +156,21 @@ class LifestylePlanningService:
         section_number = 1
         for section in plan.sections:
             items.append(f"### {section_number}. {section.title}")
+            actions_by_category: dict[str, list[LifestyleAction]] = {}
             for action in section.actions:
-                label = self._category_label(section.domain, action.category)
-                text = action.text
-                if action.clinician_review_required and "医生" not in text and "专科" not in text:
-                    text = f"{text.rstrip('。')}；执行前需由医生确认。"
-                items.append(f"{label}：{text}" if label else text)
+                actions_by_category.setdefault(action.category, []).append(action)
+
+            category_number = 1
+            for category, actions in actions_by_category.items():
+                label = self._category_label(section.domain, category)
+                if label:
+                    items.append(f"### {section_number}.{category_number} {label}")
+                    category_number += 1
+                for action in actions:
+                    text = action.text
+                    if action.clinician_review_required and "医生" not in text and "专科" not in text:
+                        text = f"{text.rstrip('。')}；执行前需由医生确认。"
+                    items.append(text)
             section_number += 1
         return items
 

@@ -8,10 +8,30 @@ from typing import Any
 from app.domain.models import AuditLog, DraftStatus, ReviewDecision
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
+from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_to_system_ids
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.pdf_export import PdfReportExporter
 from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
+from app.services.report_content import build_plan_summary
+
+
+_CHAPTER_DIGITS = "零一二三四五六七八九"
+_CHAPTER_PREFIX_PATTERN = re.compile(
+    r"^(?:[零一二三四五六七八九十百]+|\d+)[、.．]\s*"
+)
+_REPORT_LIST_SECTIONS = {
+    "异常指标汇总",
+    "慢性食物敏感检测结果",
+    "风险提示",
+    "生活方式干预",
+    "生活方式干预处方",
+    "后续检查建议",
+    "首月营养素干预方案",
+    "现有补充剂调整建议",
+    "需要补充确认",
+    "待确认项",
+}
 
 
 class InvalidDosageOverrideError(ValueError):
@@ -63,7 +83,9 @@ class ReviewService:
                 and not effective_draft.source_analysis_id
             ),
         )
+        report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._normalize_customer_visible_report_text(report)
+        report = self._number_customer_sections(report)
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
             customer_name=self._customer_display_name(case),
@@ -117,7 +139,9 @@ class ReviewService:
         report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
         report = self._ensure_prescription_advice_section(report, effective_draft)
+        report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._normalize_customer_visible_report_text(report)
+        report = self._number_customer_sections(report)
         review.publishable_report = report
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
@@ -249,7 +273,7 @@ class ReviewService:
         for line in report.splitlines():
             stripped = line.strip()
             if stripped.startswith("## "):
-                in_nutrition_section = stripped[3:].strip() in nutrition_titles
+                in_nutrition_section = self._canonical_section_title(stripped[3:]) in nutrition_titles
             if in_nutrition_section and any(name and name in stripped for name in excluded_names):
                 continue
             lines.append(line)
@@ -290,7 +314,7 @@ class ReviewService:
             return report_text
 
         section_title = "总医嘱说明"
-        existing_start = self._section_start_index(lines, section_title)
+        existing_start = self._heading_start_index(lines, section_title, levels=(2, 3))
         if getattr(draft, "source_analysis_id", None):
             if existing_start is not None and not replace_existing:
                 return report_text
@@ -298,9 +322,9 @@ class ReviewService:
             if not local_items:
                 return report_text
             if existing_start is not None:
-                existing_end = self._section_end_index(lines, existing_start)
+                existing_end = self._heading_block_end_index(lines, existing_start)
                 lines = lines[:existing_start] + lines[existing_end:]
-            section_lines = ["", f"## {section_title}", *[f"- {item}" for item in local_items], ""]
+            section_lines = ["", f"### {section_title}", *local_items, ""]
             nutrition_start = self._first_section_start_index(
                 lines,
                 ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
@@ -315,10 +339,10 @@ class ReviewService:
         if existing_start is not None and not replace_existing:
             return report_text
         if existing_start is not None:
-            existing_end = self._section_end_index(lines, existing_start)
+            existing_end = self._heading_block_end_index(lines, existing_start)
             lines = lines[:existing_start] + lines[existing_end:]
 
-        section_lines = ["", f"## {section_title}", f"- {advice}", ""]
+        section_lines = ["", f"### {section_title}", advice, ""]
         nutrition_start = self._first_section_start_index(
             lines,
             ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
@@ -333,8 +357,22 @@ class ReviewService:
         return "\n".join(lines).strip()
 
     def _section_start_index(self, lines: list[str], title: str) -> int | None:
-        header = f"## {title}"
-        return next((index for index, line in enumerate(lines) if line.strip() == header), None)
+        return self._heading_start_index(lines, title, levels=(2,))
+
+    def _heading_start_index(
+        self,
+        lines: list[str],
+        title: str,
+        *,
+        levels: tuple[int, ...],
+    ) -> int | None:
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            for level in levels:
+                marker = "#" * level + " "
+                if stripped.startswith(marker) and self._canonical_section_title(stripped[len(marker):]) == title:
+                    return index
+        return None
 
     def _first_section_start_index(self, lines: list[str], titles: tuple[str, ...]) -> int | None:
         starts = [self._section_start_index(lines, title) for title in titles]
@@ -346,6 +384,83 @@ class ReviewService:
             if lines[index].startswith("## "):
                 return index
         return len(lines)
+
+    def _heading_block_end_index(self, lines: list[str], start_index: int) -> int:
+        marker = lines[start_index].lstrip()
+        if marker.startswith("### "):
+            for index in range(start_index + 1, len(lines)):
+                if lines[index].startswith(("## ", "### ")):
+                    return index
+            return len(lines)
+        return self._section_end_index(lines, start_index)
+
+    def _ensure_plan_summary_section(self, report_text: str, draft, case) -> str:
+        finding_names_by_id = {
+            finding.finding_id: finding.finding_name
+            for finding in getattr(case, "confirmed_clinical_findings", []) or []
+        }
+        summary_items = build_plan_summary(
+            getattr(draft, "structured_system_findings", []) or [],
+            getattr(draft, "recommended_skus", []) or [],
+            finding_names_by_id,
+        )
+        if not summary_items:
+            summary_items = self._as_list(
+                (getattr(draft, "report_sections", {}) or {}).get("方案总结")
+            )
+        if not summary_items:
+            return report_text
+
+        lines = (report_text or "").strip().splitlines()
+        existing_start = self._heading_start_index(lines, "方案总结", levels=(2, 3))
+        if existing_start is not None:
+            existing_end = self._heading_block_end_index(lines, existing_start)
+            lines = lines[:existing_start] + lines[existing_end:]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines.extend(["", "## 方案总结", *summary_items])
+        return "\n".join(lines).strip()
+
+    def _number_customer_sections(self, report_text: str) -> str:
+        lines: list[str] = []
+        chapter_index = 0
+        for raw_line in (report_text or "").splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("## "):
+                title = self._canonical_section_title(stripped[3:])
+                if title == "总医嘱说明":
+                    lines.append("### 总医嘱说明")
+                    continue
+                chapter_index += 1
+                lines.append(f"## {self._chinese_chapter_number(chapter_index)}、{title}")
+                continue
+            lines.append(raw_line)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _canonical_section_title(value: str) -> str:
+        return _CHAPTER_PREFIX_PATTERN.sub("", str(value or "").strip())
+
+    def _canonicalized_report_headings(self, report_text: str) -> str:
+        lines: list[str] = []
+        for raw_line in str(report_text or "").splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("## "):
+                lines.append(f"## {self._canonical_section_title(stripped[3:])}")
+            else:
+                lines.append(raw_line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _chinese_chapter_number(value: int) -> str:
+        if value < 10:
+            return _CHAPTER_DIGITS[value]
+        if value < 20:
+            return "十" + (_CHAPTER_DIGITS[value % 10] if value % 10 else "")
+        if value < 100:
+            tens, ones = divmod(value, 10)
+            return _CHAPTER_DIGITS[tens] + "十" + (_CHAPTER_DIGITS[ones] if ones else "")
+        return str(value)
 
     def is_stale_publishable_report(self, report_text: str | None) -> bool:
         return (
@@ -361,6 +476,7 @@ class ReviewService:
     def _looks_like_internal_generated_report(self, report_text: str | None) -> bool:
         if not report_text:
             return False
+        normalized_report = self._canonicalized_report_headings(str(report_text))
         internal_markers = (
             "## 病例摘要",
             "## 证据来源",
@@ -368,7 +484,7 @@ class ReviewService:
             "## 审计信息",
             "模型版本:",
         )
-        return any(marker in report_text for marker in internal_markers)
+        return any(marker in normalized_report for marker in internal_markers)
 
     def _looks_like_corrupted_publishable_report(self, report_text: str | None) -> bool:
         if not report_text:
@@ -390,7 +506,7 @@ class ReviewService:
     def _looks_like_legacy_customer_report(self, report_text: str | None) -> bool:
         if not report_text:
             return False
-        text = str(report_text)
+        text = self._canonicalized_report_headings(str(report_text))
         legacy_markers = (
             "# 功能医学营养与生活方式建议",
             "## 总体健康画像",
@@ -414,7 +530,7 @@ class ReviewService:
     def _looks_like_unstructured_customer_report(self, report_text: str | None) -> bool:
         if not report_text:
             return False
-        text = str(report_text)
+        text = self._canonicalized_report_headings(str(report_text))
         if "# 功能医学综合分析与首月干预方案" not in text:
             return False
         return (
@@ -557,7 +673,7 @@ class ReviewService:
             line = raw_line
             stripped = line.strip()
             if stripped.startswith("## "):
-                in_nutrition_section = stripped[3:].strip() in nutrition_titles
+                in_nutrition_section = self._canonical_section_title(stripped[3:]) in nutrition_titles
             if in_nutrition_section and "注意/禁忌" not in line:
                 line = self._append_matching_safety(line, draft.recommended_skus)
             lines.append(line)
@@ -592,17 +708,29 @@ class ReviewService:
                 result = updated
                 break
 
+        indicator_title = "异常指标汇总"
+        indicator_items = self._extract_report_section_items(result, indicator_title)
+        if not indicator_items:
+            indicator_title = "关键指标"
+            indicator_items = self._extract_report_section_items(result, indicator_title)
+        grouped_indicator_rows = self._are_grouped_indicator_rows(indicator_items)
         used_indicator_rows: set[int] = set()
         for rag_item in self._customerize_items(sections.get("RAG异常指标解释", []))[:6]:
-            row_index = self._best_indicator_rag_match(rag_item, abnormal_indicators)
-            if row_index is None:
-                row_index = self._fallback_indicator_row_for_rag(rag_item, abnormal_indicators)
+            if grouped_indicator_rows:
+                row_index = self._best_grouped_indicator_rag_match(rag_item, indicator_items)
+            else:
+                row_index = self._best_indicator_rag_match(rag_item, abnormal_indicators)
+                if row_index is None:
+                    row_index = self._fallback_indicator_row_for_rag(rag_item, abnormal_indicators)
             if row_index is None or row_index in used_indicator_rows:
                 continue
             clause = self._rag_customer_clause(rag_item, max_len=120, purpose="indicator")
-            updated = self._append_clause_to_report_section_item(result, "异常指标汇总", clause, item_index=row_index)
-            if updated == result:
-                updated = self._append_clause_to_report_section_item(result, "关键指标", clause, item_index=row_index)
+            updated = self._append_clause_to_report_section_item(
+                result,
+                indicator_title,
+                f"说明：{clause}" if clause else "",
+                item_index=row_index,
+            )
             if updated != result:
                 used_indicator_rows.add(row_index)
                 result = updated
@@ -651,16 +779,26 @@ class ReviewService:
         if not self.rag_fusion_provider or not self._has_rag_sections(draft):
             return None
 
-        target_sections = self._llm_fusion_target_sections(report_text)
-        if not all(target_sections.values()):
+        all_target_sections = self._llm_fusion_target_sections(report_text)
+        all_rag_context = self._llm_fusion_rag_context(draft)
+        target_sections = {
+            title: items
+            for title, items in all_target_sections.items()
+            if items and all_rag_context.get(title)
+        }
+        if not target_sections:
             self._append_rag_audit(draft, "rag_fusion:remote_skipped:missing_target_section")
             return None
+        rag_context = {
+            title: all_rag_context[title]
+            for title in target_sections
+        }
 
         try:
             fusion = self.rag_fusion_provider.fuse_report_sections(
                 report_text=report_text,
                 target_sections=target_sections,
-                rag_context=self._llm_fusion_rag_context(draft),
+                rag_context=rag_context,
                 case_context=self._llm_fusion_case_context(case, draft),
             )
             patch_payload = getattr(fusion, "section_patches", {}) or {}
@@ -685,7 +823,7 @@ class ReviewService:
             self._append_rag_audit(draft, "rag_fusion:remote_success")
             used_refs = getattr(fusion, "used_rag_refs", {}) or {}
             for title, refs in used_refs.items():
-                if title not in target_sections or not isinstance(refs, list):
+                if title not in valid_sections or not isinstance(refs, list):
                     continue
                 safe_refs = [str(ref).strip() for ref in refs if str(ref).strip()][:6]
                 if safe_refs:
@@ -778,18 +916,34 @@ class ReviewService:
                 if raw_index in seen_indices:
                     section_valid = False
                     break
-                item = self._normalize_llm_report_item_format(patch.get("text") or "")
-                if not item or len(item) > 900:
-                    section_valid = False
-                    break
-                if self._llm_text_quality_reason(item) or self._section_item_has_forbidden_llm_content(item, product_names):
-                    section_valid = False
-                    break
-                if title in {"关键指标", "异常指标汇总"}:
-                    original_name = original_items[raw_index].split("：", 1)[0].strip()
-                    if original_name and original_name not in item:
+                if title == "异常指标汇总":
+                    explanation = self._normalize_llm_indicator_explanation(
+                        patch.get("explanation"),
+                        product_names,
+                    )
+                    if not explanation or not self._indicator_explanation_matches_row(
+                        explanation,
+                        original_items[raw_index],
+                    ):
                         section_valid = False
                         break
+                    item = self._replace_grouped_indicator_explanation(
+                        original_items[raw_index],
+                        explanation,
+                    )
+                else:
+                    item = self._normalize_llm_report_item_format(patch.get("text") or "")
+                    if not item or len(item) > 900:
+                        section_valid = False
+                        break
+                    if self._llm_text_quality_reason(item) or self._section_item_has_forbidden_llm_content(item, product_names):
+                        section_valid = False
+                        break
+                    if title == "关键指标":
+                        original_name = original_items[raw_index].split("：", 1)[0].strip()
+                        if original_name and original_name not in item:
+                            section_valid = False
+                            break
                 seen_indices.add(raw_index)
                 patched_items[raw_index] = item
 
@@ -816,6 +970,8 @@ class ReviewService:
             if getattr(sku, "display_name", "")
         ]
         for title, original_items in original_sections.items():
+            if title == "异常指标汇总":
+                continue
             values = section_payload.get(title)
             if not isinstance(values, list) or len(values) != len(original_items):
                 continue
@@ -844,6 +1000,52 @@ class ReviewService:
             if section_valid and cleaned_items:
                 valid[title] = cleaned_items
         return valid
+
+    def _normalize_llm_indicator_explanation(
+        self,
+        raw_value: Any,
+        product_names: list[str],
+    ) -> str:
+        raw_text = str(raw_value or "").strip()
+        if not raw_text or len(raw_text) > 240:
+            return ""
+        if "\n" in raw_text or "\r" in raw_text:
+            return ""
+        if re.match(r"^\s*(?:[-*•·#]+|\d+[.)、])", raw_text):
+            return ""
+
+        explanation = strip_textbook_internal_markers(raw_text)
+        explanation = re.sub(r"^\s*说明\s*[：:]\s*", "", explanation)
+        explanation = self._normalize_llm_report_item_format(explanation)
+        if not explanation or len(explanation) > 180:
+            return ""
+        if "知识库" in explanation or self._llm_text_quality_reason(explanation):
+            return ""
+        if self._section_item_has_forbidden_llm_content(explanation, product_names):
+            return ""
+        if re.search(r"(确诊|诊断为|患有|根治|治愈|保证疗效|替代治疗)", explanation):
+            return ""
+        if re.search(
+            r"(?:每日|每周|每次|早晚|餐前|餐后).{0,10}\d|"
+            r"\d+(?:\.\d+)?\s*(?:mg|g|μg|mcg|iu|ml|毫升|粒|片|袋|滴)\b",
+            explanation,
+            re.IGNORECASE,
+        ):
+            return ""
+        if any(re.search(rf"{re.escape(system_name)}\s*[：:]", explanation) for _, system_name in BODY_SYSTEMS):
+            return ""
+        return explanation
+
+    def _indicator_explanation_matches_row(self, explanation: str, original_item: str) -> bool:
+        target_system_id = self._grouped_indicator_system_id(original_item)
+        if not target_system_id:
+            return False
+        explanation_system_ids = classify_text_to_system_ids(explanation)
+        return not explanation_system_ids or target_system_id in explanation_system_ids
+
+    def _replace_grouped_indicator_explanation(self, original_item: str, explanation: str) -> str:
+        fact_text = re.split(r"。说明[：:]", original_item, maxsplit=1)[0].rstrip("。； ")
+        return f"{fact_text}。说明：{explanation}"
 
     def _normalize_llm_report_item_format(self, raw_item: Any) -> str:
         item = str(raw_item or "")
@@ -879,7 +1081,10 @@ class ReviewService:
         if len(indices) != len(items):
             return report_text
         for line_index, item in zip(indices, items):
-            lines[line_index] = f"- {item}"
+            original = lines[line_index]
+            indent = original[: len(original) - len(original.lstrip())]
+            marker = "- " if original.lstrip().startswith("- ") else ""
+            lines[line_index] = f"{indent}{marker}{item}"
         return "\n".join(lines).strip()
 
     def _section_item_has_forbidden_llm_content(self, item: str, product_names: list[str]) -> bool:
@@ -943,7 +1148,11 @@ class ReviewService:
     def _extract_report_section_items(self, report_text: str, title: str) -> list[str]:
         lines = report_text.splitlines()
         indices = self._report_section_item_line_indices(lines, title)
-        return [lines[index].lstrip()[2:].strip() for index in indices]
+        return [
+            stripped[2:].strip() if stripped.startswith("- ") else stripped
+            for index in indices
+            if (stripped := lines[index].strip())
+        ]
 
     def _append_clause_to_report_section_item(
         self,
@@ -971,20 +1180,85 @@ class ReviewService:
         return "\n".join(lines).strip()
 
     def _report_section_item_line_indices(self, lines: list[str], title: str) -> list[int]:
-        header = f"## {title}"
-        start_index = next((index for index, line in enumerate(lines) if line.strip() == header), None)
+        start_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().startswith("## ")
+                and not line.strip().startswith("### ")
+                and self._canonical_section_title(line.strip()[3:]) == title
+            ),
+            None,
+        )
         if start_index is None:
             return []
         end_index = len(lines)
         for index in range(start_index + 1, len(lines)):
-            if lines[index].startswith("## "):
+            if lines[index].lstrip().startswith("## ") and not lines[index].lstrip().startswith("### "):
                 end_index = index
                 break
-        return [
-            index
-            for index in range(start_index + 1, end_index)
-            if lines[index].lstrip().startswith("- ")
-        ]
+        is_list_section = title in _REPORT_LIST_SECTIONS or title == "关键指标"
+        indices: list[int] = []
+        for index in range(start_index + 1, end_index):
+            stripped = lines[index].strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if is_list_section and not stripped.startswith("- "):
+                continue
+            indices.append(index)
+        return indices
+
+    def _are_grouped_indicator_rows(self, items: list[str]) -> bool:
+        if not items:
+            return False
+        valid_prefixes = set(SYSTEM_NAMES.values()) | {"其他需关注"}
+        return all(
+            re.split(r"[：:]", str(item or ""), maxsplit=1)[0].strip() in valid_prefixes
+            for item in items
+        )
+
+    def _grouped_indicator_system_id(self, item: str) -> str | None:
+        prefix = re.split(r"[：:]", str(item or ""), maxsplit=1)[0].strip()
+        return next(
+            (
+                system_id
+                for system_id, system_name in BODY_SYSTEMS
+                if prefix == system_name
+            ),
+            None,
+        )
+
+    def _best_grouped_indicator_rag_match(self, rag_item: str, grouped_items: list[str]) -> int | None:
+        normalized_rag = self._normalize_text(rag_item)
+        rag_system_ids = set(classify_text_to_system_ids(rag_item))
+        best_index: int | None = None
+        best_score = 0
+
+        for index, item in enumerate(grouped_items):
+            system_id = self._grouped_indicator_system_id(item)
+            if not system_id:
+                continue
+            fact_text = re.split(r"。说明[：:]", item, maxsplit=1)[0]
+            fact_body = re.split(r"[：:]", fact_text, maxsplit=1)[-1]
+            indicator_names = [
+                re.split(r"[：:]", segment, maxsplit=1)[0].strip()
+                for segment in fact_body.split("；")
+                if re.split(r"[：:]", segment, maxsplit=1)[0].strip()
+            ]
+            aliases = {
+                alias
+                for name in indicator_names
+                for alias in self._indicator_aliases(self._normalize_text(name))
+                if len(alias) >= 2
+            }
+            direct_score = sum(10 for alias in aliases if alias in normalized_rag)
+            system_score = 2 if system_id in rag_system_ids else 0
+            score = direct_score + system_score
+            if score > best_score:
+                best_index = index
+                best_score = score
+
+        return best_index if best_score > 0 else None
 
     def _fallback_indicator_row_for_rag(self, rag_item: str, abnormal_indicators: list) -> int | None:
         if not abnormal_indicators:
@@ -1054,19 +1328,12 @@ class ReviewService:
                 ("生活方式干预", sections.get("生活方式干预")),
                 ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
                 ("总医嘱说明", total_advice),
+                ("方案总结", sections.get("方案总结")),
             ]
-            for title, content in ordered_sections:
-                items = self._as_list(content)
-                if not items:
-                    continue
-                lines.append(f"## {title}")
-                for item in items:
-                    if self._is_report_subheading(item):
-                        lines.append(self._normalize_report_line(item))
-                    else:
-                        lines.append(f"- {item}")
-                lines.append("")
-            return "\n".join(lines).strip()
+            self._append_customer_report_sections(lines, ordered_sections)
+            report = "\n".join(lines).strip()
+            report = self._ensure_report_rag_enhancement(report, draft, case)
+            return self._number_customer_sections(report)
 
         abnormal_indicators = self._abnormal_indicators(case)
         nutrition_plan = self._nutrition_plan_with_safety(
@@ -1079,14 +1346,10 @@ class ReviewService:
         draft_health = self._customerize_items(
             sections.get("核心结论与健康画像") or sections.get("总体健康画像")
         )
-        health_portrait = self._fuse_rag_into_health_portrait(
-            draft_health[:4] or self._customer_health_portrait(case, abnormal_indicators),
-            self._customerize_items(sections.get("RAG总体健康画像", [])),
-        )
-        key_indicators = self._fuse_rag_into_key_indicators(
-            self._customer_key_indicators(abnormal_indicators),
-            abnormal_indicators,
-            self._customerize_items(sections.get("RAG异常指标解释", [])),
+        health_portrait = draft_health[:4] or self._customer_health_portrait(case, abnormal_indicators)
+        key_indicators = self._customerize_items(
+            sections.get("异常指标汇总")
+            or self._customer_key_indicators(abnormal_indicators)
         )
         system_analysis = self._customerize_items(
             sections.get("功能医学系统失衡分析") or sections.get("系统功能深度分析")
@@ -1107,25 +1370,35 @@ class ReviewService:
             ("现有补充剂调整建议", supplement_adjustments),
             ("需要补充确认", missing_info),
             ("重要提醒", self._customer_notice()),
+            ("方案总结", sections.get("方案总结")),
         ]
 
         if draft.abstain_reason:
             lines.extend(["## 自动拒答原因", draft.abstain_reason, ""])
 
+        self._append_customer_report_sections(lines, ordered_sections)
+        report = "\n".join(lines)
+        report = self._ensure_report_rag_enhancement(report, draft, case)
+        return self._number_customer_sections(report)
+
+    def _append_customer_report_sections(
+        self,
+        lines: list[str],
+        ordered_sections: list[tuple[str, Any]],
+    ) -> None:
         for title, content in ordered_sections:
             items = self._as_list(content)
             if not items:
                 continue
-            lines.append(f"## {title}")
+            lines.append(f"### {title}" if title == "总医嘱说明" else f"## {title}")
             for item in items:
                 if self._is_report_subheading(item):
                     lines.append(self._normalize_report_line(item))
-                else:
+                elif title in _REPORT_LIST_SECTIONS:
                     lines.append(f"- {item}")
+                else:
+                    lines.append(item)
             lines.append("")
-
-        report = "\n".join(lines)
-        return self._try_llm_rag_fusion(report, draft, case) or report
 
     def _as_list(self, content) -> list[str]:
         if not content:

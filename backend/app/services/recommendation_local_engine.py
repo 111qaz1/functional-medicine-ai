@@ -41,6 +41,11 @@ from app.services.evidence_policy import classify_confirmed_evidence
 from app.services.dosage_rules import select_dosage_option
 from app.services.lifestyle_planning import LifestylePlanningService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
+from app.services.report_content import (
+    ReportAbnormalItem,
+    build_plan_summary,
+    group_abnormal_items,
+)
 
 
 @dataclass
@@ -880,9 +885,23 @@ class RecommendationService:
             )
             for finding in priority_findings
         ]
+        finding_names_by_id = {
+            finding.finding_id: finding.finding_name
+            for finding in context.clinical_findings
+        }
+        grouped_key_lab_highlights = self._build_grouped_key_lab_highlights(
+            case,
+            structured_system_findings,
+        )
         total_advice = self.build_total_advice_items(
             recommended_items,
             structured_system_findings=structured_system_findings,
+            finding_names_by_id=finding_names_by_id,
+        )
+        plan_summary = build_plan_summary(
+            structured_system_findings,
+            recommended_items,
+            finding_names_by_id,
         )
         lifestyle_focus = self.lifestyle_planning_service.report_items(lifestyle_plan)
         test_recommendations = self._build_prioritized_test_recommendations(context, anti_aging_findings)
@@ -892,7 +911,7 @@ class RecommendationService:
         report_sections = {
             "病例摘要": case_summary,
             "核心结论与健康画像": health_portrait,
-            "异常指标汇总": key_lab_highlights,
+            "异常指标汇总": grouped_key_lab_highlights,
             "原报告小结与建议": report_guidance,
             "功能医学系统失衡分析": system_analysis,
             # Product exclusions are doctor-side audit information. They remain
@@ -907,6 +926,7 @@ class RecommendationService:
             "随访计划": follow_up_plan,
             "90天健康路线图": roadmap,
             "待确认项": missing_info,
+            "方案总结": plan_summary,
         }
         if not report_guidance:
             report_sections.pop("原报告小结与建议", None)
@@ -922,7 +942,7 @@ class RecommendationService:
             case_id=case_id,
             status=DraftStatus.abstained if effective_abstain_reason else DraftStatus.pending_review,
             case_summary=case_summary,
-            key_lab_highlights=key_lab_highlights,
+            key_lab_highlights=grouped_key_lab_highlights,
             recommended_skus=recommended_items,
             lifestyle_actions=lifestyle_actions,
             lifestyle_plan=lifestyle_plan,
@@ -3617,6 +3637,43 @@ class RecommendationService:
                 f"{indicator.indicator_name}: {indicator.result_text}（{status_labels.get(status_value, status_value)}）"
             )
         return list(dict.fromkeys(highlights))
+
+    def _build_grouped_key_lab_highlights(
+        self,
+        case,
+        structured_system_findings: list[StructuredSystemFinding],
+    ) -> list[str]:
+        confirmed_by_name: dict[str, list] = {}
+        for finding in getattr(case, "confirmed_clinical_findings", []) or []:
+            confirmed_by_name.setdefault(self._normalize(finding.finding_name), []).append(finding)
+
+        status_labels = {
+            "attention": "需关注",
+            "positive": "阳性/异常",
+        }
+        items: list[ReportAbnormalItem] = []
+        for index, indicator in enumerate(self.indicator_service.build(case)):
+            status_value = getattr(indicator.status, "value", str(indicator.status))
+            if status_value not in status_labels:
+                continue
+            confirmed = confirmed_by_name.get(self._normalize(indicator.indicator_name), [])
+            matched = confirmed[0] if confirmed else None
+            source_span = getattr(indicator, "source_span", None)
+            items.append(
+                ReportAbnormalItem(
+                    item_id=(
+                        matched.finding_id
+                        if matched
+                        else f"indicator:{index}:{self._normalize(indicator.indicator_name)}"
+                    ),
+                    name=indicator.indicator_name,
+                    result=indicator.result_text,
+                    status_label=status_labels[status_value],
+                    system_ids=tuple(matched.system_ids if matched else ()),
+                    search_text=getattr(source_span, "snippet", "") or "",
+                )
+            )
+        return group_abnormal_items(items, structured_system_findings)
 
     def _extract_anti_aging_findings(self, case, context: RecommendationContext) -> list[str]:
         source_text = "\n".join(

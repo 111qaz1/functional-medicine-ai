@@ -39,6 +39,7 @@ from app.services.body_systems import (
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.evidence_policy import classify_confirmed_evidence
 from app.services.dosage_rules import select_dosage_option
+from app.services.lifestyle_planning import LifestylePlanningService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
 from app.services.report_content import (
     ReportAbnormalItem,
@@ -70,6 +71,7 @@ class RecommendationContext:
     summary_nutrient_hints: list[str]
     structured_system_findings: list[StructuredSystemFinding] = field(default_factory=list)
     sex: str | None = None
+    unresolved_questionnaire_fields: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -201,6 +203,7 @@ class RecommendationService:
         self.unified_safety_rules = self._load_unified_safety_rules()
         self.client_recall_rules = self._load_client_recall_rules()
         self.client_recall_rules_by_id = {rule.rule_id: rule for rule in self.client_recall_rules}
+        self.lifestyle_planning_service = LifestylePlanningService()
         self._validate_product_marker_codes()
 
     def _load_product_capabilities(self) -> tuple[str, dict[str, dict], dict[str, dict]]:
@@ -706,7 +709,7 @@ class RecommendationService:
         risk_notices = list(
             dict.fromkeys(
                 [
-                    *self._evaluate_risk_notices(context, case.questionnaire.age if case.questionnaire else None),
+                    *self._evaluate_risk_notices(context, context.age),
                     *self._client_recall_guidance(context),
                 ]
             )
@@ -753,7 +756,8 @@ class RecommendationService:
             confidence=0.86 if ranked_products else 0.35,
             abstain_reason=None if ranked_products else "未找到具备有效病例证据的产品候选。",
         )
-        lifestyle_actions = self._finalize_lifestyle_actions(composition.lifestyle_actions, knowledge_hits, context)
+        lifestyle_plan = self.lifestyle_planning_service.build_plan(case, context)
+        lifestyle_actions = self.lifestyle_planning_service.legacy_actions(lifestyle_plan)
 
         recommended_items: list[DraftRecommendationItem] = []
         selected_products = self._select_products_for_output(
@@ -900,7 +904,7 @@ class RecommendationService:
             recommended_items,
             finding_names_by_id,
         )
-        lifestyle_focus = self._build_lifestyle_prescription(case, context, lifestyle_actions)
+        lifestyle_focus = self.lifestyle_planning_service.report_items(lifestyle_plan)
         test_recommendations = self._build_prioritized_test_recommendations(context, anti_aging_findings)
         supplement_adjustments = self._build_existing_supplement_adjustments(case)
         follow_up_plan = self._build_follow_up_plan(context)
@@ -942,6 +946,7 @@ class RecommendationService:
             key_lab_highlights=grouped_key_lab_highlights,
             recommended_skus=recommended_items,
             lifestyle_actions=lifestyle_actions,
+            lifestyle_plan=lifestyle_plan,
             rationale=composition.rationale,
             evidence_ids=evidence_ids,
             evidence_details=evidence_details,
@@ -967,6 +972,15 @@ class RecommendationService:
                     product_evidence_map=product_evidence_map,
                     safety_decisions_by_sku=safety_decisions_by_sku,
                 ),
+                "lifestyle": {
+                    "rule_version": lifestyle_plan.rule_version,
+                    "status": lifestyle_plan.status,
+                    "legacy_lifestyle_rag": "disabled_for_structured_plan",
+                    "selected_protocols": [
+                        item.model_dump(mode="json") for item in lifestyle_plan.selected_protocols
+                    ],
+                    "missing_info": list(lifestyle_plan.missing_info),
+                },
             },
             model_version=self.model_version,
             prompt_version=self.prompt_version,
@@ -1043,12 +1057,38 @@ class RecommendationService:
         )
         family_history = {self._normalize(text) for text in (questionnaire.family_history if questionnaire else [])}
         goals = {self._normalize(text) for text in (questionnaire.goals if questionnaire else [])}
-        medications = {self._normalize(text) for text in (questionnaire.medications if questionnaire else [])}
-        allergies = {self._normalize(text) for text in (questionnaire.allergies if questionnaire else [])}
+        unresolved_questionnaire_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        medications = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.medications if questionnaire else [])
+            }
+            if "medications" not in unresolved_questionnaire_fields
+            else set()
+        )
+        allergies = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.allergies if questionnaire else [])
+            }
+            if "allergies" not in unresolved_questionnaire_fields
+            else set()
+        )
+        if "symptoms" in unresolved_questionnaire_fields:
+            symptoms = set()
         food_sensitivities = {
             self._normalize(text) for text in (questionnaire.food_sensitivities if questionnaire else [])
         }
-        msq_system_scores = dict(questionnaire.msq_system_scores) if questionnaire else {}
+        msq_system_scores = (
+            dict(questionnaire.msq_system_scores)
+            if questionnaire
+            and "msq_system_scores" not in unresolved_questionnaire_fields
+            else {}
+        )
         summary_parts = [(case.clinical_summary_text or "").strip()]
         latest_analysis = self.repository.get_latest_case_analysis(case.id)
         structured_system_findings: list[StructuredSystemFinding] = []
@@ -1065,17 +1105,31 @@ class RecommendationService:
 
         lifestyle_tags: set[str] = set()
         if questionnaire:
-            if (
+            if "sleep_hours" not in unresolved_questionnaire_fields and (
                 questionnaire.sleep_hours is not None
                 and questionnaire.sleep_hours < 6
-            ) or self._normalize(questionnaire.sleep_quality or "") in {
-                "poor",
-                "\u5dee",
-            }:
+            ):
+                lifestyle_tags.add("sleep_recovery")
+            if (
+                "sleep_quality" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.sleep_quality or "")
+                in {"poor", "\u5dee"}
+            ):
                 lifestyle_tags.add("sleep_recovery")
             if questionnaire.stress_level == "high":
                 lifestyle_tags.add("stress_support")
-            if self._normalize(questionnaire.exercise_frequency or "") in {"rare", "none", "很少", "寰堝皯"}:
+            if (
+                "exercise_frequency" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.exercise_frequency or "")
+                in {
+                    "rare",
+                    "none",
+                    "很少",
+                    "无",
+                    "无规律运动",
+                    "寰堝皯",
+                }
+            ):
                 lifestyle_tags.add("movement")
             if self._normalize(questionnaire.bowel_habits or "") in {"constipation", "便秘", "渚跨"}:
                 lifestyle_tags.add("gut_support")
@@ -1151,13 +1205,25 @@ class RecommendationService:
             allergies=allergies,
             food_sensitivities=food_sensitivities,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
-            age=questionnaire.age if questionnaire else None,
+            age=(
+                questionnaire.age
+                if questionnaire
+                and "age" not in unresolved_questionnaire_fields
+                else None
+            ),
             lifestyle_tags=lifestyle_tags,
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
             summary_nutrient_hints=summary_nutrient_hints,
             structured_system_findings=structured_system_findings,
-            sex=self._normalize(questionnaire.sex) if questionnaire and questionnaire.sex else None,
+            sex=(
+                self._normalize(questionnaire.sex)
+                if questionnaire
+                and questionnaire.sex
+                and "sex" not in unresolved_questionnaire_fields
+                else None
+            ),
+            unresolved_questionnaire_fields=unresolved_questionnaire_fields,
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
@@ -1284,6 +1350,10 @@ class RecommendationService:
             risk_notices.append("未成年案例需要医生重点审核营养素种类与剂量。")
         if context.pregnancy:
             risk_notices.append("孕期或哺乳期需要医生重点审核营养素种类与剂量。")
+        if "pregnant_or_lactating" in context.unresolved_questionnaire_fields:
+            risk_notices.append(
+                "妊娠或哺乳状态尚未确认，孕哺期禁用信息请见各营养素的“注意/禁忌”。"
+            )
         if any(
             term in condition
             for condition in context.conditions
@@ -1334,6 +1404,23 @@ class RecommendationService:
                 missing.append("尚未补充 MSQ 系统负担评分。")
         else:
             missing.append("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。")
+        unresolved_messages = {
+            "age": "患者年龄需补充确认。",
+            "sex": "患者性别需补充确认。",
+            "pregnant_or_lactating": "妊娠或哺乳状态需补充确认。",
+            "medications": "当前用药信息需补充确认。",
+            "allergies": "过敏信息需补充确认。",
+        }
+        unresolved_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        missing.extend(
+            unresolved_messages[field_name]
+            for field_name in sorted(unresolved_fields)
+            if field_name in unresolved_messages
+        )
         missing.extend(self._visible_parse_warnings(case.parsing_missing_fields, case=case))
         return list(dict.fromkeys(missing))
 
@@ -2963,44 +3050,6 @@ class RecommendationService:
         }
         return labels.get(signal_id, signal_id)
 
-    def _finalize_lifestyle_actions(self, actions: list[str], knowledge_hits, context: RecommendationContext) -> list[str]:
-        chinese_actions = [
-            item.strip()
-            for item in actions
-            if isinstance(item, str) and item.strip() and self._contains_cjk(item)
-        ]
-        local_actions = self._build_local_lifestyle_actions(knowledge_hits, context)
-        return list(dict.fromkeys(chinese_actions + local_actions))[:8]
-
-    def _build_local_lifestyle_actions(self, knowledge_hits, context: RecommendationContext) -> list[str]:
-        actions: list[str] = []
-        for hit in knowledge_hits[:4]:
-            actions.extend(hit.statement.lifestyle_actions)
-
-        if "sleep_recovery" in context.lifestyle_tags:
-            actions.append("固定每日入睡和起床时间，睡前 1-2 小时减少咖啡因、酒精和电子屏幕暴露。")
-
-        for items in context.markers_by_code.values():
-            for item in items:
-                if item.marker_code == "ferritin" and item.abnormal_flag.value == "low":
-                    actions.append(
-                        "铁蛋白偏低时，建议结合医生评估缺铁风险；在确认适用后增加红肉、贝类、动物肝、豆类和深色叶菜，并搭配维生素 C 促进吸收。"
-                    )
-                if item.marker_code == "magnesium" and item.abnormal_flag.value == "high":
-                    actions.append(
-                        "血清镁偏高时，当前阶段避免额外叠加非处方镁补充剂，并结合肾功能、补剂使用史和近期输液情况做人工复核。"
-                    )
-                if item.marker_code in {"thyroglobulin_antibody", "thyroid_peroxidase_antibody"} and item.abnormal_flag.value == "high":
-                    actions.append("甲状腺抗体升高时，优先保持规律作息并减少长期高压暴露，暂不建议自行叠加高碘来源。")
-
-        if not actions:
-            actions = [
-                "围绕睡眠、压力、运动和饮食一致性先做基础生活方式干预。",
-                "若用药或过敏信息尚不明确，先补齐信息后再升级方案。",
-            ]
-
-        return list(dict.fromkeys(actions))[:6]
-
     def _matches_rule(self, rule: str, context: RecommendationContext) -> bool:
         parts = rule.split(":")
         kind = parts[0].strip().lower()
@@ -3349,7 +3398,6 @@ class RecommendationService:
             self._format_rag_public_line,
             limit=1,
         )
-        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=1)
         add_unique_rag_items(
             "RAG复查建议",
             self._rag_hit_supports_follow_up,
@@ -3365,7 +3413,6 @@ class RecommendationService:
             limit=2,
         )
         add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=2)
-        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=2)
         add_unique_rag_items(
             "RAG复查建议",
             self._rag_hit_supports_follow_up,
@@ -3526,22 +3573,6 @@ class RecommendationService:
                 "甲状腺",
                 "代谢",
                 "肠道",
-            )
-        )
-
-    def _rag_hit_supports_lifestyle(self, hit: SafeRagHit) -> bool:
-        excerpt = self._normalize(hit.excerpt)
-        return any(
-            term in excerpt
-            for term in (
-                "睡眠",
-                "压力",
-                "运动",
-                "饮食",
-                "生活方式",
-                "作息",
-                "久坐",
-                "活动",
             )
         )
 
@@ -4018,48 +4049,6 @@ class RecommendationService:
     def _is_internal_safety_note(self, warning: str) -> bool:
         normalized = warning.lower()
         return "sku" in normalized or "规格" in warning
-
-    def _build_lifestyle_prescription(self, case, context: RecommendationContext, lifestyle_actions: list[str]) -> list[str]:
-        questionnaire = case.questionnaire
-        prescription = [
-            "### A. 饮食干预：移除-替代-重建",
-            "移除：首月先减少酒精、含糖饮料、甜点、油炸食物、夜宵和高盐外食；若有桥本/甲状腺免疫问题，可观察麸质、乳制品和高度加工食品是否加重不适。",
-            "替代：每餐按半盘非淀粉蔬菜、1掌心优质蛋白、1拳头低升糖主食执行；油脂优先橄榄油、坚果、深海鱼或相应替代，主食优先全谷物、豆类和薯类。",
-            "重建：连续4周记录早餐、外食、酒精、咖啡因、排便和餐后困倦，用记录来判断血糖、尿酸、肠道和睡眠是否随执行改善。",
-            "### B. 运动处方：低冲击代谢激活",
-            "运动安排：第1-2周以饭后步行15-20分钟和久坐打断为主；第3-4周逐步过渡到每周150分钟中等强度有氧，加每周2次轻抗阻训练。",
-            "运动禁忌：若出现胸闷、明显心悸、头晕、关节急性疼痛、痛风急性发作或血压明显异常，先暂停高强度训练并联系医生。",
-            "### C. 睡眠与节律重建",
-            "睡眠节律：固定起床时间，晨起自然光15分钟；14点后减少咖啡因，睡前1小时减少屏幕、工作输入和剧烈运动。",
-            "### D. 压力与解毒负担管理",
-            "压力与解毒负担：每天安排2次5分钟呼吸/冥想/伸展；首月减少熬夜、酒精、香烟和不必要的环境暴露，让肝脏解毒和HPA轴先降负荷。",
-        ]
-        if questionnaire and questionnaire.dining_out_frequency:
-            prescription.append(f"外食策略：当前外食频率为 {questionnaire.dining_out_frequency}，建议先把外食控制在可计划场景，优先选择清蒸/炖煮、足量蛋白和蔬菜。")
-        if questionnaire and questionnaire.food_sensitivities:
-            prescription.append(f"触发食物观察：已记录食物敏感为 {'、'.join(questionnaire.food_sensitivities[:4])}，建议先做4周回避和症状记录。")
-        if questionnaire and questionnaire.supplement_use:
-            prescription.append("补剂执行：现有补充剂不要和新方案一次性全部叠加，先确认名称、剂量、服用时间和耐受性。")
-        prescription.extend(lifestyle_actions)
-        return list(dict.fromkeys(prescription))[:16]
-
-    def _build_lifestyle_focus(self, case, context: RecommendationContext, lifestyle_actions: list[str]) -> list[str]:
-        questionnaire = case.questionnaire
-        focus: list[str] = []
-
-        if questionnaire and questionnaire.dining_out_frequency:
-            focus.append(f"饮食执行：当前外食频率为 {questionnaire.dining_out_frequency}，建议先减少高不确定性的外食场景。")
-        if questionnaire and questionnaire.food_sensitivities:
-            focus.append(f"饮食关注：已记录的食物敏感为 {'、'.join(questionnaire.food_sensitivities[:4])}，建议优先做回避与观察。")
-        if questionnaire and questionnaire.sleep_hours is not None:
-            focus.append(f"睡眠恢复：当前睡眠约 {questionnaire.sleep_hours} 小时，建议优先修复睡眠时长与深度。")
-        if questionnaire and questionnaire.exercise_frequency:
-            focus.append(f"运动执行：当前运动频率为 {questionnaire.exercise_frequency}，建议以可持续、低门槛的方式逐步恢复活动量。")
-        if questionnaire and questionnaire.chemical_sensitivity:
-            focus.append(f"环境暴露：已记录环境或化学敏感信息为 {questionnaire.chemical_sensitivity}，建议同步减少可疑暴露源。")
-
-        focus.extend(lifestyle_actions)
-        return list(dict.fromkeys(focus))[:8]
 
     def _build_prioritized_test_recommendations(
         self,

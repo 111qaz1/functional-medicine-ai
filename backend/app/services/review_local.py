@@ -535,7 +535,10 @@ class ReviewService:
             return False
         return (
             ("## 功能医学系统失衡分析" in text and "### 1." not in text)
-            or ("## 生活方式干预处方" in text and "### A." not in text)
+            or (
+                "## 生活方式干预处方" in text
+                and not re.search(r"^###\s*(?:\d+[\.\uFF0E、]|[A-Z]\.)", text, re.MULTILINE)
+            )
         )
 
     def _remove_customer_hidden_rag_labels(self, report_text: str) -> str:
@@ -626,7 +629,11 @@ class ReviewService:
     def _normalize_report_heading_marker(self, text: str) -> str:
         normalized = str(text or "").strip()
         normalized = re.sub(r"^(#{1,3})(?!#)\s*(?=\S)", r"\1 ", normalized)
-        normalized = re.sub(r"^(#{2,3})\s+(\d+[\.\uFF0E、])\s*", r"\1 \2 ", normalized)
+        normalized = re.sub(
+            r"^(#{2,3})\s+(\d+\.\d+|\d+[\.\uFF0E、])\s*",
+            r"\1 \2 ",
+            normalized,
+        )
         normalized = re.sub(r"^(#{2,3})\s+([A-Z]\.)\s*", r"\1 \2 ", normalized)
         normalized = re.sub(r"[ \t\f\v]+", " ", normalized).strip()
         return normalized
@@ -803,6 +810,8 @@ class ReviewService:
             if not valid_sections:
                 section_payload = getattr(fusion, "sections", {}) or {}
                 valid_sections = self._validate_llm_fused_sections(section_payload, target_sections, draft)
+            if getattr(draft, "lifestyle_plan", None):
+                valid_sections.pop("生活方式干预处方", None)
             if not valid_sections:
                 self._append_rag_audit(draft, "rag_fusion:remote_rejected:no_valid_section")
                 return None
@@ -1624,9 +1633,21 @@ class ReviewService:
 
     def _customer_lifestyle_focus(self, case, draft, abnormal_indicators: list) -> list[str]:
         sections = draft.report_sections or {}
+        if getattr(draft, "lifestyle_plan", None):
+            structured_items = self._customerize_items(
+                sections.get("生活方式干预处方")
+                or sections.get("生活方式干预")
+                or sections.get("生活方式干预重点")
+                or draft.lifestyle_actions
+            )
+            return structured_items[:32]
+
         protocol_items = self._protocol_lifestyle_items(case, abnormal_indicators)
         draft_items = self._customerize_items(
-            sections.get("生活方式干预处方") or sections.get("生活方式干预重点") or draft.lifestyle_actions
+            sections.get("生活方式干预处方")
+            or sections.get("生活方式干预")
+            or sections.get("生活方式干预重点")
+            or draft.lifestyle_actions
         )
         rag_items = self._customerize_items(sections.get("RAG生活方式干预", []))
         if sections.get("生活方式干预处方"):

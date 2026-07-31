@@ -76,14 +76,75 @@ const ANALYSIS_LABELS: Record<string, string> = {
   failed: "分析失败"
 };
 
+const REPORT_LIST_SECTIONS = new Set([
+  "异常指标汇总",
+  "慢性食物敏感检测结果",
+  "风险提示",
+  "生活方式干预",
+  "生活方式干预处方",
+  "后续检查建议",
+  "首月营养素干预方案",
+  "现有补充剂调整建议",
+  "需要补充确认",
+  "待确认项"
+]);
+
+const SOURCE_REPORT_ORDER = [
+  "核心结论与健康画像",
+  "异常指标汇总",
+  "慢性食物敏感检测结果",
+  "功能医学系统失衡分析",
+  "生活方式干预",
+  "首月营养素干预方案",
+  "总医嘱说明",
+  "方案总结"
+];
+
+const STANDARD_REPORT_ORDER = [
+  "核心结论与健康画像",
+  "异常指标汇总",
+  "风险提示",
+  "功能医学系统失衡分析",
+  "生活方式干预处方",
+  "后续检查建议",
+  "首月营养素干预方案",
+  "总医嘱说明",
+  "现有补充剂调整建议",
+  "待确认项",
+  "方案总结"
+];
+
+function chineseChapterNumber(value: number) {
+  const digits = "零一二三四五六七八九";
+  if (value < 10) return digits[value];
+  if (value < 20) return `十${value % 10 ? digits[value % 10] : ""}`;
+  if (value < 100) {
+    const tens = Math.floor(value / 10);
+    const ones = value % 10;
+    return `${digits[tens]}十${ones ? digits[ones] : ""}`;
+  }
+  return String(value);
+}
+
 function reportText(draft: RecommendationDraft | null | undefined) {
   if (!draft) return "";
-  return Object.entries(draft.report_sections)
-    .map(([title, raw]) => {
-      const items = Array.isArray(raw) ? raw : [raw];
-      return [`## ${title}`, ...items.filter(Boolean).map((item) => `- ${item}`)].join("\n");
-    })
-    .join("\n\n");
+  const order = draft.source_analysis_id ? SOURCE_REPORT_ORDER : STANDARD_REPORT_ORDER;
+  let chapterIndex = 0;
+  const blocks = order.flatMap((title) => {
+    const raw = draft.report_sections[title];
+    const items = (Array.isArray(raw) ? raw : [raw]).filter(Boolean);
+    if (!items.length) return [];
+    const heading = title === "总医嘱说明"
+      ? "### 总医嘱说明"
+      : `## ${chineseChapterNumber(++chapterIndex)}、${title}`;
+    const renderedItems = items.map((item) => {
+      const text = String(item).trim();
+      if (text.startsWith("### ")) return text;
+      return REPORT_LIST_SECTIONS.has(title) ? `- ${text}` : text;
+    });
+    return [[heading, ...renderedItems].join("\n")];
+  });
+  return ["# 功能医学综合分析与首月干预方案", ...blocks].join("\n\n");
 }
 
 type DosageOverrideDraft = {

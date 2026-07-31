@@ -51,6 +51,11 @@ from app.services.body_systems import (
 )
 from app.services.finding_standardization import STANDARDIZATION_VERSION
 from app.services.evidence_policy import classify_finding_evidence, system_evidence_score
+from app.services.report_content import (
+    ReportAbnormalItem,
+    build_plan_summary,
+    group_abnormal_items,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -2641,7 +2646,6 @@ class CaseAnalysisService:
             existing.get("核心结论与健康画像", []),
             analysis.reviewed_case_summary or analysis.case_summary,
         )
-        grouped_findings = self._group_abnormal_findings(case, reviewed_findings)
         structured_findings = self._enrich_structured_system_findings(
             list(getattr(draft, "structured_system_findings", []) or []),
             reviewed_findings,
@@ -2650,6 +2654,11 @@ class CaseAnalysisService:
                 or analysis.reviewed_system_findings
                 or analysis.system_findings
             ),
+        )
+        grouped_findings = self._group_abnormal_findings(
+            case,
+            reviewed_findings,
+            structured_findings,
         )
         system_lines = self._structured_system_lines(structured_findings)
         findings_by_id = {finding.id: finding.name for finding in reviewed_findings}
@@ -2676,6 +2685,11 @@ class CaseAnalysisService:
                 f"{item.display_name}：针对医生确认的异常问题，本阶段用于支持相关身体系统功能与整体恢复，首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
                 for item in draft.recommended_skus
             ]
+        plan_summary = build_plan_summary(
+            structured_findings,
+            draft.recommended_skus,
+            findings_by_id,
+        )
 
         sections: dict[str, list[str]] = {}
         if health_portrait:
@@ -2697,6 +2711,8 @@ class CaseAnalysisService:
         sections["首月营养素干预方案"] = existing.get("首月营养素干预方案", [])
         if total_advice:
             sections["总医嘱说明"] = total_advice
+        if plan_summary:
+            sections["方案总结"] = plan_summary
         draft.report_sections = sections
         draft.key_lab_highlights = grouped_findings
         draft.structured_system_findings = structured_findings
@@ -2714,24 +2730,16 @@ class CaseAnalysisService:
         return [f"一句话健康画像：{summary}"] if summary else []
 
     @staticmethod
-    def _group_abnormal_findings(case, findings: list[AbnormalFinding]) -> list[str]:
-        file_order = {uploaded.id: index for index, uploaded in enumerate(case.files)}
-        file_names = {uploaded.id: uploaded.filename for uploaded in case.files}
-        groups: dict[str, list[AbnormalFinding]] = {}
-        manual_key = "__manual__"
-        for finding in findings:
-            if str(finding.abnormal_flag or "").lower() in {"normal", "info"}:
-                continue
-            group_key = finding.source_file_id if finding.source_file_id in file_order else manual_key
-            groups.setdefault(group_key, []).append(finding)
-
-        ordered_keys = sorted(
-            (key for key in groups if key != manual_key),
-            key=lambda key: file_order.get(key, len(file_order)),
-        )
-        if manual_key in groups:
-            ordered_keys.append(manual_key)
-
+    def _group_abnormal_findings(
+        case,
+        findings: list[AbnormalFinding],
+        structured_findings: list[StructuredSystemFinding],
+    ) -> list[str]:
+        confirmed_systems = {
+            finding.finding_id: tuple(finding.system_ids)
+            for finding in getattr(case, "confirmed_clinical_findings", []) or []
+        }
+        items: list[ReportAbnormalItem] = []
         labels = {
             "high": "偏高",
             "low": "偏低",
@@ -2739,22 +2747,39 @@ class CaseAnalysisService:
             "abnormal": "异常",
             "unknown": "异常",
         }
-        lines: list[str] = []
-        for group_index, group_key in enumerate(ordered_keys, start=1):
-            title = "医生补充异常" if group_key == manual_key else file_names.get(group_key, groups[group_key][0].source_file_name)
-            lines.append(f"### {group_index}. {title}")
-            seen: set[tuple[str, str]] = set()
-            for finding in groups[group_key]:
-                result = (finding.result_text or finding.raw_value or finding.interpretation or "异常").strip()
-                if finding.unit and finding.unit not in result:
-                    result = f"{result} {finding.unit}".strip()
-                dedupe_key = (re.sub(r"\s+", "", finding.name).lower(), re.sub(r"\s+", "", result).lower())
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
-                direction = labels.get(str(finding.abnormal_flag or "").lower(), "异常")
-                lines.append(f"{finding.name}：{result}（{direction}）")
-        return lines
+        for finding in findings:
+            if str(finding.abnormal_flag or "").lower() in {"normal", "info"}:
+                continue
+            result = (finding.result_text or finding.raw_value or finding.interpretation or "异常").strip()
+            if finding.unit and finding.unit not in result:
+                result = f"{result} {finding.unit}".strip()
+            items.append(
+                ReportAbnormalItem(
+                    item_id=finding.id,
+                    name=finding.name,
+                    result=result,
+                    status_label=labels.get(str(finding.abnormal_flag or "").lower(), "异常"),
+                    system_ids=tuple(
+                        dict.fromkeys(
+                            [
+                                *list(finding.system_ids or []),
+                                *list(confirmed_systems.get(finding.id, ())),
+                            ]
+                        )
+                    ),
+                    search_text=" ".join(
+                        part
+                        for part in (
+                            finding.interpretation,
+                            finding.report_explanation,
+                            finding.neutral_interpretation,
+                            finding.source_text,
+                        )
+                        if part
+                    ),
+                )
+            )
+        return group_abnormal_items(items, structured_findings)
 
     def _enrich_structured_system_findings(
         self,
@@ -2765,7 +2790,7 @@ class CaseAnalysisService:
     ) -> list[StructuredSystemFinding]:
         findings_by_system: dict[str, list[AbnormalFinding]] = {}
         for finding in abnormal_findings:
-            system_ids = classify_text_to_system_ids(
+            system_ids = list(finding.system_ids or []) or classify_text_to_system_ids(
                 finding.name,
                 finding.interpretation,
                 finding.source_text,
@@ -2811,6 +2836,22 @@ class CaseAnalysisService:
                         or build_system_summary(item.system_id, evidence_names, item.priority_score),
                         "finding_ids": finding_ids,
                     }
+                )
+            )
+        existing_system_ids = {item.system_id for item in enriched}
+        for system_id in SYSTEM_NAMES:
+            matched = findings_by_system.get(system_id, [])
+            if not matched or system_id in existing_system_ids:
+                continue
+            score = 45.0
+            enriched.append(
+                StructuredSystemFinding(
+                    system_id=system_id,
+                    system_name=SYSTEM_NAMES[system_id],
+                    priority_level=priority_level(score),
+                    priority_score=score,
+                    summary=build_system_summary(system_id, [item.name for item in matched], score),
+                    finding_ids=[item.id for item in matched],
                 )
             )
         priority_order = {"最高优先级": 0, "优先级高": 1, "中度关注": 2}

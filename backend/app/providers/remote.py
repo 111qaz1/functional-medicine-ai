@@ -697,7 +697,12 @@ class OpenAICompatibleGroundedComposer:
 class OpenAICompatibleRagReportFusion:
     """Optional remote helper for naturalizing already-filtered RAG snippets into report sections."""
 
-    allowed_sections = ("总体健康画像", "关键指标", "生活方式干预重点", "复查与跟进建议")
+    allowed_sections = (
+        "核心结论与健康画像",
+        "异常指标汇总",
+        "生活方式干预处方",
+        "后续检查建议",
+    )
 
     def __init__(
         self,
@@ -810,20 +815,24 @@ class OpenAICompatibleRagReportFusion:
         return (
             "你是功能医学项目的内部医学编辑，只负责把已经通过本地安全过滤的 RAG 参考内容，"
             "自然融入客户可见报告的指定区块。必须严格遵守："
-            "1. 只能改写 target_sections 中这四个区块：总体健康画像、关键指标、生活方式干预重点、复查与跟进建议。"
+            "1. 只能处理 target_sections 中实际提供的区块：核心结论与健康画像、异常指标汇总、生活方式干预处方、后续检查建议。"
             "2. 不得改动或新增产品、营养素方案、剂量、禁忌、风险提示、医生规则或人工审核要求。"
             "3. 不得新增目录外产品、药物、处方、治疗承诺、诊断结论。"
             "4. 不得输出教材来源、文件名、页码、chunk id、RAG 字样、功能医学知识库（仅供参考）等内部标记。"
-            "5. 关键指标区块必须保持原有条目数量和顺序，每条仍以原指标名称开头。"
+            "5. 异常指标汇总由本地规则锁定系统归类、指标、结果、单位、状态、数量和顺序；"
+            "该区块只能返回 index 与 explanation，不得返回或改写完整条目。"
             "6. 语言要面向患者，简体中文，表达自然、克制、可执行；不要把片段生硬整句粘贴。"
             "7. 证据不足时保持原句或只做轻微润色，不强行加入教材结论。"
             "8. 为降低延迟，只返回真正需要改写的条目补丁，最多 8 个补丁；没有必要改写的区块返回空数组。"
-            "9. text 必须是单行正文，不得包含换行、项目符号、编号、Markdown 标题、表格或额外缩进。"
+            "9. text 和 explanation 必须是单行正文，不得包含换行、项目符号、编号、Markdown 标题、表格或额外缩进。"
             "10. 使用简体中文报告标点：中文逗号、顿号、冒号、分号、句号和中文括号；每条以自然完整的中文句子结束。"
+            "11. explanation 只解释目标行已有异常的健康管理意义，不得增加其他系统归类、检查结果或患者事实。"
             "只返回 JSON，不要 Markdown。index 使用从 0 开始的条目下标。JSON 格式必须为："
-            "{\"section_patches\":{\"总体健康画像\":[{\"index\":0,\"text\":\"...\"}],"
-            "\"关键指标\":[{\"index\":1,\"text\":\"...\"}],\"生活方式干预重点\":[],\"复查与跟进建议\":[]},"
-            "\"used_rag_refs\":{\"总体健康画像\":[\"health_1\"],\"关键指标\":[\"indicator_1\"]}}。"
+            "{\"section_patches\":{\"核心结论与健康画像\":[{\"index\":0,\"text\":\"...\"}],"
+            "\"异常指标汇总\":[{\"index\":1,\"explanation\":\"...\"}],"
+            "\"生活方式干预处方\":[],\"后续检查建议\":[]},"
+            "\"used_rag_refs\":{\"核心结论与健康画像\":[\"health_1\"],"
+            "\"异常指标汇总\":[\"indicator_1\"]}}。"
         )
 
     def _compact_rag_items(self, items: list[dict[str, str]]) -> list[dict[str, str]]:

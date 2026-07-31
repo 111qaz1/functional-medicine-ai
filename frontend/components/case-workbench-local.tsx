@@ -186,7 +186,25 @@ function abnormalFlagLabel(flag: string) {
   if (flag === "high") return "偏高";
   if (flag === "low") return "偏低";
   if (flag === "positive") return "阳性/存在";
+  if (flag === "patient_reported") return "患者自述";
   return "异常";
+}
+
+function isPatientReportedFinding(finding: AbnormalFinding) {
+  return finding.abnormal_flag === "patient_reported";
+}
+
+function findingNeedsEvidenceReview(finding: AbnormalFinding) {
+  return !isPatientReportedFinding(finding) && finding.evidence_status === "needs_review";
+}
+
+function findingHasVerifiedEvidence(finding: AbnormalFinding) {
+  return isPatientReportedFinding(finding) || finding.evidence_status === "verified_text";
+}
+
+function findingEvidenceLabel(finding: AbnormalFinding) {
+  if (isPatientReportedFinding(finding)) return "患者自述";
+  return `${evidenceLabel(finding.evidence_status)}${finding.evidence_notes.length ? ` · ${finding.evidence_notes.join("；")}` : ""}`;
 }
 
 function findingResultLabel(finding: AbnormalFinding) {
@@ -259,8 +277,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         .some((value) => String(value).toLowerCase().includes(query));
       const matchesFilter = findingFilter === "all"
         || (findingFilter === "attention" && ["high", "low", "positive"].includes(finding.abnormal_flag))
-        || (findingFilter === "needs_review" && finding.evidence_status === "needs_review")
-        || (findingFilter === "verified" && finding.evidence_status === "verified_text");
+        || (findingFilter === "needs_review" && findingNeedsEvidenceReview(finding))
+        || (findingFilter === "verified" && findingHasVerifiedEvidence(finding));
       return matchesSearch && matchesFilter;
     }), [findings, findingFilter, findingSearch]);
 
@@ -818,8 +836,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                   {([
                     ["all", `全部 ${findings.length}`],
                     ["attention", `异常 ${findings.filter((item) => ["high", "low", "positive"].includes(item.abnormal_flag)).length}`],
-                    ["needs_review", `待确认 ${findings.filter((item) => item.evidence_status === "needs_review").length}`],
-                    ["verified", `已核对 ${findings.filter((item) => item.evidence_status === "verified_text").length}`]
+                    ["needs_review", `待确认 ${findings.filter(findingNeedsEvidenceReview).length}`],
+                    ["verified", `已核对 ${findings.filter(findingHasVerifiedEvidence).length}`]
                   ] as const).map(([value, label]) => (
                     <button type="button" key={value} className={`finding-filter__button${findingFilter === value ? " is-active" : ""}`} onClick={() => setFindingFilter(value)}>{label}</button>
                   ))}
@@ -848,7 +866,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                           <label className="field"><span>数值</span><input value={finding.raw_value ?? ""} onChange={(event) => updateFinding(index, { raw_value: event.target.value || null })} /></label>
                           <label className="field"><span>单位</span><input value={finding.unit ?? ""} onChange={(event) => updateFinding(index, { unit: event.target.value || null })} /></label>
                           <label className="field"><span>参考范围</span><input value={finding.reference_range ?? ""} onChange={(event) => updateFinding(index, { reference_range: event.target.value || null })} /></label>
-                          <label className="field"><span>异常方向</span><select value={finding.abnormal_flag} onChange={(event) => updateFinding(index, { abnormal_flag: event.target.value })}><option value="high">偏高</option><option value="low">偏低</option><option value="positive">阳性/存在</option><option value="unknown">未指定</option></select></label>
+                          <label className="field"><span>异常方向</span><select value={finding.abnormal_flag} onChange={(event) => updateFinding(index, { abnormal_flag: event.target.value })}><option value="high">偏高</option><option value="low">偏低</option><option value="positive">阳性/存在</option><option value="patient_reported">患者自述</option><option value="unknown">未指定</option></select></label>
                         </div>
                         <details className="abnormal-finding-card__evidence">
                           <summary>查看来源证据</summary>
@@ -860,7 +878,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                             <label className="field"><span>原文证据</span><textarea rows={3} value={finding.source_text} onChange={(event) => updateFinding(index, { source_text: event.target.value })} /></label>
                             {finding.report_explanation ? <p className="muted"><strong>报告解释：</strong>{finding.report_explanation}</p> : null}
                             {finding.neutral_interpretation ? <p className="muted"><strong>中性医学解释：</strong>{finding.neutral_interpretation}</p> : null}
-                            <p className="muted">{evidenceLabel(finding.evidence_status)}{finding.evidence_notes.length ? ` · ${finding.evidence_notes.join("；")}` : ""}</p>
+                            <p className="muted">{findingEvidenceLabel(finding)}</p>
                           </div>
                         </details>
                         <button type="button" className="secondary-button secondary-button--danger" disabled={busy} onClick={() => setFindings((current) => current.filter((_, itemIndex) => itemIndex !== index))}>删除此项</button>

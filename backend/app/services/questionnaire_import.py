@@ -17,7 +17,7 @@ from app.domain.models import Questionnaire
 class QuestionnaireParseResult:
     questionnaire: Questionnaire
     uncertain_fields: dict[str, list[str]] = field(default_factory=dict)
-    candidate_values: dict[str, Any] = field(default_factory=dict)
+    partial_fields: dict[str, list[str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     field_warnings: dict[str, str] = field(default_factory=dict)
 
@@ -34,16 +34,22 @@ class QuestionnaireParseResult:
         if message not in self.warnings:
             self.warnings.append(message)
 
-    def resolve_field(self, field_name: str) -> None:
-        self.uncertain_fields.pop(field_name, None)
-        self.candidate_values.pop(field_name, None)
-        message = self.field_warnings.pop(field_name, None)
-        if message and message in self.warnings:
-            self.warnings.remove(message)
+    def add_partial(self, field_name: str, evidence: str, message: str) -> None:
+        cleaned = re.sub(r"\s+", " ", evidence or "").strip()
+        if cleaned:
+            self.partial_fields.setdefault(field_name, []).append(cleaned[:800])
+        else:
+            self.partial_fields.setdefault(field_name, [])
+        previous = self.field_warnings.pop(field_name, None)
+        if previous and previous in self.warnings:
+            self.warnings.remove(previous)
+        self.field_warnings[field_name] = message
+        if message not in self.warnings:
+            self.warnings.append(message)
 
 
 class QuestionnaireImportService:
-    PARSER_VERSION = "msq-structured-v2"
+    PARSER_VERSION = "msq-structured-v3-local-only"
     _WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     _DOCX_SUFFIXES = {".docx"}
     _PDF_SUFFIXES = {".pdf"}
@@ -685,26 +691,36 @@ class QuestionnaireImportService:
             demographic_lines
         )
         demographic_text = "\n".join(demographic_lines)
-        if len({value for value, _ in age_candidates}) > 1:
+        invalid_patient_age = self._has_invalid_patient_age(
+            demographic_lines
+        )
+        if invalid_patient_age:
             self._mark_uncertain(
                 result,
                 "age",
                 demographic_text,
-                "MSQ 基本信息中出现多个患者年龄，已等待模型按问卷原文复核。",
+                "MSQ 患者年龄超出 0–120 范围，已留空，请人工确认。",
             )
-        if self._has_invalid_patient_age(demographic_lines):
+        elif not age_candidates:
             self._mark_uncertain(
                 result,
                 "age",
                 demographic_text,
-                "MSQ 基本信息中的年龄不符合合理范围，已等待模型按问卷原文复核。",
+                "MSQ 患者年龄未明确填写，已留空，请人工确认。",
+            )
+        elif len({value for value, _ in age_candidates}) > 1:
+            self._mark_uncertain(
+                result,
+                "age",
+                demographic_text,
+                "MSQ 患者年龄存在多个冲突值，已留空，请人工确认。",
             )
         if len({value for value, _ in sex_candidates}) > 1:
             self._mark_uncertain(
                 result,
                 "sex",
                 demographic_text,
-                "MSQ 基本信息中出现多个患者性别，已等待模型按问卷原文复核。",
+                "MSQ 患者性别存在冲突，已留空，请人工确认。",
             )
 
         pregnancy_rows = [
@@ -727,7 +743,7 @@ class QuestionnaireImportService:
                 result,
                 "pregnant_or_lactating",
                 "\n".join(pregnancy_rows),
-                "MSQ 妊娠或哺乳状态选项存在冲突，已等待模型复核。",
+                "MSQ 妊娠或哺乳状态选项存在冲突，已留空，请人工确认。",
             )
         elif pregnancy_states == {"yes"}:
             result.questionnaire = result.questionnaire.model_copy(
@@ -751,12 +767,25 @@ class QuestionnaireImportService:
                     for row in major_table[(medication_index or 0) + 1 : medication_end]
                 )
                 if medication_state == "conflict":
-                    self._mark_uncertain(
-                        result,
-                        "medications",
-                        f"{medication_line}\n{medication_detail}",
-                        "MSQ 用药选项存在冲突，当前用药已暂停进入自动规则。",
-                    )
+                    if (
+                        questionnaire.medications
+                        and not self._has_only_placeholder_terms(
+                            questionnaire.medications
+                        )
+                    ):
+                        self._mark_partial(
+                            result,
+                            "medications",
+                            f"{medication_line}\n{medication_detail}",
+                            "MSQ 用药选项存在冲突，已保留明确识别的药物，请人工确认其余内容。",
+                        )
+                    else:
+                        self._mark_uncertain(
+                            result,
+                            "medications",
+                            f"{medication_line}\n{medication_detail}",
+                            "MSQ 用药选项存在冲突，当前用药已留空，请人工确认。",
+                        )
                 elif medication_state == "yes" and (
                     not questionnaire.medications
                     or self._has_only_placeholder_terms(questionnaire.medications)
@@ -765,7 +794,7 @@ class QuestionnaireImportService:
                         result,
                         "medications",
                         f"{medication_line}\n{medication_detail}",
-                        "MSQ 勾选了正在用药但未可靠识别药物内容，已等待模型复核。",
+                        "MSQ 勾选了正在用药但未可靠识别药物内容，已留空，请人工确认。",
                     )
             if allergy_row:
                 allergy_line = " ".join(allergy_row)
@@ -776,12 +805,25 @@ class QuestionnaireImportService:
                     else ""
                 )
                 if allergy_state == "conflict":
-                    self._mark_uncertain(
-                        result,
-                        "allergies",
-                        f"{allergy_line}\n{allergy_detail}",
-                        "MSQ 药物过敏选项存在冲突，过敏信息已暂停进入自动规则。",
-                    )
+                    if (
+                        questionnaire.allergies
+                        and not self._has_only_placeholder_terms(
+                            questionnaire.allergies
+                        )
+                    ):
+                        self._mark_partial(
+                            result,
+                            "allergies",
+                            f"{allergy_line}\n{allergy_detail}",
+                            "MSQ 药物过敏选项存在冲突，已保留明确识别的过敏信息，请人工确认其余内容。",
+                        )
+                    else:
+                        self._mark_uncertain(
+                            result,
+                            "allergies",
+                            f"{allergy_line}\n{allergy_detail}",
+                            "MSQ 药物过敏选项存在冲突，过敏信息已留空，请人工确认。",
+                        )
                 elif allergy_state == "yes" and (
                     not questionnaire.allergies
                     or self._has_only_placeholder_terms(questionnaire.allergies)
@@ -790,7 +832,7 @@ class QuestionnaireImportService:
                         result,
                         "allergies",
                         f"{allergy_line}\n{allergy_detail}",
-                        "MSQ 勾选了药物过敏但未可靠识别具体内容，已等待模型复核。",
+                        "MSQ 勾选了药物过敏但未可靠识别具体内容，已留空，请人工确认。",
                     )
 
         sleep_table = self._find_table(tables, "您的睡眠质量如何")
@@ -800,13 +842,13 @@ class QuestionnaireImportService:
                 result,
                 "sleep_quality",
                 excerpt,
-                "MSQ 睡眠表格结构发生变化，睡眠质量已等待模型复核。",
+                "MSQ 睡眠表格结构发生变化，睡眠质量已留空，请人工确认。",
             )
             self._mark_uncertain(
                 result,
                 "sleep_hours",
                 excerpt,
-                "MSQ 睡眠时间行无法可靠定位，睡眠时长已等待模型复核。",
+                "MSQ 睡眠时间行无法可靠定位，睡眠时长已留空，请人工确认。",
             )
 
         diet_table = self._find_table(tables, "您日常三餐主要食用")
@@ -815,7 +857,7 @@ class QuestionnaireImportService:
                 result,
                 "diet_pattern",
                 self._table_excerpt(diet_table),
-                "MSQ 饮食表格结构发生变化，饮食模式已等待模型复核。",
+                "MSQ 饮食表格结构发生变化，饮食模式已留空，请人工确认。",
             )
 
         exercise_table = self._find_table(tables, "有运动习惯")
@@ -829,14 +871,22 @@ class QuestionnaireImportService:
                     result,
                     "exercise_frequency",
                     exercise_row,
-                    "MSQ 运动习惯选项存在冲突，已等待模型复核。",
+                    "MSQ 运动习惯选项存在冲突，已留空，请人工确认。",
                 )
 
         symptom_tables = self._find_tables(tables, "级别序号症状描述从来没有")
         ambiguous_rows: list[str] = []
+        ambiguous_systems: set[str] = set()
+        ambiguous_count = 0
+        current_section = ""
         for table in symptom_tables:
             table_ambiguities: list[str] = []
             for row in table[2:]:
+                first_cell = row[0] if row else ""
+                for raw_section in self._MSQ_SECTION_MAP:
+                    if raw_section in first_cell:
+                        current_section = raw_section
+                        break
                 marker_cells = row[2:7] if len(row) >= 7 else row[2:]
                 checked_count = sum(
                     self._contains_checked_marker(cell) for cell in marker_cells
@@ -845,6 +895,10 @@ class QuestionnaireImportService:
                     len(row) < 7 and any(marker in " ".join(row) for marker in self._ALL_MARKERS)
                 ):
                     table_ambiguities.append(" | ".join(row))
+                    ambiguous_count += 1
+                    ambiguous_systems.update(
+                        self._MSQ_SECTION_MAP.get(current_section, [])
+                    )
             if table_ambiguities:
                 ambiguous_rows.extend(
                     [
@@ -854,17 +908,32 @@ class QuestionnaireImportService:
                 )
         if ambiguous_rows:
             evidence = "\n".join(ambiguous_rows[:12])
-            self._mark_uncertain(
+            self._mark_partial(
                 result,
                 "symptoms",
                 evidence,
-                "MSQ 症状评分存在多选或列错位，相关症状已等待模型复核。",
+                f"MSQ 有 {ambiguous_count} 条症状评分存在多选或列错位，"
+                "已忽略这些条目，其余已确认症状保留。",
             )
-            self._mark_uncertain(
+            retained_scores = {
+                system_name: score
+                for system_name, score in result.questionnaire.msq_system_scores.items()
+                if system_name not in ambiguous_systems
+            }
+            result.questionnaire = result.questionnaire.model_copy(
+                update={"msq_system_scores": retained_scores}
+            )
+            affected_systems = "、".join(sorted(ambiguous_systems))
+            self._mark_partial(
                 result,
                 "msq_system_scores",
                 evidence,
-                "MSQ 症状评分存在多选或列错位，系统评分已等待模型复核。",
+                (
+                    f"MSQ 的{affected_systems}评分包含歧义条目，"
+                    "对应系统评分已不进入自动规则。"
+                    if affected_systems
+                    else "MSQ 存在无法定位身体系统的歧义评分条目，已忽略该条目。"
+                ),
             )
         return result
 
@@ -877,19 +946,34 @@ class QuestionnaireImportService:
         lines = self._pdf_demographic_lines(text)
         _, _, age_candidates, sex_candidates = self._extract_patient_demographics(lines)
         demographic_text = "\n".join(lines)
-        if len({value for value, _ in age_candidates}) > 1 or self._has_invalid_patient_age(lines):
+        invalid_patient_age = self._has_invalid_patient_age(lines)
+        if invalid_patient_age:
             self._mark_uncertain(
                 result,
                 "age",
                 demographic_text,
-                "MSQ PDF 基本信息中的患者年龄存在歧义，已等待模型按问卷原文复核。",
+                "MSQ PDF 患者年龄超出 0–120 范围，已留空，请人工确认。",
+            )
+        elif not age_candidates:
+            self._mark_uncertain(
+                result,
+                "age",
+                demographic_text,
+                "MSQ PDF 患者年龄未明确填写，已留空，请人工确认。",
+            )
+        elif len({value for value, _ in age_candidates}) > 1:
+            self._mark_uncertain(
+                result,
+                "age",
+                demographic_text,
+                "MSQ PDF 患者年龄存在冲突，已留空，请人工确认。",
             )
         if len({value for value, _ in sex_candidates}) > 1:
             self._mark_uncertain(
                 result,
                 "sex",
                 demographic_text,
-                "MSQ PDF 基本信息中的患者性别存在歧义，已等待模型按问卷原文复核。",
+                "MSQ PDF 患者性别存在冲突，已留空，请人工确认。",
             )
 
         normalized = self._normalize_pdf_text(text)
@@ -900,16 +984,29 @@ class QuestionnaireImportService:
         )
         medication_state = self._yes_no_state(medication_block)
         if medication_state in {"yes", "conflict"}:
-            self._mark_uncertain(
-                result,
-                "medications",
-                medication_block,
-                (
-                    "MSQ PDF 的用药选项存在冲突，当前用药已暂停进入自动规则。"
-                    if medication_state == "conflict"
-                    else "MSQ PDF 勾选了正在用药，具体药物已等待模型按问卷原文复核。"
-                ),
-            )
+            if (
+                questionnaire.medications
+                and not self._has_only_placeholder_terms(
+                    questionnaire.medications
+                )
+            ):
+                self._mark_partial(
+                    result,
+                    "medications",
+                    medication_block,
+                    "MSQ PDF 用药信息不完整，已保留明确识别的药物，请人工确认其余内容。",
+                )
+            else:
+                self._mark_uncertain(
+                    result,
+                    "medications",
+                    medication_block,
+                    (
+                        "MSQ PDF 的用药选项存在冲突，当前用药已留空，请人工确认。"
+                        if medication_state == "conflict"
+                        else "MSQ PDF 勾选了正在用药但未可靠识别药物内容，已留空，请人工确认。"
+                    ),
+                )
         allergy_block = self._extract_between_text(
             normalized,
             "4. 您是否对某些药物过敏？",
@@ -917,16 +1014,29 @@ class QuestionnaireImportService:
         )
         allergy_state = self._yes_no_state(allergy_block)
         if allergy_state in {"yes", "conflict"}:
-            self._mark_uncertain(
-                result,
-                "allergies",
-                allergy_block,
-                (
-                    "MSQ PDF 的过敏选项存在冲突，过敏信息已暂停进入自动规则。"
-                    if allergy_state == "conflict"
-                    else "MSQ PDF 勾选了药物过敏，具体内容已等待模型按问卷原文复核。"
-                ),
-            )
+            if (
+                questionnaire.allergies
+                and not self._has_only_placeholder_terms(
+                    questionnaire.allergies
+                )
+            ):
+                self._mark_partial(
+                    result,
+                    "allergies",
+                    allergy_block,
+                    "MSQ PDF 过敏信息不完整，已保留明确识别的内容，请人工确认其余信息。",
+                )
+            else:
+                self._mark_uncertain(
+                    result,
+                    "allergies",
+                    allergy_block,
+                    (
+                        "MSQ PDF 的过敏选项存在冲突，过敏信息已留空，请人工确认。"
+                        if allergy_state == "conflict"
+                        else "MSQ PDF 勾选了药物过敏但未可靠识别具体内容，已留空，请人工确认。"
+                    ),
+                )
 
         pregnancy_snippets = [
             normalized[max(0, match.start() - 20) : match.start() + 160]
@@ -946,7 +1056,7 @@ class QuestionnaireImportService:
                 result,
                 "pregnant_or_lactating",
                 "\n".join(pregnancy_snippets),
-                "MSQ PDF 的妊娠或哺乳状态存在冲突，已等待模型复核。",
+                "MSQ PDF 的妊娠或哺乳状态存在冲突，已留空，请人工确认。",
             )
         elif pregnancy_states == {"yes"}:
             result.questionnaire = result.questionnaire.model_copy(
@@ -958,21 +1068,52 @@ class QuestionnaireImportService:
             )
 
         symptom_block = self._extract_between_text(normalized, "第九部分：症状评估")
-        if symptom_block and not questionnaire.msq_system_scores and any(
-            marker in symptom_block for marker in self._CHECKED_MARKERS
+        (
+            parsed_score_rows,
+            ambiguous_score_rows,
+            ambiguous_systems,
+        ) = self._inspect_pdf_msq_rows(normalized)
+        if ambiguous_score_rows:
+            evidence = symptom_block[:3000]
+            self._mark_partial(
+                result,
+                "symptoms",
+                evidence,
+                f"MSQ PDF 有 {ambiguous_score_rows} 条症状评分存在多选，"
+                "已忽略这些条目，其余已确认症状保留。",
+            )
+            retained_scores = {
+                system_name: score
+                for system_name, score in result.questionnaire.msq_system_scores.items()
+                if system_name not in ambiguous_systems
+            }
+            result.questionnaire = result.questionnaire.model_copy(
+                update={"msq_system_scores": retained_scores}
+            )
+            affected_systems = "、".join(sorted(ambiguous_systems))
+            self._mark_partial(
+                result,
+                "msq_system_scores",
+                evidence,
+                (
+                    f"MSQ PDF 的{affected_systems}评分包含歧义条目，"
+                    "对应系统评分已不进入自动规则。"
+                    if affected_systems
+                    else "MSQ PDF 存在无法定位身体系统的歧义评分条目，已忽略该条目。"
+                ),
+            )
+        elif (
+            symptom_block
+            and not questionnaire.msq_system_scores
+            and parsed_score_rows == 0
+            and any(marker in symptom_block for marker in self._CHECKED_MARKERS)
         ):
             excerpt = symptom_block[:3000]
             self._mark_uncertain(
                 result,
-                "symptoms",
-                excerpt,
-                "MSQ PDF 中存在勾选症状但评分列无法可靠定位，已等待模型复核。",
-            )
-            self._mark_uncertain(
-                result,
                 "msq_system_scores",
                 excerpt,
-                "MSQ PDF 中存在勾选症状但系统评分无法可靠计算，已等待模型复核。",
+                "MSQ PDF 中存在勾选症状但系统评分无法可靠计算，评分已留空，请人工确认。",
             )
         return result
 
@@ -983,17 +1124,6 @@ class QuestionnaireImportService:
         evidence: str,
         message: str,
     ) -> None:
-        candidate_value = getattr(result.questionnaire, field_name, None)
-        if (
-            field_name in {"medications", "allergies"}
-            and isinstance(candidate_value, list)
-            and self._has_only_placeholder_terms(candidate_value)
-        ):
-            candidate_value = []
-        result.candidate_values.setdefault(
-            field_name,
-            candidate_value,
-        )
         result.add_uncertainty(field_name, evidence, message)
         if field_name in self._EMPTY_VALUES:
             empty_value = self._EMPTY_VALUES[field_name]
@@ -1004,6 +1134,15 @@ class QuestionnaireImportService:
             result.questionnaire = result.questionnaire.model_copy(
                 update={field_name: empty_value}
             )
+
+    @staticmethod
+    def _mark_partial(
+        result: QuestionnaireParseResult,
+        field_name: str,
+        evidence: str,
+        message: str,
+    ) -> None:
+        result.add_partial(field_name, evidence, message)
 
     def _extract_patient_demographics(
         self,
@@ -1282,6 +1421,74 @@ class QuestionnaireImportService:
             previous_end = match.end()
 
         return self._dedupe(symptoms), self._dedupe(emotional_state), self._dedupe(bowel_markers), msq_system_scores
+
+    def _inspect_pdf_msq_rows(
+        self,
+        text: str,
+    ) -> tuple[int, int, set[str]]:
+        symptom_text = self._extract_between_text(text, "第九部分：症状评估")
+        if not symptom_text:
+            return 0, 0, set()
+
+        symptom_text = re.sub(
+            r"级别\s+序号\s+症状描述\s+从来没有\s+偶尔\s+轻微\s+中等\s+严重\s+0\s+1\s+2\s+3\s+4",
+            " ",
+            symptom_text,
+        )
+        row_pattern = re.compile(
+            r"(?<![\d.])(\d{1,2})\s+([^□☑]{2,50}?)\s+((?:[□☑]\s*){5})"
+        )
+        matches = list(row_pattern.finditer(symptom_text))
+        parsed_rows = 0
+        ambiguous_rows = 0
+        ambiguous_systems: set[str] = set()
+        current_section = ""
+        previous_end = 0
+
+        for index, match in enumerate(matches):
+            before = symptom_text[previous_end : match.start()]
+            section_before = self._section_from_short_gap(before)
+            current_section = section_before or current_section
+            next_start = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(symptom_text)
+            )
+            after = symptom_text[match.end() : next_start]
+
+            symptom_name = self._clean_text(match.group(2))
+            prefix_section = self._section_prefix(symptom_name)
+            if prefix_section:
+                current_section = prefix_section
+                symptom_name = self._clean_text(
+                    symptom_name[len(prefix_section) :]
+                )
+            section_after = self._section_from_short_gap(after)
+            row_section = (
+                prefix_section
+                or section_before
+                or section_after
+                or self._section_for_pdf_symptom(symptom_name)
+                or current_section
+            )
+            markers = re.findall(r"[□☑]", match.group(3))
+            checked_count = sum(
+                marker in self._CHECKED_MARKERS
+                for marker in markers
+            )
+            if checked_count == 1:
+                parsed_rows += 1
+            elif checked_count > 1:
+                ambiguous_rows += 1
+                ambiguous_systems.update(
+                    self._MSQ_SECTION_MAP.get(row_section or "", [])
+                )
+
+            if section_after:
+                current_section = section_after
+            previous_end = match.end()
+
+        return parsed_rows, ambiguous_rows, ambiguous_systems
 
     def _section_from_text(self, text: str) -> str:
         for section in self._MSQ_SECTION_MAP:

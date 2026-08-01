@@ -302,6 +302,7 @@ export interface DraftRecommendationItem {
   evidence_details: string[];
   warnings: string[];
   primary_system_id?: string | null;
+  covered_system_ids?: string[];
   matched_finding_ids?: string[];
   matched_support_need_ids?: string[];
   system_priority_rank?: number | null;
@@ -376,6 +377,7 @@ export interface RecommendationDraft {
   manual_review_required: boolean;
   red_flags: string[];
   structured_system_findings?: StructuredSystemFinding[];
+  uncovered_system_ids?: string[];
   report_sections: Record<string, string[] | string>;
   internal_audit?: Record<string, unknown>;
   model_version: string;

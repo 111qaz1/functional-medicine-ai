@@ -11,6 +11,7 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from io import BytesIO
@@ -43,6 +44,7 @@ from app.domain.models import (
     SourceSpan,
 )
 from app.services.body_systems import (
+    BODY_SYSTEMS,
     SYSTEM_NAMES,
     build_system_summary,
     classify_text_to_system_ids,
@@ -60,6 +62,10 @@ from app.services.questionnaire_import import QuestionnaireParseResult
 
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_DISPLAY_ORDER = {
+    system_id: index for index, (system_id, _) in enumerate(BODY_SYSTEMS)
+}
 
 _RETRYABLE_MODEL_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _MODEL_CONNECTION_ERRORS = (
@@ -138,6 +144,14 @@ class _SynthesisPayload(_StrictPayload):
     structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     support_needs: list["_SupportNeedPayload"] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+@dataclass
+class _QuestionnaireContext:
+    questionnaire: Questionnaire | None
+    unresolved_fields: set[str]
+    warnings: list[str]
+    entries: list[tuple[DocumentAnalysisResult, Questionnaire]]
 
 
 class _EvidenceReferencePayload(_StrictPayload):
@@ -432,6 +446,9 @@ class OpenAICompatibleCaseAnalysisProvider:
             "病例总结应分段、精炼，避免一整段堆砌。"
             "如果文档 warnings 表示医疗问卷内容提取失败，只能说明该文件暂时无法提取，"
             "不得把提取失败改写为问卷空白、患者没有症状或患者没有病史。"
+            "validated_questionnaire 由本地确定性规则验证并合并；只要该字段存在，就表示问卷提取成功。"
+            "不得声称该问卷提取失败、系统评分无法获取、问卷空白或患者无症状，"
+            "也不得在输出中修改、补算或覆盖其中的年龄、症状评分、系统评分和其他结构化字段。"
             "documents 中的 patient_reported_questionnaire 是患者自述，可用于整理主诉、症状、病史、"
             "用药和生活方式，但必须明确其患者自述属性，不得升级为医生诊断或客观检验异常。"
             "validated_questionnaire 同样属于患者自述；只有 known_conditions 中明确填写的已有病情"
@@ -444,8 +461,23 @@ class OpenAICompatibleCaseAnalysisProvider:
             "证据优先级必须为：明确临床结论与客观检验异常高于医生确认症状，症状高于环境暴露，"
             "环境暴露高于遗传易感。遗传易感、基因位点及仅描述未来患病风险的内容只能作为风险修饰背景，"
             "不得高于已确认体检异常，不得单独形成最高优先级系统或营养支持需求。"
+            "生成support_needs时必须先处理doctor_confirmed_abnormal_findings中的客观检验异常和明确临床结论，"
+            "再处理validated_questionnaire中的症状和患者自述。每一项客观异常都必须至少出现在一条support_need的"
+            "evidence_refs中；存在高关联的允许目标时返回对应support_goal_code，没有合适目标时返回null并在rationale中"
+            "说明仅用于复查、监测或安全评估，不得直接遗漏。客观异常支持需求必须排列在问卷症状支持需求之前。"
+            "allowed_support_goals中的objective_evidence_markers和objective_evidence_terms定义目标的正向证据，"
+            "safety_context_markers定义只能用于安全复核、不能单独触发目标的背景证据。必须严格按目录判断，"
+            "不得自行扩展指标与支持目标的关系。异常所属身体系统与目标目录system_id不同时，只有满足目录正向证据"
+            "约束才可提出该目标，并必须返回目标目录中的system_id。"
             "逐条输出结构化支持需求及证据引用。证据引用只能使用 finding:{finding_id}、"
-            "questionnaire:{field}、clinical_summary:{section} 或 document:{file_id}:{page}。"
+            "questionnaire:{field}、questionnaire:msq_system_scores.{系统名}、"
+            "clinical_summary:{section} 或 document:{file_id}:{page}。"
+            "问卷临床证据字段仅包括symptoms、known_conditions、emotional_state、chief_concerns和"
+            "chemical_sensitivity；chemical_sensitivity只表示患者自述的化学或环境刺激敏感，"
+            "只能提出antioxidant辅助支持，不能据此扩大为免疫疾病、炎症诊断或其他产品目标。"
+            "MSQ系统评分只能逐字引用validated_questionnaire.msq_system_scores中真实存在且大于0的键，"
+            "不得创造评分键或使用任意深层路径。用药、补充剂、过敏、食物敏感、饮食、工作、运动、"
+            "排便、睡眠时长、生活方式及附加备注只可作为背景，不得单独或组合提出产品支持需求。"
             "finding_id必须逐字复制doctor_confirmed_abnormal_findings中的完整id；例如输入id为"
             "finding_eff888d232d6时，必须输出finding:finding_eff888d232d6，禁止删除finding_前缀。"
             "只能从 allowed_support_goals 选择 support_goal_code；无法归类时返回 null。"
@@ -1568,6 +1600,12 @@ class OpenAICompatibleCaseAnalysisProvider:
             "questionnaire、food_sensitivity、warnings；不得输出患者信息、文件元数据或其他扩展字段。"
             "abnormal_findings 中每一项都必须包含非空 name、source_page 和 source_text；"
             "name 必须填写具体指标名或检查发现名，不得创建只有解释、没有名称的异常对象。"
+            "数值型指标的当前结果或紧邻结果标记明确出现↑、偏高、升高、增高或高于参考范围时，"
+            "abnormal_flag必须返回high；明确出现↓、偏低、降低、减少或低于参考范围时，"
+            "abnormal_flag必须返回low。已有明确结果方向时，禁止返回unknown、abnormal或笼统的positive；"
+            "positive仅用于阳性、检出、存在等非数值结论。只有描述当前指标结果的词语才能决定异常方向；"
+            "降低风险、升高概率、提高水平等建议、风险或解释性表述不得用于填写abnormal_flag。"
+            "原文没有明确结果方向时不得猜测high或low。"
             "不得生成产品、SKU、剂量、疗程或营养素建议。不得猜测页码或证据。"
             "每条异常必须区分报告原文解释 report_explanation 与模型中性解释 neutral_interpretation。"
             "报告风险、宣传性或绝对化表述只能原样保留为报告解释，不得升级为诊断。"
@@ -2411,6 +2449,13 @@ class CaseAnalysisService:
                 finally:
                     document_executor.shutdown(wait=True, cancel_futures=True)
 
+            questionnaire_context = self._prepare_questionnaire_context(
+                case,
+                results,
+            )
+            analysis.questionnaire = questionnaire_context.questionnaire
+            analysis.warnings.extend(questionnaire_context.warnings)
+            analysis.warnings = list(dict.fromkeys(analysis.warnings))
             analysis.status = AnalysisStatus.synthesizing
             analysis.current_file_name = None
             self._save(analysis)
@@ -2422,6 +2467,7 @@ class CaseAnalysisService:
             synthesis = self.provider.synthesize_case(
                 clinical_summary_text=case.clinical_summary_text,
                 document_results=synthesis_results,
+                questionnaire=questionnaire_context.questionnaire,
                 support_goal_definitions=(
                     self.semantic_support_service.prompt_catalog()
                     if self.semantic_support_service
@@ -2435,10 +2481,16 @@ class CaseAnalysisService:
                 getattr(synthesis, "structured_system_findings", []) or []
             )
             analysis.support_needs = self._semantic_needs_from_synthesis(synthesis)
-            analysis.warnings.extend(synthesis.warnings)
+            analysis.warnings.extend(
+                self._safe_synthesis_warnings(synthesis.warnings)
+            )
             analysis.status = AnalysisStatus.validating
             self._save(analysis)
-            self._assemble_and_validate(case, analysis)
+            self._assemble_and_validate(
+                case,
+                analysis,
+                questionnaire_context=questionnaire_context,
+            )
             if self.semantic_support_service:
                 analysis.support_goal_version = self.semantic_support_service.version
                 analysis.support_needs = self.semantic_support_service.validate_needs(
@@ -2451,6 +2503,10 @@ class CaseAnalysisService:
                 analysis.abnormal_findings,
                 analysis.support_needs,
             )
+            if self.semantic_support_service:
+                analysis.support_needs = self.semantic_support_service.ensure_system_coverage(
+                    analysis=analysis,
+                )
             analysis.status = AnalysisStatus.ready_for_review
             return self._save(analysis)
         except Exception as exc:
@@ -2630,7 +2686,14 @@ class CaseAnalysisService:
                     getattr(synthesis, "structured_system_findings", []) or []
                 )
                 analysis.support_needs = self._semantic_needs_from_synthesis(synthesis)
-                analysis.warnings = list(dict.fromkeys([*analysis.warnings, *synthesis.warnings]))
+                analysis.warnings = list(
+                    dict.fromkeys(
+                        [
+                            *analysis.warnings,
+                            *self._safe_synthesis_warnings(synthesis.warnings),
+                        ]
+                    )
+                )
                 self._set_final_stage(
                     analysis,
                     FinalGenerationStatus.validating_support_needs,
@@ -2648,6 +2711,10 @@ class CaseAnalysisService:
                     analysis.reviewed_abnormal_findings,
                     analysis.support_needs,
                 )
+                if self.semantic_support_service:
+                    analysis.support_needs = self.semantic_support_service.ensure_system_coverage(
+                        analysis=analysis,
+                    )
                 analysis.final_synthesis_completed_revision = analysis.revision
                 self._save(analysis)
 
@@ -2752,22 +2819,27 @@ class CaseAnalysisService:
     ) -> list[StructuredSystemFinding]:
         valid_finding_ids = {item.id for item in findings}
         findings_by_system: dict[str, list[AbnormalFinding]] = {}
+        local_systems_by_finding: dict[str, tuple[str, ...]] = {}
         for finding in findings:
             system_ids = list(finding.system_ids or []) or classify_text_to_system_ids(
                 finding.name,
                 finding.interpretation,
                 finding.source_text,
             )
+            local_systems_by_finding[finding.id] = tuple(
+                system_id for system_id in system_ids if system_id in SYSTEM_NAMES
+            )
             for system_id in system_ids:
                 if system_id in SYSTEM_NAMES:
                     findings_by_system.setdefault(system_id, []).append(
                         finding
                     )
-        # The model proposes systems, but local evidence governance owns the
-        # priority. Confirmed findings and objective abnormalities must outweigh
-        # exposure markers and genetic susceptibility statements.
-        model_context_base = {"最高优先级": 30.0, "优先级高": 20.0, "中度关注": 10.0}
+        # The model proposes systems and narrative context, but local evidence
+        # governance owns the final score and display order. Model labels are a
+        # small tie-breaker and cannot outweigh objective evidence.
+        model_context_base = {"最高优先级": 4.0, "优先级高": 2.0, "中度关注": 0.0}
         deduped: dict[str, StructuredSystemFinding] = {}
+        evidence_tiers: dict[str, int] = {}
         for item in candidates:
             if item.system_id not in SYSTEM_NAMES:
                 continue
@@ -2778,6 +2850,8 @@ class CaseAnalysisService:
                             value
                             for value in item.finding_ids
                             if value in valid_finding_ids
+                            and item.system_id
+                            in local_systems_by_finding.get(value, ())
                         ),
                         *(
                             finding.id
@@ -2801,7 +2875,10 @@ class CaseAnalysisService:
                 for need in (support_needs or [])
                 if need.system_id == item.system_id
                 and need.eligibility_status == SupportEligibilityStatus.eligible
-                and need.evidence_class == ClinicalEvidenceClass.symptom
+                and need.evidence_class in {
+                    ClinicalEvidenceClass.symptom,
+                    ClinicalEvidenceClass.exposure,
+                }
                 and not any(ref.ref.startswith("finding:") for ref in need.evidence_refs)
             ]
             if any(
@@ -2813,7 +2890,14 @@ class CaseAnalysisService:
                 # auditable finding and must not receive a second contextual
                 # questionnaire bonus.
                 contextual_needs = []
-            contextual_bonus = min(len(contextual_needs), 2) * 14.0
+            # Multiple symptoms or multiple model-proposed needs from the same
+            # questionnaire represent one contextual source, not independent
+            # corroboration. Keep the total symptom contribution bounded.
+            contextual_bonus = 12.0 if contextual_needs else 0.0
+            if not matched_findings and not contextual_needs:
+                # A model-only system statement is narrative output, not a locally
+                # validated system finding and must not enter product coverage.
+                continue
             score = min(
                 100.0,
                 model_context_base[proposed_level]
@@ -2839,6 +2923,10 @@ class CaseAnalysisService:
                 ):
                     score = min(score, 59.0)
             level = priority_level(score)
+            evidence_tier = CaseAnalysisService._system_evidence_tier(
+                matched_findings,
+                has_contextual_evidence=bool(contextual_needs),
+            )
             normalized = item.model_copy(
                 update={
                     "system_name": SYSTEM_NAMES[item.system_id],
@@ -2850,13 +2938,11 @@ class CaseAnalysisService:
             existing = deduped.get(item.system_id)
             if not existing or normalized.priority_score > existing.priority_score:
                 deduped[item.system_id] = normalized
+                evidence_tiers[item.system_id] = evidence_tier
         for system_id, matched_findings in findings_by_system.items():
             if system_id in deduped:
                 continue
-            score = min(
-                100.0,
-                10.0 + system_evidence_score(matched_findings),
-            )
+            score = min(100.0, system_evidence_score(matched_findings))
             deduped[system_id] = StructuredSystemFinding(
                 system_id=system_id,
                 system_name=SYSTEM_NAMES[system_id],
@@ -2872,11 +2958,45 @@ class CaseAnalysisService:
                     for finding in matched_findings
                 ],
             )
+            evidence_tiers[system_id] = CaseAnalysisService._system_evidence_tier(
+                matched_findings,
+                has_contextual_evidence=False,
+            )
         order = {"最高优先级": 0, "优先级高": 1, "中度关注": 2}
         return sorted(
             deduped.values(),
-            key=lambda item: (order[item.priority_level], -item.priority_score),
+            key=lambda item: (
+                evidence_tiers.get(item.system_id, 3),
+                order[item.priority_level],
+                -item.priority_score,
+                _SYSTEM_DISPLAY_ORDER.get(item.system_id, 999),
+            ),
         )
+
+    @staticmethod
+    def _system_evidence_tier(
+        findings: list[AbnormalFinding],
+        *,
+        has_contextual_evidence: bool,
+    ) -> int:
+        has_patient_reported_condition = False
+        has_background_only = False
+        for finding in findings:
+            evidence_class = classify_finding_evidence(finding)
+            if str(finding.abnormal_flag or "").lower() == "patient_reported":
+                has_patient_reported_condition = True
+                continue
+            if evidence_class in {
+                ClinicalEvidenceClass.lab_abnormal,
+                ClinicalEvidenceClass.clinical_confirmed,
+            }:
+                return 0
+            has_background_only = True
+        if has_patient_reported_condition:
+            return 1
+        if has_contextual_evidence:
+            return 2
+        return 3 if has_background_only or not findings else 2
 
     @staticmethod
     def _findings_equal(left: list[AbnormalFinding], right: list[AbnormalFinding]) -> bool:
@@ -2899,7 +3019,7 @@ class CaseAnalysisService:
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _analyze_with_cache(self, case, uploaded_file) -> DocumentAnalysisResult:
-        owner_scope = f"doctor:{case.owner_doctor_id}" if case.owner_doctor_id else f"case:{case.id}"
+        owner_scope = f"case:{case.id}"
         parser_version = getattr(
             self.questionnaire_import_service,
             "PARSER_VERSION",
@@ -2907,6 +3027,7 @@ class CaseAnalysisService:
         )
         raw_key = "|".join(
             [
+                str(case.id),
                 uploaded_file.content_sha256 or uploaded_file.id,
                 self.model_version,
                 self.prompt_version,
@@ -3063,20 +3184,151 @@ class CaseAnalysisService:
             warnings=warnings,
         )
 
-    def _assemble_and_validate(self, case, analysis: CaseAnalysis) -> None:
-        files_by_id = {item.id: item for item in case.files}
-        findings: list[AbnormalFinding] = []
-        ignored_files: list[str] = []
+    @staticmethod
+    def _safe_synthesis_warnings(warnings: list[str]) -> list[str]:
+        operational_tokens = (
+            "提取失败",
+            "无法提取",
+            "无法获取功能医学系统评分",
+            "无法获取系统评分",
+            "问卷空白",
+            "患者无症状",
+            "缓存",
+            "解析器",
+            "文件格式",
+            "文件读取",
+        )
+        safe: list[str] = []
+        for warning in warnings:
+            cleaned = re.sub(r"\s+", " ", str(warning or "")).strip()
+            if not cleaned or any(token in cleaned for token in operational_tokens):
+                continue
+            safe.append(cleaned)
+        return list(dict.fromkeys(safe))
+
+    def _prepare_questionnaire_context(
+        self,
+        case,
+        document_results: list[DocumentAnalysisResult],
+    ) -> _QuestionnaireContext:
+        result_order = {item.id: index for index, item in enumerate(case.files)}
+        warnings: list[str] = []
+        entries: list[tuple[DocumentAnalysisResult, Questionnaire]] = []
         msq_questionnaires: list[
             tuple[int, Questionnaire, DocumentAnalysisResult, set[str]]
         ] = []
         medical_questionnaires: list[
             tuple[int, Questionnaire, DocumentAnalysisResult, set[str]]
         ] = []
+
+        for result in document_results:
+            if is_chronic_food_sensitivity_filename(result.file_name):
+                continue
+            if not result.questionnaire:
+                continue
+            questionnaire, warning = self._validated_questionnaire(result)
+            if questionnaire is None:
+                if warning:
+                    warnings.append(warning)
+                continue
+            is_msq = self._is_msq_result(result)
+            if not is_msq and questionnaire.msq_system_scores:
+                questionnaire = questionnaire.model_copy(
+                    update={"msq_system_scores": {}}
+                )
+                warnings.append(
+                    "普通医疗问卷返回了 MSQ 系统评分，已忽略该评分。"
+                )
+            unresolved = self._unresolved_questionnaire_fields(result)
+            safe_questionnaire = self._isolate_unresolved_questionnaire_fields(
+                questionnaire,
+                unresolved,
+            )
+            entry = (
+                result_order.get(result.file_id, 0),
+                safe_questionnaire,
+                result,
+                unresolved,
+            )
+            entries.append((result, safe_questionnaire))
+            if is_msq:
+                msq_questionnaires.append(entry)
+            else:
+                medical_questionnaires.append(entry)
+
+        selected_questionnaire: Questionnaire | None = None
+        unresolved_fields: set[str] = set()
+        protected_fields: set[str] = set()
+        if msq_questionnaires:
+            if len(msq_questionnaires) > 1:
+                warnings.append(
+                    "检测到多份 MSQ 问卷，已采用最后上传且有效的一份。"
+                )
+            (
+                _,
+                selected_questionnaire,
+                _,
+                unresolved_fields,
+            ) = sorted(msq_questionnaires, key=lambda item: item[0])[-1]
+            protected_fields = set(unresolved_fields)
+
+        if medical_questionnaires:
+            ordered_medical = sorted(
+                medical_questionnaires,
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if selected_questionnaire is None:
+                (
+                    _,
+                    selected_questionnaire,
+                    _,
+                    unresolved_fields,
+                ) = ordered_medical.pop(0)
+                protected_fields = set(unresolved_fields)
+            selected_questionnaire, merge_warnings = (
+                self._merge_medical_questionnaire_supplements(
+                    selected_questionnaire,
+                    [item[1] for item in ordered_medical],
+                    protected_fields=protected_fields,
+                )
+            )
+            warnings.extend(merge_warnings)
+            if len(medical_questionnaires) > 1:
+                warnings.append(
+                    "检测到多份普通医疗问卷，已合并其中明确且不冲突的患者自述信息。"
+                )
+
+        return _QuestionnaireContext(
+            questionnaire=selected_questionnaire,
+            unresolved_fields=set(unresolved_fields),
+            warnings=list(dict.fromkeys(warnings)),
+            entries=entries,
+        )
+
+    def _assemble_and_validate(
+        self,
+        case,
+        analysis: CaseAnalysis,
+        *,
+        questionnaire_context: _QuestionnaireContext | None = None,
+    ) -> None:
+        questionnaire_context = questionnaire_context or self._prepare_questionnaire_context(
+            case,
+            analysis.document_results,
+        )
+        files_by_id = {item.id: item for item in case.files}
+        findings: list[AbnormalFinding] = []
+        ignored_files: list[str] = []
         food_results: list[tuple[int, ChronicFoodSensitivityResult]] = []
         result_order = {item.id: index for index, item in enumerate(case.files)}
         seen: set[tuple[str, str, int, str]] = set()
         questionnaire_finding_keys: set[str] = set()
+        prepared_questionnaires = {
+            result.file_id: questionnaire
+            for result, questionnaire in questionnaire_context.entries
+        }
+        analysis.warnings.extend(questionnaire_context.warnings)
         for result in analysis.document_results:
             uploaded_file = files_by_id.get(result.file_id)
             if not result.medical_content:
@@ -3101,36 +3353,11 @@ class CaseAnalysisService:
                 # never re-enter generic abnormal review, system ranking or products.
                 continue
             if result.questionnaire:
-                questionnaire, warning = self._validated_questionnaire(result)
+                questionnaire = prepared_questionnaires.get(result.file_id)
                 if questionnaire:
-                    is_msq = self._is_msq_result(result)
-                    if not is_msq and questionnaire.msq_system_scores:
-                        questionnaire = questionnaire.model_copy(
-                            update={"msq_system_scores": {}}
-                        )
-                        analysis.warnings.append(
-                            "普通医疗问卷返回了 MSQ 系统评分，已忽略该评分。"
-                        )
-                    unresolved = self._unresolved_questionnaire_fields(result)
-                    safe_questionnaire = (
-                        self._isolate_unresolved_questionnaire_fields(
-                            questionnaire,
-                            unresolved,
-                        )
-                    )
-                    entry = (
-                        result_order.get(result.file_id, 0),
-                        safe_questionnaire,
-                        result,
-                        unresolved,
-                    )
-                    if is_msq:
-                        msq_questionnaires.append(entry)
-                    else:
-                        medical_questionnaires.append(entry)
                     for projected in self._questionnaire_abnormal_findings(
                         result,
-                        safe_questionnaire,
+                        questionnaire,
                     ):
                         projected_key = self._compact(projected.name)
                         if (
@@ -3150,8 +3377,6 @@ class CaseAnalysisService:
                                 )
                             )
                         findings.append(validated_projected)
-                elif warning:
-                    analysis.warnings.append(warning)
             if result.food_sensitivity:
                 if result.food_sensitivity.valid:
                     food_results.append((result_order.get(result.file_id, 0), result.food_sensitivity))
@@ -3177,53 +3402,10 @@ class CaseAnalysisService:
                     validated_finding = self.standardization_service.standardize(validated_finding)
                 findings.append(validated_finding)
 
-        selected_questionnaire: Questionnaire | None = None
-        unresolved_fields: set[str] = set()
-        protected_fields: set[str] = set()
-        if msq_questionnaires:
-            if len(msq_questionnaires) > 1:
-                analysis.warnings.append(
-                    "检测到多份 MSQ 问卷，已采用最后上传且有效的一份。"
-                )
-            (
-                _,
-                selected_questionnaire,
-                _,
-                unresolved_fields,
-            ) = sorted(
-                msq_questionnaires,
-                key=lambda item: item[0],
-            )[-1]
-            protected_fields = set(unresolved_fields)
-
-        if medical_questionnaires:
-            ordered_medical = sorted(
-                medical_questionnaires,
-                key=lambda item: item[0],
-                reverse=True,
-            )
-            if selected_questionnaire is None:
-                (
-                    _,
-                    selected_questionnaire,
-                    _,
-                    protected_fields,
-                ) = ordered_medical.pop(0)
-            selected_questionnaire, merge_warnings = (
-                self._merge_medical_questionnaire_supplements(
-                    selected_questionnaire,
-                    [item[1] for item in ordered_medical],
-                    protected_fields=protected_fields,
-                )
-            )
-            analysis.warnings.extend(merge_warnings)
-            if len(medical_questionnaires) > 1:
-                analysis.warnings.append(
-                    "检测到多份普通医疗问卷，已合并其中明确且不冲突的患者自述信息。"
-                )
-
+        selected_questionnaire = questionnaire_context.questionnaire
+        unresolved_fields = questionnaire_context.unresolved_fields
+        analysis.questionnaire = selected_questionnaire
         if selected_questionnaire is not None:
-            analysis.questionnaire = selected_questionnaire
             for field_name in unresolved_fields:
                 keywords = self.MSQ_FIELD_WARNING_KEYWORDS.get(
                     field_name,
@@ -3652,6 +3834,19 @@ class CaseAnalysisService:
                     page=1,
                     snippet=need.support_need_text,
                 )
+            evidence_refs = {evidence.ref for evidence in need.evidence_refs}
+            source_is_patient_reported = bool(
+                source
+                and str(source.abnormal_flag or "").lower() == "patient_reported"
+            )
+            if source_is_patient_reported or "questionnaire:known_conditions" in evidence_refs:
+                projected_flag = "patient_reported"
+            elif need.evidence_class == ClinicalEvidenceClass.exposure:
+                projected_flag = "patient_reported_exposure"
+            elif need.evidence_class == ClinicalEvidenceClass.symptom:
+                projected_flag = "patient_reported_symptom"
+            else:
+                projected_flag = "positive"
             clinical_findings.append(
                 ConfirmedClinicalFinding(
                     finding_id=need.id,
@@ -3662,7 +3857,7 @@ class CaseAnalysisService:
                     mapping_confidence=need.model_confidence,
                     evidence_class=need.evidence_class,
                     standardization_status=FindingStandardizationStatus.support_mapped,
-                    abnormal_flag="positive",
+                    abnormal_flag=projected_flag,
                     confidence=need.model_confidence,
                     source_span=source_span,
                 )
@@ -3708,15 +3903,41 @@ class CaseAnalysisService:
         system_finding_ids = {finding.system_id: list(finding.finding_ids) for finding in structured_findings}
         updated_recommendations = []
         for item in draft.recommended_skus:
-            matched_ids = system_finding_ids.get(item.primary_system_id or "", [])
+            covered_system_ids = list(
+                dict.fromkeys(
+                    item.covered_system_ids
+                    or ([item.primary_system_id] if item.primary_system_id else [])
+                )
+            )
+            matched_ids = list(
+                dict.fromkeys(
+                    finding_id
+                    for system_id in covered_system_ids
+                    for finding_id in system_finding_ids.get(system_id, [])
+                )
+            )
             updated_recommendations.append(
                 item.model_copy(
                     update={
+                        "covered_system_ids": covered_system_ids,
                         "matched_finding_ids": matched_ids or item.matched_finding_ids,
                     }
                 )
             )
         draft.recommended_skus = updated_recommendations
+        covered_systems = {
+            system_id
+            for item in draft.recommended_skus
+            for system_id in (
+                item.covered_system_ids
+                or ([item.primary_system_id] if item.primary_system_id else [])
+            )
+        }
+        draft.uncovered_system_ids = [
+            finding.system_id
+            for finding in structured_findings
+            if finding.system_id not in covered_systems
+        ]
         if hasattr(self.recommendation_service, "build_total_advice_items"):
             total_advice = self.recommendation_service.build_total_advice_items(
                 draft.recommended_skus,
@@ -3728,6 +3949,11 @@ class CaseAnalysisService:
                 f"{item.display_name}：针对医生确认的异常问题，本阶段用于支持相关身体系统功能与整体恢复，首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
                 for item in draft.recommended_skus
             ]
+        total_advice.extend(
+            f"{SYSTEM_NAMES.get(system_id, '相关身体系统')}：当前未找到同时满足批准映射和安全校验的营养素候选，"
+            "本阶段以生活方式调整、必要复查和医生评估为主。"
+            for system_id in draft.uncovered_system_ids
+        )
         plan_summary = build_plan_summary(
             structured_findings,
             draft.recommended_skus,
@@ -3898,11 +4124,10 @@ class CaseAnalysisService:
                     finding_ids=[item.id for item in matched],
                 )
             )
-        priority_order = {"最高优先级": 0, "优先级高": 1, "中度关注": 2}
-        return sorted(
-            enriched,
-            key=lambda item: (priority_order.get(item.priority_level, 3), -item.priority_score),
-        )
+        # The validated list is already ordered by local evidence certainty.
+        # Preserve that order so report generation cannot move symptom-only
+        # systems back ahead of objective findings by score alone.
+        return enriched
 
     @staticmethod
     def _structured_system_lines(findings: list[StructuredSystemFinding]) -> list[str]:

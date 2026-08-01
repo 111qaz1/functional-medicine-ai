@@ -707,6 +707,19 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const ruleExcludedDecisions = (latestDraft?.safety_decisions ?? []).filter(
     (decision) => decision.action === "exclude"
   );
+  const systemCoverageRows = (latestDraft?.structured_system_findings ?? []).map((finding) => {
+    const coveringItems = (latestDraft?.recommended_skus ?? []).filter((item) =>
+      (item.covered_system_ids?.length ? item.covered_system_ids : item.primary_system_id ? [item.primary_system_id] : [])
+        .includes(finding.system_id)
+    );
+    const includedItems = coveringItems.filter((item) => !excludedSkuIds.includes(item.sku_id));
+    return {
+      systemId: finding.system_id,
+      systemName: BODY_SYSTEM_LABELS[finding.system_id] ?? finding.system_name,
+      includedNames: includedItems.map((item) => item.display_name),
+      excludedNames: coveringItems.map((item) => item.display_name)
+    };
+  });
   const workflowStep = payload.review_decision ? 5 : latestDraft ? 4 : analysis && ["ready_for_review", "reviewed"].includes(analysis.status) ? 3 : analysis ? 2 : caseRecord.files.length ? 1 : 0;
 
   return (
@@ -936,6 +949,23 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </ul>
               </details>
             ) : null}
+            {systemCoverageRows.length ? (
+              <details className="rule-exclusion-record">
+                <summary>身体系统营养素覆盖（{systemCoverageRows.length}）</summary>
+                <ul className="flat-list">
+                  {systemCoverageRows.map((row) => (
+                    <li key={row.systemId}>
+                      <strong>{row.systemName}：</strong>
+                      {row.includedNames.length
+                        ? `已覆盖（${row.includedNames.join("、")}）`
+                        : row.excludedNames.length
+                          ? `对应产品当前未纳入（${row.excludedNames.join("、")}）`
+                          : "暂无安全候选（无批准映射或未通过安全校验）"}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
               <div className="draft-recommendation-list">
                 {latestDraft.recommended_skus.map((item) => {
                   const selectedOption = effectiveDosageOption(item, dosageOverrides);
@@ -997,7 +1027,17 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                             ) : null}
                           </div>
                         ) : null}
-                        {item.primary_system_id ? <p className="muted">对应身体系统：{BODY_SYSTEM_LABELS[item.primary_system_id] ?? item.primary_system_id}</p> : null}
+                        {(item.covered_system_ids?.length || item.primary_system_id) ? (
+                          <p className="muted">
+                            对应身体系统：{(
+                              item.covered_system_ids?.length
+                                ? item.covered_system_ids
+                                : item.primary_system_id
+                                  ? [item.primary_system_id]
+                                  : []
+                            ).map((systemId) => BODY_SYSTEM_LABELS[systemId] ?? systemId).join("、")}
+                          </p>
+                        ) : null}
                         {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
                         {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
                       </div>

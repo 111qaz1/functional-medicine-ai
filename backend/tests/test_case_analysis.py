@@ -213,8 +213,9 @@ class CaseAnalysisTests(unittest.TestCase):
         file_id: str = "file-a",
         digest: str = "same-digest",
         filename: str = "synthetic-report.txt",
+        text: str | None = None,
     ):
-        text = "合成指标A 12.3 U/L 1.0-10.0\n检查提示合成非数值异常存在"
+        text = text or "合成指标A 12.3 U/L 1.0-10.0\n检查提示合成非数值异常存在"
         uploaded = UploadedFile(
             id=file_id,
             case_id=case_id,
@@ -475,7 +476,46 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(result.abnormal_findings, [])
         self.assertEqual(self.provider.document_calls, 0)
 
-    def test_msq_with_many_symptoms_and_no_scores_is_skipped(self) -> None:
+    def test_questionnaire_projects_only_known_conditions_as_patient_reported_findings(self) -> None:
+        case = self._create_case()
+        self._add_text_file(case.id, text="本人目前患有的慢性疾病：胃溃疡")
+        case = self.repository.get_case(case.id)
+        analysis = CaseAnalysis(
+            id="analysis-medical-questionnaire",
+            case_id=case.id,
+            snapshot_hash=self.service.current_snapshot_hash(case),
+            file_ids=["file-a"],
+            model_version="synthetic-model",
+            document_results=[
+                DocumentAnalysisResult(
+                    file_id="file-a",
+                    file_name="medical-questionnaire.docx",
+                    report_type="medical_questionnaire",
+                    questionnaire=Questionnaire(
+                        known_conditions=["胃溃疡"],
+                        symptoms=["焦虑", "难以入睡"],
+                        chief_concerns=["改善睡眠"],
+                    ).model_dump(mode="json"),
+                )
+            ],
+        )
+
+        self.service._assemble_and_validate(case, analysis)
+
+        self.assertIsNotNone(analysis.questionnaire)
+        self.assertEqual(analysis.questionnaire.symptoms, ["焦虑", "难以入睡"])
+        self.assertEqual(analysis.questionnaire.chief_concerns, ["改善睡眠"])
+        self.assertEqual(
+            [finding.name for finding in analysis.abnormal_findings],
+            ["胃溃疡"],
+        )
+        finding = analysis.abnormal_findings[0]
+        self.assertEqual(finding.abnormal_flag, "patient_reported")
+        self.assertEqual(finding.report_explanation, "患者自述")
+        self.assertEqual(finding.evidence_status, EvidenceStatus.verified_text)
+        self.assertEqual(finding.evidence_notes, ["患者自述"])
+
+    def test_msq_with_many_symptoms_and_no_scores_keeps_questionnaire_for_review(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
         analysis = CaseAnalysis(
@@ -499,8 +539,18 @@ class CaseAnalysisTests(unittest.TestCase):
 
         self.service._assemble_and_validate(case, analysis)
 
-        self.assertIsNone(analysis.questionnaire)
-        self.assertTrue(any("没有有效 MSQ 评分" in warning for warning in analysis.warnings))
+        self.assertIsNotNone(analysis.questionnaire)
+        self.assertEqual(
+            analysis.questionnaire.symptoms,
+            [f"合成症状{index}" for index in range(10)],
+        )
+        self.assertEqual(analysis.questionnaire.msq_system_scores, {})
+        self.assertTrue(
+            any(
+                "MSQ 系统评分格式异常" in warning
+                for warning in analysis.warnings
+            )
+        )
 
     def test_file_change_marks_analysis_stale(self) -> None:
         case = self._create_case()

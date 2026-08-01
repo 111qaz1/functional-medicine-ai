@@ -132,18 +132,6 @@ class _DocumentPayload(_StrictPayload):
     warnings: list[str] = Field(default_factory=list)
 
 
-class _QuestionnaireReviewItem(_StrictPayload):
-    field_name: str
-    supported: bool = False
-    value_json: str | None = None
-    source_text: str | None = None
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-
-
-class _QuestionnaireReviewPayload(_StrictPayload):
-    reviews: list[_QuestionnaireReviewItem] = Field(default_factory=list)
-
-
 class _SynthesisPayload(_StrictPayload):
     case_summary: str
     system_findings: list[str] = Field(default_factory=list)
@@ -215,6 +203,45 @@ class OpenAICompatibleCaseAnalysisProvider:
         )
 
     def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
+        result = self._analyze_document_once(
+            uploaded_file,
+            questionnaire_content_retry=False,
+        )
+        if not self._is_empty_medical_questionnaire_result(
+            uploaded_file,
+            result,
+        ):
+            return result
+
+        logger.warning(
+            "Medical questionnaire extraction returned empty structured content; "
+            "retrying once"
+        )
+        retry_result = self._analyze_document_once(
+            uploaded_file,
+            questionnaire_content_retry=True,
+        )
+        if not self._is_empty_medical_questionnaire_result(
+            uploaded_file,
+            retry_result,
+        ):
+            return retry_result
+
+        warning = "医疗问卷内容提取失败，请重试或人工补录。"
+        return retry_result.model_copy(
+            update={
+                "warnings": list(
+                    dict.fromkeys([*retry_result.warnings, warning])
+                )
+            }
+        )
+
+    def _analyze_document_once(
+        self,
+        uploaded_file,
+        *,
+        questionnaire_content_retry: bool,
+    ) -> DocumentAnalysisResult:
         batches = self._document_batches(uploaded_file)
         if not batches:
             return DocumentAnalysisResult(
@@ -236,8 +263,17 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "不得把报告中的癌症风险、宣传性或绝对化描述改写为确定诊断。"
                 "support_need_text 只描述医学支持需求，不得出现产品、SKU、剂量或疗程。"
                 "所有摘要、解释、系统分析和警告必须使用简体中文；医学缩写和指标英文名可以保留。"
+                "如为普通医疗登记表、病史表或医疗调查问卷，report_type 必须为 medical_questionnaire；"
+                "只要存在患者已填写内容，questionnaire 就不得为 null。"
+                "必须将明确填写的主诉、症状、已知疾病、家族史、当前药物、过敏、妊娠、饮食、睡眠、"
+                "运动和排便信息映射到 questionnaire；手术史和意外史可写入 additional_notes。"
+                "营养补充剂写入 supplement_use，不得误写为处方药。"
+                "普通医疗问卷不是 MSQ，msq_system_scores 应为空对象，缺少 MSQ 评分不得丢弃其他信息。"
+                "普通问卷的患者自述不得写入 abnormal_findings，也不得升级为医生诊断。"
+                "勾选题只提取明确勾选的答案；未勾选选项不是阴性证据，只有明确勾选“否”才可记录否定事实。"
                 "如为 MSQ，questionnaire 必须映射为系统既有问卷字段；只能纳入明确勾选且分值大于 0 的症状，"
-                "不得把未勾选的症状选项当成患者症状，msq_system_scores 必须来自已选分值。"
+                "report_type 必须为 msq，不得把未勾选的症状选项当成患者症状，"
+                "msq_system_scores 必须来自已选分值。"
                 "MSQ 的患者年龄只能来自姓名/性别/年龄/日期基本信息区域；初次月经年龄、停经年龄、"
                 "绝经年龄、生物年龄、代谢年龄、骨龄和系统年龄均不是患者年龄。患者年龄空白或有歧义时 age 必须为 null。"
                 "如果问卷基本信息区域明确出现多个不同患者年龄且无法消解，还必须在 warnings 中写入"
@@ -247,11 +283,21 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "__MSQ_UNRESOLVED__:allergies。"
                 "如为慢性食物敏感报告，单独提取轻/中/重度食物和三条原文解读。"
             )
+            if questionnaire_content_retry:
+                prompt += (
+                    "上一次对该医疗问卷的结构化结果为空。请重新阅读当前输入中的已填写内容，"
+                    "不得把有填写内容的问卷描述为空白。只补充有原文依据的 questionnaire 和 summary，"
+                    "不得猜测、不得生成检验异常、诊断或治疗建议。"
+                )
             raw = self._call_json(
                 instructions=self._document_instructions(),
                 content=[{"type": "input_text", "text": prompt}, *content],
                 schema=_DocumentPayload.model_json_schema(),
-                schema_name="document_analysis",
+                schema_name=(
+                    "document_analysis_questionnaire_retry"
+                    if questionnaire_content_retry
+                    else "document_analysis"
+                ),
                 thinking_type="disabled",
             )
             try:
@@ -278,60 +324,67 @@ class OpenAICompatibleCaseAnalysisProvider:
 
         return self._merge_document_payloads(uploaded_file, payloads)
 
-    def review_questionnaire_fields(
-        self,
-        *,
-        file_name: str,
-        questionnaire: Questionnaire,
-        uncertain_fields: dict[str, list[str]],
-        candidate_values: dict[str, Any] | None = None,
-    ) -> list[_QuestionnaireReviewItem]:
-        requested_fields = list(uncertain_fields)
-        if not requested_fields:
-            return []
-        payload = {
-            "file_name": file_name,
-            "fields": [
-                {
-                    "field_name": field_name,
-                    "current_value": (candidate_values or {}).get(
-                        field_name,
-                        getattr(questionnaire, field_name, None),
-                    ),
-                    "questionnaire_excerpts": uncertain_fields[field_name],
-                }
-                for field_name in requested_fields
-            ],
-        }
-        raw = self._call_json(
-            instructions=(
-                "你是 MSQ 问卷字段复核器。输入只包含同一份 MSQ 问卷中的不确定字段及相关原文片段。"
-                "不得使用病例报告、检验结果、疾病、姓名常识或其他资料推测。"
-                "只能返回输入 fields 中列出的字段，不得重新分析整份病例。"
-                "患者年龄 age 只能来自姓名/性别/年龄/日期基本信息区域；"
-                "初次月经年龄、停经年龄、绝经年龄、生物年龄、代谢年龄、骨龄和系统年龄均不是患者年龄。"
-                "每个 supported=true 的结果必须返回可在对应 questionnaire_excerpts 中逐字找到的 source_text，"
-                "并将最终字段值编码为合法 JSON 字符串放入 value_json。"
-                "列表或字典字段的 value_json 必须包含 current_value 中已确认内容，并只按原文补充或修正不确定部分。"
-                "字段没有明确证据、选项冲突无法消解或只能推测时，必须返回 supported=false。"
-                "不得为了填满问卷而补写合法空白字段。严格按 JSON Schema 输出，不得输出 Markdown。"
-            ),
-            content=[
-                {
-                    "type": "input_text",
-                    "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                }
-            ],
-            schema=_QuestionnaireReviewPayload.model_json_schema(),
-            schema_name="msq_questionnaire_field_review",
-            thinking_type="disabled",
+    @classmethod
+    def _is_empty_medical_questionnaire_result(
+        cls,
+        uploaded_file,
+        result: DocumentAnalysisResult,
+    ) -> bool:
+        if not (
+            cls._is_medical_questionnaire_type(result.report_type)
+            or cls._looks_like_medical_questionnaire(uploaded_file)
+        ):
+            return False
+        return not cls._questionnaire_has_meaningful_content(
+            result.questionnaire
         )
-        result = _QuestionnaireReviewPayload.model_validate(raw)
-        return [
-            item
-            for item in result.reviews
-            if item.field_name in requested_fields
-        ]
+
+    @staticmethod
+    def _questionnaire_has_meaningful_content(
+        questionnaire_payload: dict[str, Any] | None,
+    ) -> bool:
+        if not questionnaire_payload:
+            return False
+        try:
+            questionnaire = Questionnaire.model_validate(
+                questionnaire_payload
+            )
+        except ValidationError:
+            return False
+        values = questionnaire.model_dump(
+            exclude={"completed_at", "form_version"},
+        )
+        return any(
+            value not in (None, "", [], {}, "unknown")
+            for value in values.values()
+        )
+
+    @staticmethod
+    def _is_medical_questionnaire_type(report_type: str) -> bool:
+        normalized = re.sub(r"[\s-]+", "_", (report_type or "").strip().lower())
+        return normalized in {
+            "questionnaire",
+            "medical_questionnaire",
+            "medical_intake_questionnaire",
+            "patient_questionnaire",
+            "registration_questionnaire",
+        }
+
+    @staticmethod
+    def _looks_like_medical_questionnaire(uploaded_file) -> bool:
+        text = "\n".join(
+            page.text or ""
+            for page in uploaded_file.page_texts
+        )
+        compact = re.sub(r"\s+", "", text).lower()
+        return any(
+            marker in compact
+            for marker in (
+                "medicalquestionnaire",
+                "医疗调查问卷",
+                "patientquestionnaire",
+            )
+        )
 
     def synthesize_case(
         self,
@@ -377,7 +430,17 @@ class OpenAICompatibleCaseAnalysisProvider:
             "输出最终病例总结和功能医学系统分析，不输出产品、SKU、剂量、疗程或营养素方案。"
             "所有叙述性内容必须使用简体中文；医学缩写、菌名和指标英文名可以保留，但必须配合中文说明。"
             "病例总结应分段、精炼，避免一整段堆砌。"
+            "如果文档 warnings 表示医疗问卷内容提取失败，只能说明该文件暂时无法提取，"
+            "不得把提取失败改写为问卷空白、患者没有症状或患者没有病史。"
+            "documents 中的 patient_reported_questionnaire 是患者自述，可用于整理主诉、症状、病史、"
+            "用药和生活方式，但必须明确其患者自述属性，不得升级为医生诊断或客观检验异常。"
+            "validated_questionnaire 同样属于患者自述；只有 known_conditions 中明确填写的已有病情"
+            "可以作为 patient_reported 异常参与系统排序。symptoms 和 chief_concerns 只能作为"
+            "症状与诉求上下文，不得写入异常清单或升级为确诊结论。"
             "如果存在 doctor_confirmed_abnormal_findings，只能以医生确认后的异常清单为准。"
+            "doctor_confirmed_abnormal_findings 中 abnormal_flag=patient_reported 的条目，"
+            "表示医生保留的问卷异常发现；必须作为正式异常参与系统排序，优先引用其 finding:id，"
+            "不得仅因来源是问卷而降低优先级，但患者可见描述仍须注明其患者自述属性。"
             "证据优先级必须为：明确临床结论与客观检验异常高于医生确认症状，症状高于环境暴露，"
             "环境暴露高于遗传易感。遗传易感、基因位点及仅描述未来患病风险的内容只能作为风险修饰背景，"
             "不得高于已确认体检异常，不得单独形成最高优先级系统或营养支持需求。"
@@ -472,6 +535,9 @@ class OpenAICompatibleCaseAnalysisProvider:
             warning.startswith("__MSQ_UNRESOLVED__:")
             for warning in result.warnings
         )
+        patient_reported_questionnaire = (
+            cls._safe_generic_questionnaire_for_synthesis(result)
+        )
         return {
             "file_id": result.file_id,
             "file_name": result.file_name,
@@ -487,6 +553,7 @@ class OpenAICompatibleCaseAnalysisProvider:
                 for item in result.abnormal_findings
             ],
             "system_findings": result.system_findings,
+            "patient_reported_questionnaire": patient_reported_questionnaire,
             "food_sensitivity": (
                 result.food_sensitivity.model_dump(mode="json")
                 if result.food_sensitivity is not None
@@ -499,6 +566,54 @@ class OpenAICompatibleCaseAnalysisProvider:
             ],
         }
 
+    @classmethod
+    def _safe_generic_questionnaire_for_synthesis(
+        cls,
+        result: DocumentAnalysisResult,
+    ) -> dict[str, Any] | None:
+        if (
+            not cls._is_medical_questionnaire_type(result.report_type)
+            or not cls._questionnaire_has_meaningful_content(
+                result.questionnaire
+            )
+        ):
+            return None
+        try:
+            questionnaire = Questionnaire.model_validate(
+                result.questionnaire
+            )
+        except ValidationError:
+            return None
+
+        safe_defaults: dict[str, Any] = {
+            "age": None,
+            "sex": "unknown",
+            "pregnant_or_lactating": None,
+            "medications": [],
+            "allergies": [],
+            "symptoms": [],
+            "msq_system_scores": {},
+            "sleep_hours": None,
+            "sleep_quality": None,
+            "diet_pattern": None,
+            "exercise_frequency": None,
+        }
+        unresolved_fields = {
+            warning.removeprefix("__MSQ_UNRESOLVED__:")
+            for warning in result.warnings
+            if warning.startswith("__MSQ_UNRESOLVED__:")
+        }
+        updates = {
+            field_name: safe_defaults[field_name]
+            for field_name in unresolved_fields
+            if field_name in safe_defaults
+        }
+        if updates:
+            questionnaire = questionnaire.model_copy(update=updates)
+        payload = questionnaire.model_dump(mode="json")
+        payload["msq_system_scores"] = {}
+        return payload
+
     def _document_batches(self, uploaded_file) -> list[list[dict[str, Any]]]:
         suffix = Path(uploaded_file.filename).suffix.lower()
         if uploaded_file.is_scanned or suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}:
@@ -510,6 +625,27 @@ class OpenAICompatibleCaseAnalysisProvider:
             ]
 
         pages = uploaded_file.page_texts
+        if suffix == ".docx":
+            full_text = "\n".join(page.text or "" for page in pages)
+            focused_text = self._focus_medical_questionnaire_text(full_text)
+            if focused_text is not None:
+                logger.info(
+                    "Medical questionnaire focus applied source_chars=%s focused_chars=%s",
+                    len(full_text),
+                    len(focused_text),
+                )
+                return [
+                    [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                f"\n--- 文件 {uploaded_file.filename} / 医疗问卷区域 ---\n"
+                                f"{focused_text}\n"
+                            ),
+                        }
+                    ]
+                ]
+
         batches: list[list[dict[str, Any]]] = []
         current: list[str] = []
         current_length = 0
@@ -524,6 +660,29 @@ class OpenAICompatibleCaseAnalysisProvider:
         if current:
             batches.append([{"type": "input_text", "text": "".join(current)}])
         return batches
+
+    @staticmethod
+    def _focus_medical_questionnaire_text(text: str) -> str | None:
+        if not text.strip():
+            return None
+        questionnaire_marker = re.search(
+            r"medical\s*questionnaire|医疗\s*调查\s*问卷",
+            text,
+            flags=re.IGNORECASE,
+        )
+        terms_marker = re.search(
+            r"general\s*terms\s*and\s*conditions|一般\s*条款\s*与\s*条件",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if (
+            questionnaire_marker is None
+            or terms_marker is None
+            or terms_marker.start() <= questionnaire_marker.start()
+        ):
+            return None
+        focused = text[: terms_marker.start()].strip()
+        return focused if focused else None
 
     def _render_images(self, uploaded_file) -> list[dict[str, Any]]:
         path = Path(uploaded_file.storage_uri or "")
@@ -814,11 +973,177 @@ class OpenAICompatibleCaseAnalysisProvider:
         This layer only reshapes existing output. It does not require a known
         medical marker and never invents a clinical finding.
         """
+        prepared = self._normalize_model_msq_scores(raw)
         try:
-            return _DocumentPayload.model_validate(raw)
+            return _DocumentPayload.model_validate(prepared)
         except ValidationError:
             pass
-        return _DocumentPayload.model_validate(self._normalize_kimi_document_payload(raw))
+        return _DocumentPayload.model_validate(
+            self._normalize_kimi_document_payload(prepared)
+        )
+
+    @classmethod
+    def _normalize_model_msq_scores(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Normalize only explicit model-returned MSQ scores.
+
+        Invalid scores are isolated for manual review instead of aborting the
+        whole document analysis. This function never infers a system or score.
+        """
+        questionnaire_keys = (
+            "questionnaire",
+            "questionnaire_data",
+            "msq",
+            "msq_summary",
+        )
+        questionnaire_key = next(
+            (
+                key
+                for key in questionnaire_keys
+                if isinstance(raw.get(key), dict)
+            ),
+            None,
+        )
+        if questionnaire_key is None:
+            return raw
+
+        questionnaire = dict(raw[questionnaire_key])
+        score_key = next(
+            (
+                key
+                for key in ("msq_system_scores", "system_scores")
+                if key in questionnaire
+            ),
+            None,
+        )
+        if score_key is None:
+            return raw
+
+        scores, branch, failure_reason = cls._normalize_msq_system_scores(
+            questionnaire[score_key]
+        )
+        input_type = type(questionnaire[score_key]).__name__
+        prepared = dict(raw)
+        questionnaire["msq_system_scores"] = scores
+        if score_key != "msq_system_scores":
+            questionnaire.pop(score_key, None)
+        prepared[questionnaire_key] = questionnaire
+
+        if failure_reason is None:
+            logger.info(
+                "MSQ system scores normalized input_type=%s branch=%s",
+                input_type,
+                branch,
+            )
+            return prepared
+
+        logger.warning(
+            "MSQ system scores isolated input_type=%s reason=%s",
+            input_type,
+            failure_reason,
+        )
+        warnings = cls._normalize_text_list(
+            cls._pick_payload_value(
+                prepared,
+                "warnings",
+                "alerts",
+                "notes",
+                default=[],
+            )
+        )
+        warnings.extend(
+            (
+                "__MSQ_UNRESOLVED__:msq_system_scores",
+                "MSQ 系统评分格式异常，请人工核对。",
+            )
+        )
+        prepared["warnings"] = list(dict.fromkeys(warnings))
+        return prepared
+
+    @staticmethod
+    def _normalize_msq_system_scores(
+        value: Any,
+    ) -> tuple[dict[str, int], str, str | None]:
+        """Return normalized scores, the selected branch and a safe failure code."""
+
+        entries: list[tuple[Any, Any]] = []
+        branch = "canonical_dict"
+        if isinstance(value, dict):
+            for system_name, score_value in value.items():
+                if isinstance(score_value, dict):
+                    branch = "nested_objects"
+                    nested_key = next(
+                        (
+                            key
+                            for key in ("score", "value")
+                            if key in score_value
+                        ),
+                        None,
+                    )
+                    if nested_key is None:
+                        return {}, branch, "missing_nested_score"
+                    score_value = score_value[nested_key]
+                entries.append((system_name, score_value))
+        elif isinstance(value, list):
+            branch = "list_objects"
+            for item in value:
+                if not isinstance(item, dict):
+                    return {}, branch, "unsupported_list_item"
+                system_key = next(
+                    (
+                        key
+                        for key in ("system", "system_name", "name")
+                        if key in item
+                    ),
+                    None,
+                )
+                score_key = next(
+                    (
+                        key
+                        for key in ("score", "value")
+                        if key in item
+                    ),
+                    None,
+                )
+                if system_key is None or score_key is None:
+                    return {}, branch, "missing_list_field"
+                entries.append((item[system_key], item[score_key]))
+        else:
+            return {}, "unsupported", "unsupported_container"
+
+        normalized: dict[str, int] = {}
+        coerced_string = False
+        for raw_system_name, raw_score in entries:
+            if not isinstance(raw_system_name, str):
+                return {}, branch, "invalid_system_name"
+            system_name = raw_system_name.strip()
+            if not system_name:
+                return {}, branch, "empty_system_name"
+
+            if isinstance(raw_score, bool):
+                return {}, branch, "boolean_score"
+            if isinstance(raw_score, int):
+                score = raw_score
+            elif isinstance(raw_score, str) and re.fullmatch(
+                r"[0-9]+",
+                raw_score.strip(),
+            ):
+                score = int(raw_score.strip())
+                coerced_string = True
+            else:
+                return {}, branch, "invalid_score_type"
+
+            if score < 0 or score > 4:
+                return {}, branch, "score_out_of_range"
+            existing = normalized.get(system_name)
+            if existing is not None and existing != score:
+                return {}, branch, "duplicate_score_conflict"
+            normalized[system_name] = score
+
+        if branch == "canonical_dict" and coerced_string:
+            branch = "string_values"
+        elif coerced_string:
+            branch = f"{branch}_with_string_values"
+        return normalized, branch, None
 
     @classmethod
     def _normalize_kimi_document_payload(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -1141,7 +1466,13 @@ class OpenAICompatibleCaseAnalysisProvider:
         medical_content = False
         for payload in payloads:
             if payload.report_type != "unknown_medical":
-                report_type = payload.report_type
+                report_type = (
+                    "medical_questionnaire"
+                    if self._is_medical_questionnaire_type(
+                        payload.report_type
+                    )
+                    else payload.report_type
+                )
             medical_content = medical_content or payload.medical_content
             if payload.summary:
                 summaries.append(payload.summary)
@@ -1187,6 +1518,31 @@ class OpenAICompatibleCaseAnalysisProvider:
                         **finding_payload,
                     )
                 )
+        merged_questionnaire = (
+            self._merge_questionnaires(questionnaires).model_dump(mode="json")
+            if questionnaires
+            else None
+        )
+        if (
+            self._looks_like_medical_questionnaire(uploaded_file)
+            and "msq" not in (report_type or "").lower()
+        ):
+            report_type = "medical_questionnaire"
+        if self._is_medical_questionnaire_type(report_type):
+            # Generic intake forms contain patient-reported history, not
+            # independently verified test abnormalities or diagnoses.
+            findings = []
+            system_findings = []
+            if self._questionnaire_has_meaningful_content(
+                merged_questionnaire
+            ):
+                merged_questionnaire["form_version"] = (
+                    "medical_questionnaire_v1"
+                )
+                warnings.append(
+                    "普通医疗问卷中的疾病、症状、用药及生活方式信息均为患者自述。"
+                )
+
         return DocumentAnalysisResult(
             file_id=uploaded_file.id,
             file_name=uploaded_file.filename,
@@ -1195,11 +1551,7 @@ class OpenAICompatibleCaseAnalysisProvider:
             summary="\n".join(dict.fromkeys(summaries)) or None,
             abnormal_findings=findings,
             system_findings=list(dict.fromkeys(system_findings)),
-            questionnaire=(
-                self._merge_questionnaires(questionnaires).model_dump(mode="json")
-                if questionnaires
-                else None
-            ),
+            questionnaire=merged_questionnaire,
             food_sensitivity=food,
             warnings=list(dict.fromkeys(warnings)),
         )
@@ -1220,6 +1572,10 @@ class OpenAICompatibleCaseAnalysisProvider:
             "每条异常必须区分报告原文解释 report_explanation 与模型中性解释 neutral_interpretation。"
             "报告风险、宣传性或绝对化表述只能原样保留为报告解释，不得升级为诊断。"
             "所有摘要、解释、系统分析和警告必须使用简体中文，医学缩写和指标英文名可保留。"
+            "普通医疗登记表、病史表或医疗调查问卷统一使用 report_type=medical_questionnaire；"
+            "存在明确填写内容时必须返回 questionnaire。普通问卷允许 msq_system_scores 为空，"
+            "患者自述只进入 questionnaire，不得伪装成检验异常或医生诊断。"
+            "只有真正的 MSQ 症状评分问卷使用 report_type=msq 和 msq_system_scores。"
             "每条异常应从给定白名单中提出标准代码候选；检验指标写入 marker_code_candidate，"
             "非数值临床发现写入 finding_code_candidate，无法确定时必须返回 null，禁止创造代码。"
             "精准代码无法确定时，可从白名单选择 system_id_candidates 和 support_goal_candidates，"
@@ -1821,6 +2177,9 @@ class OpenAICompatibleCaseAnalysisProvider:
 
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
+    DOCUMENT_ANALYSIS_CACHE_VERSION = (
+        "document-analysis-v2-general-questionnaire"
+    )
     MSQ_FIELD_LABELS = {
         "age": "患者年龄",
         "sex": "患者性别",
@@ -1833,6 +2192,67 @@ class CaseAnalysisService:
         "sleep_quality": "睡眠质量",
         "diet_pattern": "饮食模式",
         "exercise_frequency": "运动习惯",
+    }
+    MSQ_FIELD_WARNING_KEYWORDS = {
+        "age": ("患者年龄",),
+        "sex": ("患者性别",),
+        "pregnant_or_lactating": ("妊娠", "哺乳"),
+        "medications": ("用药", "药物"),
+        "allergies": ("过敏",),
+        "symptoms": ("症状",),
+        "msq_system_scores": ("系统评分",),
+        "sleep_hours": ("睡眠时长", "睡眠时间"),
+        "sleep_quality": ("睡眠质量",),
+        "diet_pattern": ("饮食",),
+        "exercise_frequency": ("运动",),
+    }
+    QUESTIONNAIRE_LIST_FIELDS = (
+        "chief_concerns",
+        "symptoms",
+        "known_conditions",
+        "family_history",
+        "medications",
+        "allergies",
+        "food_sensitivities",
+        "emotional_state",
+        "goals",
+    )
+    QUESTIONNAIRE_SCALAR_FIELDS = (
+        "age",
+        "sex",
+        "pregnant_or_lactating",
+        "diet_pattern",
+        "work_pattern",
+        "sitting_hours_per_day",
+        "dining_out_frequency",
+        "seafood_intake_ratio",
+        "red_meat_intake_ratio",
+        "supplement_use",
+        "chemical_sensitivity",
+        "sleep_hours",
+        "sleep_quality",
+        "exercise_frequency",
+        "bowel_habits",
+        "stress_level",
+    )
+    QUESTIONNAIRE_FIELD_LABELS = {
+        **MSQ_FIELD_LABELS,
+        "chief_concerns": "主要诉求",
+        "known_conditions": "已有病情",
+        "family_history": "家族史",
+        "food_sensitivities": "食物敏感",
+        "diet_pattern": "饮食模式",
+        "work_pattern": "工作模式",
+        "sitting_hours_per_day": "每日久坐时长",
+        "dining_out_frequency": "外出就餐频率",
+        "seafood_intake_ratio": "鱼类及海鲜摄入",
+        "red_meat_intake_ratio": "红肉摄入",
+        "supplement_use": "补充剂使用情况",
+        "chemical_sensitivity": "化学物质敏感情况",
+        "bowel_habits": "排便情况",
+        "stress_level": "压力水平",
+        "emotional_state": "情绪状态",
+        "goals": "健康目标",
     }
     ACTIVE_STATUSES = {
         AnalysisStatus.queued,
@@ -2331,6 +2751,18 @@ class CaseAnalysisService:
         support_needs: list[SemanticSupportNeed] | None = None,
     ) -> list[StructuredSystemFinding]:
         valid_finding_ids = {item.id for item in findings}
+        findings_by_system: dict[str, list[AbnormalFinding]] = {}
+        for finding in findings:
+            system_ids = list(finding.system_ids or []) or classify_text_to_system_ids(
+                finding.name,
+                finding.interpretation,
+                finding.source_text,
+            )
+            for system_id in system_ids:
+                if system_id in SYSTEM_NAMES:
+                    findings_by_system.setdefault(system_id, []).append(
+                        finding
+                    )
         # The model proposes systems, but local evidence governance owns the
         # priority. Confirmed findings and objective abnormalities must outweigh
         # exposure markers and genetic susceptibility statements.
@@ -2339,7 +2771,24 @@ class CaseAnalysisService:
         for item in candidates:
             if item.system_id not in SYSTEM_NAMES:
                 continue
-            matched_ids = [value for value in item.finding_ids if value in valid_finding_ids]
+            matched_ids = list(
+                dict.fromkeys(
+                    [
+                        *(
+                            value
+                            for value in item.finding_ids
+                            if value in valid_finding_ids
+                        ),
+                        *(
+                            finding.id
+                            for finding in findings_by_system.get(
+                                item.system_id,
+                                [],
+                            )
+                        ),
+                    ]
+                )
+            )
             proposed_level = (
                 item.priority_level
                 if item.priority_level in model_context_base
@@ -2355,6 +2804,15 @@ class CaseAnalysisService:
                 and need.evidence_class == ClinicalEvidenceClass.symptom
                 and not any(ref.ref.startswith("finding:") for ref in need.evidence_refs)
             ]
+            if any(
+                str(finding.abnormal_flag or "").lower()
+                == "patient_reported"
+                for finding in matched_findings
+            ):
+                # The same questionnaire fact is now represented by an
+                # auditable finding and must not receive a second contextual
+                # questionnaire bonus.
+                contextual_needs = []
             contextual_bonus = min(len(contextual_needs), 2) * 14.0
             score = min(
                 100.0,
@@ -2392,6 +2850,28 @@ class CaseAnalysisService:
             existing = deduped.get(item.system_id)
             if not existing or normalized.priority_score > existing.priority_score:
                 deduped[item.system_id] = normalized
+        for system_id, matched_findings in findings_by_system.items():
+            if system_id in deduped:
+                continue
+            score = min(
+                100.0,
+                10.0 + system_evidence_score(matched_findings),
+            )
+            deduped[system_id] = StructuredSystemFinding(
+                system_id=system_id,
+                system_name=SYSTEM_NAMES[system_id],
+                priority_level=priority_level(score),
+                priority_score=score,
+                summary=build_system_summary(
+                    system_id,
+                    [finding.name for finding in matched_findings],
+                    score,
+                ),
+                finding_ids=[
+                    finding.id
+                    for finding in matched_findings
+                ],
+            )
         order = {"最高优先级": 0, "优先级高": 1, "中度关注": 2}
         return sorted(
             deduped.values(),
@@ -2430,6 +2910,7 @@ class CaseAnalysisService:
                 uploaded_file.content_sha256 or uploaded_file.id,
                 self.model_version,
                 self.prompt_version,
+                self.DOCUMENT_ANALYSIS_CACHE_VERSION,
                 *(
                     [parser_version]
                     if self._uses_msq_cache_version(uploaded_file)
@@ -2441,41 +2922,73 @@ class CaseAnalysisService:
         cached = self.repository.get_document_analysis_cache(cache_key, owner_scope)
         if cached:
             result = DocumentAnalysisResult.model_validate(cached)
-            cached_food = result.food_sensitivity
-            return result.model_copy(
-                update={
-                    "file_id": uploaded_file.id,
-                    "file_name": uploaded_file.filename,
-                    "abnormal_findings": [
-                        finding.model_copy(
+            if not self._is_uncacheable_empty_questionnaire_result(
+                uploaded_file,
+                result,
+            ):
+                cached_food = result.food_sensitivity
+                return result.model_copy(
+                    update={
+                        "file_id": uploaded_file.id,
+                        "file_name": uploaded_file.filename,
+                        "abnormal_findings": [
+                            finding.model_copy(
+                                update={
+                                    "source_file_id": uploaded_file.id,
+                                    "source_file_name": uploaded_file.filename,
+                                    "source_page": logical_source_page(
+                                        uploaded_file,
+                                        finding.source_page,
+                                    ),
+                                }
+                            )
+                            for finding in result.abnormal_findings
+                        ],
+                        "food_sensitivity": cached_food.model_copy(
                             update={
                                 "source_file_id": uploaded_file.id,
                                 "source_file_name": uploaded_file.filename,
-                                "source_page": logical_source_page(uploaded_file, finding.source_page),
+                                "source_page": logical_source_page(
+                                    uploaded_file,
+                                    cached_food.source_page,
+                                ),
                             }
                         )
-                        for finding in result.abnormal_findings
-                    ],
-                    "food_sensitivity": cached_food.model_copy(
-                        update={
-                            "source_file_id": uploaded_file.id,
-                            "source_file_name": uploaded_file.filename,
-                            "source_page": logical_source_page(uploaded_file, cached_food.source_page),
-                        }
-                    )
-                    if cached_food
-                    else None,
-                }
+                        if cached_food
+                        else None,
+                    }
+                )
+            logger.warning(
+                "Ignored unusable empty medical questionnaire cache entry"
             )
         result = self._structured_questionnaire_result(uploaded_file)
         if result is None:
             result = self.provider.analyze_document(uploaded_file)
-        self.repository.save_document_analysis_cache(
-            cache_key,
-            owner_scope,
-            result.model_dump(mode="json"),
-        )
+        if self._is_uncacheable_empty_questionnaire_result(
+            uploaded_file,
+            result,
+        ):
+            logger.warning(
+                "Medical questionnaire result was not cached because structured "
+                "content is empty"
+            )
+        else:
+            self.repository.save_document_analysis_cache(
+                cache_key,
+                owner_scope,
+                result.model_dump(mode="json"),
+            )
         return result
+
+    @staticmethod
+    def _is_uncacheable_empty_questionnaire_result(
+        uploaded_file,
+        result: DocumentAnalysisResult,
+    ) -> bool:
+        return (
+            OpenAICompatibleCaseAnalysisProvider
+            ._is_empty_medical_questionnaire_result(uploaded_file, result)
+        )
 
     @staticmethod
     def _uses_msq_cache_version(uploaded_file) -> bool:
@@ -2530,13 +3043,9 @@ class CaseAnalysisService:
                     )
                 )
         except ValueError:
-            # A recognized but structurally incomplete form falls back to the model and
-            # is still subject to the MSQ quality gate below.
+            # A recognized but structurally incomplete form falls back to normal
+            # document extraction. It never invokes a separate MSQ field reviewer.
             return None
-        parse_result = self._review_questionnaire_uncertainties(
-            uploaded_file.filename,
-            parse_result,
-        )
         warnings = list(parse_result.warnings)
         warnings.extend(
             f"{self.MSQ_UNRESOLVED_PREFIX}{field_name}"
@@ -2554,146 +3063,20 @@ class CaseAnalysisService:
             warnings=warnings,
         )
 
-    def _review_questionnaire_uncertainties(
-        self,
-        file_name: str,
-        parse_result: QuestionnaireParseResult,
-    ) -> QuestionnaireParseResult:
-        if not parse_result.uncertain_fields:
-            return parse_result
-        reviewer = getattr(self.provider, "review_questionnaire_fields", None)
-        if not callable(reviewer):
-            parse_result.warnings.append(
-                "MSQ 存在无法可靠定位的字段，自动复核不可用，已按未确认信息处理。"
-            )
-            return self._finalize_questionnaire_warnings(parse_result)
-        try:
-            reviews = reviewer(
-                file_name=file_name,
-                questionnaire=parse_result.questionnaire,
-                uncertain_fields=parse_result.uncertain_fields,
-                candidate_values=parse_result.candidate_values,
-            )
-        except Exception as exc:  # noqa: BLE001 - fallback failure must not abort analysis
-            logger.warning("MSQ field review unavailable for %s: %s", file_name, exc)
-            parse_result.warnings.append(
-                "MSQ 字段自动复核暂不可用，病例分析继续进行，相关字段已按未确认信息处理。"
-            )
-            return self._finalize_questionnaire_warnings(parse_result)
-
-        reviews_by_field = {item.field_name: item for item in reviews}
-        questionnaire = parse_result.questionnaire
-        for field_name, excerpts in list(parse_result.uncertain_fields.items()):
-            review = reviews_by_field.get(field_name)
-            if (
-                not review
-                or not review.supported
-                or review.confidence < 0.85
-                or not review.source_text
-                or review.value_json is None
-            ):
-                continue
-            compact_evidence = re.sub(r"\s+", "", "\n".join(excerpts))
-            source_text = review.source_text.strip()
-            if not source_text or re.sub(r"\s+", "", source_text) not in compact_evidence:
-                continue
-            if field_name == "age" and any(
-                label in source_text
-                for label in (
-                    "初次月经年龄",
-                    "停经年龄",
-                    "绝经年龄",
-                    "生物年龄",
-                    "代谢年龄",
-                    "骨龄",
-                    "系统年龄",
-                )
-            ):
-                continue
-            try:
-                raw_value = json.loads(review.value_json)
-                validated = Questionnaire.model_validate({field_name: raw_value})
-                value = getattr(validated, field_name)
-            except (json.JSONDecodeError, ValidationError, AttributeError, TypeError):
-                continue
-            if field_name == "age" and (value is None or value < 0 or value > 120):
-                continue
-            if field_name == "sleep_hours" and (
-                value is None or value < 0 or value > 24
-            ):
-                continue
-            if field_name == "msq_system_scores" and any(
-                score < 0 or score > 4 for score in value.values()
-            ):
-                continue
-            if not self._questionnaire_review_value_has_evidence(
-                value=value,
-                candidate_value=parse_result.candidate_values.get(field_name),
-                compact_evidence=compact_evidence,
-            ):
-                continue
-            questionnaire = questionnaire.model_copy(update={field_name: value})
-            parse_result.resolve_field(field_name)
-        parse_result.questionnaire = questionnaire
-        return self._finalize_questionnaire_warnings(parse_result)
-
-    @staticmethod
-    def _questionnaire_review_value_has_evidence(
-        *,
-        value: Any,
-        candidate_value: Any,
-        compact_evidence: str,
-    ) -> bool:
-        def compact(item: Any) -> str:
-            return re.sub(r"\s+", "", str(item or ""))
-
-        if isinstance(value, list):
-            accepted = {
-                compact(item)
-                for item in (candidate_value if isinstance(candidate_value, list) else [])
-                if compact(item)
-            }
-            returned = {compact(item) for item in value if compact(item)}
-            if not accepted.issubset(returned):
-                return False
-            return all(
-                item in compact_evidence
-                for item in returned - accepted
-            )
-        if isinstance(value, dict):
-            accepted = candidate_value if isinstance(candidate_value, dict) else {}
-            if any(value.get(key) != accepted_value for key, accepted_value in accepted.items()):
-                return False
-            return all(
-                compact(key) in compact_evidence
-                for key in value
-                if key not in accepted
-            )
-        return True
-
-    def _finalize_questionnaire_warnings(
-        self,
-        parse_result: QuestionnaireParseResult,
-    ) -> QuestionnaireParseResult:
-        for field_name in parse_result.uncertain_fields:
-            label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
-            unresolved_message = f"MSQ 的{label}仍无法确认，已从自动规则输入中隔离。"
-            previous = parse_result.field_warnings.get(field_name)
-            if previous and previous in parse_result.warnings:
-                parse_result.warnings.remove(previous)
-            parse_result.field_warnings[field_name] = unresolved_message
-            if unresolved_message not in parse_result.warnings:
-                parse_result.warnings.append(unresolved_message)
-        return parse_result
-
     def _assemble_and_validate(self, case, analysis: CaseAnalysis) -> None:
         files_by_id = {item.id: item for item in case.files}
         findings: list[AbnormalFinding] = []
         ignored_files: list[str] = []
-        questionnaires: list[tuple[int, Questionnaire, DocumentAnalysisResult]] = []
+        msq_questionnaires: list[
+            tuple[int, Questionnaire, DocumentAnalysisResult, set[str]]
+        ] = []
+        medical_questionnaires: list[
+            tuple[int, Questionnaire, DocumentAnalysisResult, set[str]]
+        ] = []
         food_results: list[tuple[int, ChronicFoodSensitivityResult]] = []
         result_order = {item.id: index for index, item in enumerate(case.files)}
         seen: set[tuple[str, str, int, str]] = set()
+        questionnaire_finding_keys: set[str] = set()
         for result in analysis.document_results:
             uploaded_file = files_by_id.get(result.file_id)
             if not result.medical_content:
@@ -2720,9 +3103,53 @@ class CaseAnalysisService:
             if result.questionnaire:
                 questionnaire, warning = self._validated_questionnaire(result)
                 if questionnaire:
-                    questionnaires.append(
-                        (result_order.get(result.file_id, 0), questionnaire, result)
+                    is_msq = self._is_msq_result(result)
+                    if not is_msq and questionnaire.msq_system_scores:
+                        questionnaire = questionnaire.model_copy(
+                            update={"msq_system_scores": {}}
+                        )
+                        analysis.warnings.append(
+                            "普通医疗问卷返回了 MSQ 系统评分，已忽略该评分。"
+                        )
+                    unresolved = self._unresolved_questionnaire_fields(result)
+                    safe_questionnaire = (
+                        self._isolate_unresolved_questionnaire_fields(
+                            questionnaire,
+                            unresolved,
+                        )
                     )
+                    entry = (
+                        result_order.get(result.file_id, 0),
+                        safe_questionnaire,
+                        result,
+                        unresolved,
+                    )
+                    if is_msq:
+                        msq_questionnaires.append(entry)
+                    else:
+                        medical_questionnaires.append(entry)
+                    for projected in self._questionnaire_abnormal_findings(
+                        result,
+                        safe_questionnaire,
+                    ):
+                        projected_key = self._compact(projected.name)
+                        if (
+                            not projected_key
+                            or projected_key in questionnaire_finding_keys
+                        ):
+                            continue
+                        questionnaire_finding_keys.add(projected_key)
+                        validated_projected = self._validate_finding(
+                            uploaded_file,
+                            projected,
+                        )
+                        if self.standardization_service:
+                            validated_projected = (
+                                self.standardization_service.standardize(
+                                    validated_projected
+                                )
+                            )
+                        findings.append(validated_projected)
                 elif warning:
                     analysis.warnings.append(warning)
             if result.food_sensitivity:
@@ -2750,29 +3177,73 @@ class CaseAnalysisService:
                     validated_finding = self.standardization_service.standardize(validated_finding)
                 findings.append(validated_finding)
 
-        if questionnaires:
-            if len(questionnaires) > 1:
-                analysis.warnings.append("检测到多份 MSQ，已采用最后上传且有效的一份。")
-            _, selected_questionnaire, selected_result = sorted(
-                questionnaires,
+        selected_questionnaire: Questionnaire | None = None
+        unresolved_fields: set[str] = set()
+        protected_fields: set[str] = set()
+        if msq_questionnaires:
+            if len(msq_questionnaires) > 1:
+                analysis.warnings.append(
+                    "检测到多份 MSQ 问卷，已采用最后上传且有效的一份。"
+                )
+            (
+                _,
+                selected_questionnaire,
+                _,
+                unresolved_fields,
+            ) = sorted(
+                msq_questionnaires,
                 key=lambda item: item[0],
             )[-1]
-            unresolved_fields = {
-                warning.removeprefix(self.MSQ_UNRESOLVED_PREFIX)
-                for warning in selected_result.warnings
-                if warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
-            }
-            analysis.questionnaire = self._isolate_unresolved_questionnaire_fields(
-                selected_questionnaire,
-                unresolved_fields,
+            protected_fields = set(unresolved_fields)
+
+        if medical_questionnaires:
+            ordered_medical = sorted(
+                medical_questionnaires,
+                key=lambda item: item[0],
+                reverse=True,
             )
-            for field_name in unresolved_fields:
-                label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
-                analysis.warnings.append(
-                    f"MSQ 的{label}尚未确认，相关自动规则已执行安全降级。"
+            if selected_questionnaire is None:
+                (
+                    _,
+                    selected_questionnaire,
+                    _,
+                    protected_fields,
+                ) = ordered_medical.pop(0)
+            selected_questionnaire, merge_warnings = (
+                self._merge_medical_questionnaire_supplements(
+                    selected_questionnaire,
+                    [item[1] for item in ordered_medical],
+                    protected_fields=protected_fields,
                 )
-        else:
-            unresolved_fields = set()
+            )
+            analysis.warnings.extend(merge_warnings)
+            if len(medical_questionnaires) > 1:
+                analysis.warnings.append(
+                    "检测到多份普通医疗问卷，已合并其中明确且不冲突的患者自述信息。"
+                )
+
+        if selected_questionnaire is not None:
+            analysis.questionnaire = selected_questionnaire
+            for field_name in unresolved_fields:
+                keywords = self.MSQ_FIELD_WARNING_KEYWORDS.get(
+                    field_name,
+                    (self.MSQ_FIELD_LABELS.get(field_name, field_name),),
+                )
+                if any(
+                    warning.startswith("MSQ")
+                    and any(keyword in warning for keyword in keywords)
+                    for warning in analysis.warnings
+                ):
+                    continue
+                label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
+                if field_name == "msq_system_scores":
+                    analysis.warnings.append(
+                        "MSQ 系统评分格式异常，请人工核对。"
+                    )
+                else:
+                    analysis.warnings.append(
+                        f"MSQ 的{label}尚未确认，相关自动规则已执行安全降级。"
+                    )
         case.flags = [
             flag for flag in case.flags if not flag.startswith("msq_unresolved:")
         ]
@@ -2814,6 +3285,190 @@ class CaseAnalysisService:
         }
         return questionnaire.model_copy(update=updates) if updates else questionnaire
 
+    def _merge_medical_questionnaire_supplements(
+        self,
+        primary: Questionnaire,
+        supplements: list[Questionnaire],
+        *,
+        protected_fields: set[str],
+    ) -> tuple[Questionnaire, list[str]]:
+        merged = primary
+        warnings: list[str] = []
+        for supplement in supplements:
+            update: dict[str, Any] = {}
+            for field_name in self.QUESTIONNAIRE_LIST_FIELDS:
+                if field_name in protected_fields:
+                    continue
+                update[field_name] = self._merge_questionnaire_list_values(
+                    getattr(merged, field_name),
+                    getattr(supplement, field_name),
+                )
+
+            for field_name in self.QUESTIONNAIRE_SCALAR_FIELDS:
+                if field_name in protected_fields:
+                    continue
+                incoming = getattr(supplement, field_name)
+                if self._questionnaire_scalar_is_empty(field_name, incoming):
+                    continue
+                current = getattr(merged, field_name)
+                if self._questionnaire_scalar_is_empty(field_name, current):
+                    update[field_name] = incoming
+                    continue
+                if self._questionnaire_values_equal(current, incoming):
+                    continue
+                label = self.QUESTIONNAIRE_FIELD_LABELS.get(
+                    field_name,
+                    field_name,
+                )
+                warnings.append(
+                    f"普通医疗问卷中的{label}与主问卷不一致，"
+                    "已保留主问卷内容，请人工确认。"
+                )
+
+            update["additional_notes"] = self._merge_questionnaire_notes(
+                merged.additional_notes,
+                supplement.additional_notes,
+            )
+            # Only the selected fixed MSQ may supply score-based rule input.
+            update["msq_system_scores"] = dict(merged.msq_system_scores)
+            merged = merged.model_copy(update=update)
+        return merged, list(dict.fromkeys(warnings))
+
+    @classmethod
+    def _questionnaire_abnormal_findings(
+        cls,
+        result: DocumentAnalysisResult,
+        questionnaire: Questionnaire,
+    ) -> list[AbnormalFinding]:
+        projected: list[AbnormalFinding] = []
+        seen: set[str] = set()
+        for raw_value in questionnaire.known_conditions:
+            value = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+            normalized = cls._compact(value)
+            if (
+                not normalized
+                or normalized in seen
+                or cls._is_non_abnormal_questionnaire_value(normalized)
+            ):
+                continue
+            seen.add(normalized)
+            system_ids = classify_text_to_system_ids(value)
+            finding_id = "finding_q_" + hashlib.sha256(
+                f"{result.file_id}|condition|{normalized}".encode("utf-8")
+            ).hexdigest()[:12]
+            projected.append(
+                AbnormalFinding(
+                    id=finding_id,
+                    name=value,
+                    result_text=value,
+                    abnormal_flag="patient_reported",
+                    report_explanation="患者自述",
+                    interpretation="患者自述",
+                    neutral_interpretation=(
+                        "该病情来源于患者填写的问卷，不等同于客观检验结果。"
+                    ),
+                    source_file_id=result.file_id,
+                    source_file_name=result.file_name,
+                    source_page=1,
+                    source_text=value,
+                    confidence=0.9,
+                    evidence_status=EvidenceStatus.verified_text,
+                    evidence_notes=["患者自述"],
+                    system_id_candidates=system_ids,
+                    system_ids=system_ids,
+                    mapping_confidence=0.8 if system_ids else 0.0,
+                    standardization_status=(
+                        FindingStandardizationStatus.system_mapped
+                        if system_ids
+                        else FindingStandardizationStatus.unprocessed
+                    ),
+                )
+            )
+        return projected
+
+    @staticmethod
+    def _is_non_abnormal_questionnaire_value(
+        normalized: str,
+    ) -> bool:
+        if normalized in {
+            "无",
+            "否",
+            "没有",
+            "暂无",
+            "未填写",
+            "不详",
+            "未知",
+            "none",
+            "unknown",
+        }:
+            return True
+        return False
+
+    @staticmethod
+    def _merge_questionnaire_list_values(
+        primary: list[str],
+        supplement: list[str],
+    ) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for value in [*primary, *supplement]:
+            cleaned = re.sub(r"\s+", " ", str(value or "")).strip()
+            if not cleaned:
+                continue
+            key = cleaned.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(cleaned)
+        return merged
+
+    @staticmethod
+    def _merge_questionnaire_notes(
+        primary: str | None,
+        supplement: str | None,
+    ) -> str | None:
+        parts: list[str] = []
+        seen: set[str] = set()
+        for value in (primary, supplement):
+            for part in re.split(r"[；\n]+", value or ""):
+                cleaned = re.sub(r"\s+", " ", part).strip()
+                if not cleaned:
+                    continue
+                key = cleaned.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                parts.append(cleaned)
+        return "；".join(parts) or None
+
+    @staticmethod
+    def _questionnaire_scalar_is_empty(
+        field_name: str,
+        value: Any,
+    ) -> bool:
+        if field_name == "sex":
+            return value in (None, "", "unknown")
+        return value in (None, "")
+
+    @staticmethod
+    def _questionnaire_values_equal(left: Any, right: Any) -> bool:
+        if isinstance(left, str) and isinstance(right, str):
+            return (
+                re.sub(r"\s+", " ", left).strip().casefold()
+                == re.sub(r"\s+", " ", right).strip().casefold()
+            )
+        return left == right
+
+    def _unresolved_questionnaire_fields(
+        self,
+        result: DocumentAnalysisResult,
+    ) -> set[str]:
+        return {
+            warning.removeprefix(self.MSQ_UNRESOLVED_PREFIX)
+            for warning in result.warnings
+            if warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
+        }
+
     def _validated_questionnaire(
         self,
         result: DocumentAnalysisResult,
@@ -2821,24 +3476,67 @@ class CaseAnalysisService:
         try:
             questionnaire = Questionnaire.model_validate(result.questionnaire)
         except ValidationError:
-            return None, f"{result.file_name} 的 MSQ 结构不合法，已跳过。"
+            return None, f"{result.file_name} 的问卷结构不合法，已跳过。"
 
         scores = questionnaire.msq_system_scores
         if any(value < 0 or value > 4 for value in scores.values()):
-            return None, f"{result.file_name} 的 MSQ 评分超出 0–4 范围，已跳过。"
+            questionnaire = questionnaire.model_copy(
+                update={"msq_system_scores": {}}
+            )
+            result.questionnaire = questionnaire.model_dump(mode="json")
+            scores = {}
+            self._mark_msq_scores_unresolved(result)
 
-        report_type = result.report_type.lower()
-        file_name = result.file_name.lower()
-        is_msq = "msq" in report_type or "questionnaire" in report_type or "问卷" in report_type
-        is_msq = is_msq or "msq" in file_name or "问卷" in file_name
-        if questionnaire.symptoms and not scores and (is_msq or len(questionnaire.symptoms) >= 8):
-            return None, f"{result.file_name} 识别出症状但没有有效 MSQ 评分，已跳过该问卷。"
+        if (
+            self._is_msq_result(result)
+            and questionnaire.symptoms
+            and not scores
+        ):
+            self._mark_msq_scores_unresolved(result)
         return questionnaire, None
 
+    @staticmethod
+    def _is_msq_result(result: DocumentAnalysisResult) -> bool:
+        report_type = re.sub(
+            r"[\s-]+",
+            "_",
+            (result.report_type or "").strip().lower(),
+        )
+        file_name = (result.file_name or "").lower()
+        return (
+            report_type == "msq"
+            or report_type.startswith("msq_")
+            or report_type.endswith("_msq")
+            or "msq" in file_name
+        )
+
+    def _mark_msq_scores_unresolved(
+        self,
+        result: DocumentAnalysisResult,
+    ) -> None:
+        marker = f"{self.MSQ_UNRESOLVED_PREFIX}msq_system_scores"
+        result.warnings = list(
+            dict.fromkeys(
+                [
+                    *result.warnings,
+                    marker,
+                    "MSQ 系统评分格式异常，请人工核对。",
+                ]
+            )
+        )
+
     def _validate_finding(self, uploaded_file, finding: AbnormalFinding) -> AbnormalFinding:
+        provenance_notes = (
+            ["患者自述"]
+            if str(finding.abnormal_flag or "").lower() == "patient_reported"
+            else []
+        )
         if not uploaded_file:
             return finding.model_copy(
-                update={"evidence_status": EvidenceStatus.needs_review, "evidence_notes": ["来源文件不存在。"]}
+                update={
+                    "evidence_status": EvidenceStatus.needs_review,
+                    "evidence_notes": [*provenance_notes, "来源文件不存在。"],
+                }
             )
         finding = finding.model_copy(
             update={"source_page": logical_source_page(uploaded_file, finding.source_page)}
@@ -2849,7 +3547,10 @@ class CaseAnalysisService:
                 notes.append("页码超出文件范围。")
             notes.extend(self._numeric_logic_notes(finding))
             return finding.model_copy(
-                update={"evidence_status": EvidenceStatus.visual_model_only, "evidence_notes": notes}
+                update={
+                    "evidence_status": EvidenceStatus.visual_model_only,
+                    "evidence_notes": [*provenance_notes, *notes],
+                }
             )
 
         page = next((item for item in uploaded_file.page_texts if item.page == finding.source_page), None)
@@ -2872,7 +3573,7 @@ class CaseAnalysisService:
         return finding.model_copy(
             update={
                 "evidence_status": EvidenceStatus.needs_review if notes else EvidenceStatus.verified_text,
-                "evidence_notes": notes,
+                "evidence_notes": [*provenance_notes, *notes],
             }
         )
 
@@ -3086,6 +3787,7 @@ class CaseAnalysisService:
             "high": "偏高",
             "low": "偏低",
             "positive": "阳性",
+            "patient_reported": "患者自述",
             "abnormal": "异常",
             "unknown": "异常",
         }

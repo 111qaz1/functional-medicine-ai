@@ -149,12 +149,30 @@ class SemanticSupportService:
                         notes.append(f"问卷证据字段为空：{field}。")
                         continue
                     distinct_sources.add(f"questionnaire:{field}")
+                    is_patient_reported_condition = bool(
+                        field == "known_conditions"
+                        and any(
+                            str(finding.abnormal_flag or "").lower()
+                            == "patient_reported"
+                            for finding in findings.values()
+                        )
+                    )
                     contextual = evidence.model_copy(
-                        update={"evidence_strength": SemanticEvidenceStrength.contextual}
+                        update={
+                            "evidence_strength": (
+                                SemanticEvidenceStrength.explicit_conclusion
+                                if is_patient_reported_condition
+                                else SemanticEvidenceStrength.contextual
+                            )
+                        }
                     )
                     valid_refs.append(contextual)
                     strengths.append(contextual.evidence_strength)
-                    evidence_classes.append(ClinicalEvidenceClass.symptom)
+                    evidence_classes.append(
+                        ClinicalEvidenceClass.clinical_confirmed
+                        if is_patient_reported_condition
+                        else ClinicalEvidenceClass.symptom
+                    )
                     continue
                 if ref.startswith("clinical_summary:"):
                     if not (clinical_summary_text or "").strip():

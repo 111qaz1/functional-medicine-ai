@@ -183,7 +183,25 @@ class ReviewService:
         effective_skus = [sku for sku in validated_skus if sku.sku_id not in excluded_ids]
         if not excluded_ids and not dosage_overrides:
             return draft
-        return draft.model_copy(update={"recommended_skus": effective_skus})
+        covered_system_ids = {
+            system_id
+            for sku in effective_skus
+            for system_id in (
+                getattr(sku, "covered_system_ids", [])
+                or ([getattr(sku, "primary_system_id", None)] if getattr(sku, "primary_system_id", None) else [])
+            )
+        }
+        uncovered_system_ids = [
+            finding.system_id
+            for finding in (getattr(draft, "structured_system_findings", []) or [])
+            if finding.system_id not in covered_system_ids
+        ]
+        return draft.model_copy(
+            update={
+                "recommended_skus": effective_skus,
+                "uncovered_system_ids": uncovered_system_ids,
+            }
+        )
 
     def _dosage_overrides(self, edits: dict[str, Any] | None) -> dict[str, dict[str, str]]:
         if not isinstance(edits, dict):

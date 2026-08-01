@@ -18,7 +18,6 @@ class ReportAbnormalItem:
 
 
 _SYSTEM_ORDER = {system_id: index for index, (system_id, _) in enumerate(BODY_SYSTEMS)}
-_SUMMARY_PRIORITY = {"最高优先级": 0, "优先级高": 1, "中度关注": 2}
 _SUMMARY_SUPPORT_DIRECTIONS = {
     "digestive_gut": "支持胃肠消化、黏膜屏障与肠道功能恢复",
     "liver_detox": "支持肝胆代谢、抗氧化与生物转化管理",
@@ -38,13 +37,10 @@ def group_abnormal_items(
     items: Iterable[ReportAbnormalItem],
     structured_system_findings: Iterable[Any],
 ) -> list[str]:
-    structured = sorted(
-        list(structured_system_findings or []),
-        key=lambda item: (
-            _SUMMARY_PRIORITY.get(str(getattr(item, "priority_level", "")), 3),
-            -float(getattr(item, "priority_score", 0.0) or 0.0),
-        ),
-    )
+    # Upstream validation has already ordered systems by evidence certainty.
+    # Preserve that order instead of moving questionnaire-only systems ahead
+    # of objective findings based on score alone.
+    structured = list(structured_system_findings or [])
     priority_system_ids = [
         str(getattr(item, "system_id", "") or "")
         for item in structured
@@ -89,7 +85,8 @@ def group_abnormal_items(
         system_id = _choose_primary_system(candidate_systems, priority_rank)
         group_key = system_id or "__other__"
         status = _clean_text(item.status_label) or "异常"
-        groups.setdefault(group_key, []).append(f"{name}：{result}（{status}）")
+        detail = "" if _is_redundant_abnormal_result(name, result) else f"：{result}"
+        groups.setdefault(group_key, []).append(f"{name}{detail}（{status}）")
 
     ordered_systems = sorted(
         (system_id for system_id in groups if system_id != "__other__"),
@@ -107,6 +104,20 @@ def group_abnormal_items(
     ]
 
 
+def _is_redundant_abnormal_result(name: str, result: str) -> bool:
+    """Hide generic or name-repeating result text in patient-facing summaries."""
+    compact_result = _compact(result)
+    if not compact_result:
+        return True
+    if compact_result == _compact(name):
+        return True
+    return compact_result in {
+        _compact("异常"),
+        _compact("已发现异常"),
+        _compact("发现异常"),
+    }
+
+
 def build_plan_summary(
     structured_system_findings: Iterable[Any],
     recommended_items: Iterable[Any],
@@ -114,13 +125,7 @@ def build_plan_summary(
     *,
     max_named_problems: int = 5,
 ) -> list[str]:
-    structured = sorted(
-        list(structured_system_findings or []),
-        key=lambda item: (
-            _SUMMARY_PRIORITY.get(str(getattr(item, "priority_level", "")), 3),
-            -float(getattr(item, "priority_score", 0.0) or 0.0),
-        ),
-    )
+    structured = list(structured_system_findings or [])
     if not structured:
         return []
 
@@ -174,7 +179,15 @@ def build_plan_summary(
         system_id = str(getattr(finding, "system_id", "") or "")
         finding_ids = {str(item) for item in getattr(finding, "finding_ids", []) or []}
         linked = any(
-            str(getattr(item, "primary_system_id", "") or "") == system_id
+            system_id
+            in set(
+                str(value)
+                for value in (
+                    getattr(item, "covered_system_ids", [])
+                    or [getattr(item, "primary_system_id", "")]
+                )
+                if str(value)
+            )
             and (
                 not finding_ids
                 or not getattr(item, "matched_finding_ids", [])

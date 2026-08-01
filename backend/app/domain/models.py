@@ -550,6 +550,7 @@ class DraftRecommendationItem(StrictModel):
     evidence_details: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     primary_system_id: str | None = None
+    covered_system_ids: list[str] = Field(default_factory=list)
     matched_finding_ids: list[str] = Field(default_factory=list)
     matched_support_need_ids: list[str] = Field(default_factory=list)
     system_priority_rank: int | None = None
@@ -628,6 +629,7 @@ class RecommendationDraft(StrictModel):
     manual_review_required: bool = True
     red_flags: list[str] = Field(default_factory=list)
     structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
+    uncovered_system_ids: list[str] = Field(default_factory=list)
     report_sections: dict[str, Any] = Field(default_factory=dict)
     internal_audit: dict[str, Any] = Field(default_factory=dict)
     model_version: str

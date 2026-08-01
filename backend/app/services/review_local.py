@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.models import AuditLog, DraftStatus, ReviewDecision
+from app.core.llm_request_control import llm_request_context
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_to_system_ids
@@ -799,12 +800,17 @@ class ReviewService:
         }
 
         try:
-            fusion = self.rag_fusion_provider.fuse_report_sections(
-                report_text=report_text,
-                target_sections=target_sections,
-                rag_context=rag_context,
-                case_context=self._llm_fusion_case_context(case, draft),
-            )
+            with llm_request_context(
+                case_id=case.id,
+                analysis_id=getattr(draft, "source_analysis_id", None),
+                draft_id=draft.id,
+            ):
+                fusion = self.rag_fusion_provider.fuse_report_sections(
+                    report_text=report_text,
+                    target_sections=target_sections,
+                    rag_context=rag_context,
+                    case_context=self._llm_fusion_case_context(case, draft),
+                )
             patch_payload = getattr(fusion, "section_patches", {}) or {}
             valid_sections = self._validate_llm_fused_section_patches(patch_payload, target_sections, draft)
             if not valid_sections:

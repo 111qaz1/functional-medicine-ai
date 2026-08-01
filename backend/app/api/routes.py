@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -32,6 +33,9 @@ from app.api.schemas import (
     KnowledgeManifestResponse,
     LLMConfigResponse,
     LLMConfigUpdateRequest,
+    LLMRateLimitStatusResponse,
+    LLMUsageListResponse,
+    LLMUsageSummaryResponse,
     ParsingReviewRequest,
     ProductCatalogResponse,
     ProductRuleCreateRequest,
@@ -605,6 +609,8 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         filename=target_file.filename,
         content_type=target_file.content_type,
         content=content,
+        case_id=case.id,
+        file_id=target_file.id,
     )
     parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
         spans=extraction.spans,
@@ -704,6 +710,7 @@ async def import_clinical_summary_image(case_id: str, request: Request, file: Up
         filename=filename,
         content_type=file.content_type or "application/octet-stream",
         content=content,
+        case_id=case.id,
     )
     if extraction.error_message:
         raise HTTPException(status_code=400, detail=extraction.error_message)
@@ -1094,6 +1101,67 @@ def update_llm_config(payload: LLMConfigUpdateRequest, request: Request):
         temperature=refreshed_config.temperature,
         configured=bool(refreshed_config.base_url and refreshed_config.api_key and refreshed_config.model and not refreshed_validation_error),
         validation_error=refreshed_validation_error,
+    )
+
+
+@router.get("/system/llm-usage", response_model=LLMUsageListResponse)
+def list_llm_usage(
+    request: Request,
+    case_id: str | None = None,
+    analysis_id: str | None = None,
+    limit: int = 100,
+):
+    container = _container(request)
+    _require_admin(request)
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 1000")
+    return LLMUsageListResponse(
+        items=container.repository.list_llm_request_usage(
+            case_id=case_id,
+            analysis_id=analysis_id,
+            limit=limit,
+        )
+    )
+
+
+@router.get(
+    "/system/llm-rate-limit",
+    response_model=LLMRateLimitStatusResponse,
+)
+def get_llm_rate_limit_status(request: Request):
+    container = _container(request)
+    _require_admin(request)
+    return LLMRateLimitStatusResponse(
+        **container.llm_rate_limiter.snapshot()
+    )
+
+
+@router.get("/system/llm-usage/summary", response_model=LLMUsageSummaryResponse)
+def summarize_llm_usage(
+    request: Request,
+    window_minutes: int = 60,
+    case_id: str | None = None,
+    analysis_id: str | None = None,
+):
+    container = _container(request)
+    _require_admin(request)
+    if window_minutes < 1 or window_minutes > 1440:
+        raise HTTPException(
+            status_code=422,
+            detail="window_minutes must be between 1 and 1440",
+        )
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(minutes=window_minutes)
+    totals = container.repository.summarize_llm_request_usage(
+        since=since,
+        case_id=case_id,
+        analysis_id=analysis_id,
+    )
+    return LLMUsageSummaryResponse(
+        since=since,
+        until=until,
+        window_minutes=window_minutes,
+        **totals,
     )
 
 

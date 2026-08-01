@@ -667,6 +667,35 @@ class AuditLog(StrictModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class LLMRequestUsage(StrictModel):
+    """Privacy-safe accounting data for one provider HTTP attempt."""
+
+    id: str
+    request_group_id: str
+    attempt: int = Field(default=1, ge=1)
+    case_id: str | None = None
+    analysis_id: str | None = None
+    file_id: str | None = None
+    draft_id: str | None = None
+    operation: str
+    schema_name: str
+    model: str
+    api_style: str
+    status: str
+    http_status: int | None = None
+    error_code: str | None = None
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    cached_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    reserved_tokens: int = Field(default=0, ge=0)
+    queue_duration_ms: int = Field(default=0, ge=0)
+    request_duration_ms: int = Field(default=0, ge=0)
+    started_at: datetime
+    completed_at: datetime
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class DoctorAccount(StrictModel):
     id: str
     username: str

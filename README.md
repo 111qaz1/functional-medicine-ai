@@ -140,10 +140,20 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `FM_LLM_RETRY_ATTEMPTS`（默认 `2`，表示初次请求失败后最多重试两次）
 - `FM_LLM_RETRY_BASE_DELAY_SECONDS`（默认 `1`）
 - `FM_LLM_RETRY_MAX_DELAY_SECONDS`（默认 `10`）
+- `FM_LLM_MAX_CONCURRENCY`（默认 `90`，Tier2 官方上限为 `100`）
+- `FM_LLM_RPM_SOFT_LIMIT`（默认 `475`，Tier2 官方上限为 `500`）
+- `FM_LLM_TPM_SOFT_LIMIT`（默认 `2850000`，Tier2 官方上限为 `3000000`）
+- `FM_LLM_RATE_LIMIT_WINDOW_SECONDS`（默认 `60`）
+- `FM_LLM_DEFAULT_COMPLETION_RESERVATION`（默认 `32768`，仅用于本地排队预约，不会作为输出上限发送给模型）
 - `FM_MAX_UPLOAD_MB`（默认 `50`）
 - `FM_MAX_PDF_PAGES`（默认 `200`）
-- `FM_ANALYSIS_WORKERS`（默认 `1`）
-- `FM_CASE_DOCUMENT_WORKERS`（默认 `2`，限制范围 `1-4`）
+- `FM_ANALYSIS_WORKERS`（默认且最大 `20`）
+- `FM_CASE_DOCUMENT_WORKERS`（默认且最大 `2`）
+
+病例分析、OCR、病例助手、可选 Composer、RAG 报告融合和处方建议请求
+都会进入同一个进程内 FIFO 队列，同时受全局并发、RPM 和 TPM 软限制约束。
+服务会保存响应中的真实 token 用量，并在同类调用积累至少 5 条数据后使用
+历史 P95 动态调整后续预约量。应用不会向模型发送输出 token 上限。
 
 前端：
 - `NEXT_PUBLIC_API_BASE_URL`

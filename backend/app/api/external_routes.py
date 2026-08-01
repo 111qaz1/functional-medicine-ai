@@ -208,7 +208,10 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
 
 def _prescription_items_response(container, draft) -> ExternalPrescriptionItemsResponse:
     draft = _effective_external_draft(container, draft)
-    advice = PrescriptionAdviceService(container.settings).build_advice(draft)
+    advice = PrescriptionAdviceService(
+        container.settings,
+        request_controller=container.llm_request_controller,
+    ).build_advice(draft)
     return ExternalPrescriptionItemsResponse(
         case_id=draft.case_id,
         draft_id=draft.id,
@@ -316,6 +319,8 @@ async def upload_external_attachments(
             filename=uploaded_file.filename,
             content_type=uploaded_file.content_type,
             content=content,
+            case_id=case.id,
+            file_id=uploaded_file.id,
         )
         parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
             spans=extraction.spans,

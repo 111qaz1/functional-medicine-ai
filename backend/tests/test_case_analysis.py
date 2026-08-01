@@ -1150,6 +1150,8 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(request["timeout"], 600)
         self.assertEqual(request["json"]["thinking"], {"type": "enabled"})
         self.assertNotIn("temperature", request["json"])
+        self.assertNotIn("max_tokens", request["json"])
+        self.assertNotIn("max_completion_tokens", request["json"])
         self.assertEqual(
             request["json"]["messages"][1]["content"][1],
             {

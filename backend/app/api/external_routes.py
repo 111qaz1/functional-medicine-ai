@@ -274,21 +274,41 @@ async def upload_external_attachments(
     container = _container(request)
     case = _require_owned_case(container, case_id, doctor)
     results: list[ExternalAttachmentResult] = []
+    prepared_files: list[tuple[str, str, bytes]] = []
 
     for file in files:
         content = await file.read()
         filename = file.filename or "upload.bin"
         content_type = file.content_type or "application/octet-stream"
-        if attachment_type == "questionnaire":
+        if len(content) > container.settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail="文件超过允许的大小限制。")
+        intake = container.document_intake_service.preflight(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+        )
+        if intake.validation_error:
+            raise HTTPException(status_code=422, detail=intake.validation_error)
+        prepared_files.append((filename, content_type, content))
+
+    if attachment_type == "questionnaire":
+        parsed_questionnaires = []
+        for filename, content_type, content in prepared_files:
             try:
                 questionnaire = container.questionnaire_import_service.parse(
                     filename=filename,
                     content_type=content_type,
                     content=content,
                 )
-                case = container.case_service.import_questionnaire(case.id, questionnaire, filename=filename)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            parsed_questionnaires.append((filename, questionnaire))
+        for filename, questionnaire in parsed_questionnaires:
+            case = container.case_service.import_questionnaire(
+                case.id,
+                questionnaire,
+                filename=filename,
+            )
             results.append(
                 ExternalAttachmentResult(
                     filename=filename,
@@ -296,8 +316,13 @@ async def upload_external_attachments(
                     status="questionnaire_imported",
                 )
             )
-            continue
+        return ExternalAttachmentUploadResponse(
+            case_id=case.id,
+            status=getattr(case.status, "value", str(case.status)),
+            results=results,
+        )
 
+    for filename, content_type, content in prepared_files:
         try:
             storage_uri = container.recommendation_service.object_store.save(filename, content)
         except OSError as exc:

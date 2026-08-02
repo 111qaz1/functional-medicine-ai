@@ -146,7 +146,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `FM_LLM_RATE_LIMIT_WINDOW_SECONDS`（默认 `60`）
 - `FM_LLM_DEFAULT_COMPLETION_RESERVATION`（默认 `32768`，仅用于本地排队预约，不会作为输出上限发送给模型）
 - `FM_MAX_UPLOAD_MB`（默认 `50`）
-- `FM_MAX_PDF_PAGES`（默认 `200`）
+- `FM_MAX_PDF_PAGES`（默认 `50`，单个 PDF 超过 50 页时拒绝上传并提示拆分）
 - `FM_ANALYSIS_WORKERS`（默认且最大 `20`）
 - `FM_CASE_DOCUMENT_WORKERS`（默认且最大 `2`）
 

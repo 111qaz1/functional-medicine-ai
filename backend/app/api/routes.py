@@ -61,6 +61,7 @@ from app.domain.models import (
     CaseIndicator,
     DoctorAccount,
     DoctorRole,
+    FileIntakeStatus,
     ProductRule,
     RuleScope,
     SourceSpan,
@@ -450,15 +451,38 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         content_type=file.content_type or "application/octet-stream",
         content=content,
     )
-    storage_uri = None
-    if intake.validation_error is None:
-        try:
-            storage_uri = container.recommendation_service.object_store.save(filename, content)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="文件保存失败，请检查服务器存储空间或目录权限。",
-            ) from exc
+    if intake.validation_error:
+        raise HTTPException(status_code=422, detail=intake.validation_error)
+    duplicate = next(
+        (
+            existing
+            for existing in case.files
+            if existing.content_sha256
+            and existing.content_sha256 == intake.content_sha256
+            and existing.intake_status != FileIntakeStatus.invalid
+        ),
+        None,
+    )
+    if duplicate is not None:
+        return _case_detail_response(
+            container,
+            case,
+            operation=ProcessingOperationResponse(
+                success=True,
+                stage="upload_preflight",
+                status="succeeded",
+                parsing_succeeded=bool(duplicate.raw_extracted_text),
+                message=f"文件“{duplicate.filename}”已存在，已跳过重复上传。",
+                filename=filename,
+            ),
+        )
+    try:
+        storage_uri = container.recommendation_service.object_store.save(filename, content)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="文件保存失败，请检查服务器存储空间或目录权限。",
+        ) from exc
     uploaded_file = UploadedFile(
         id=f"file_{uuid.uuid4().hex[:12]}",
         case_id=case_id,
@@ -476,16 +500,7 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         validation_error=intake.validation_error,
     )
     case = container.case_service.add_uploaded_file(case.id, uploaded_file)
-    if intake.validation_error:
-        operation = ProcessingOperationResponse(
-            success=False,
-            stage="upload_preflight",
-            status="failed",
-            parsing_succeeded=False,
-            message=intake.validation_error,
-            filename=filename,
-        )
-    elif intake.extracted_text:
+    if intake.extracted_text:
         operation = ProcessingOperationResponse(
             success=True,
             stage="upload_preflight",
@@ -656,11 +671,19 @@ async def import_questionnaire_file(case_id: str, request: Request, file: Upload
     _authorized_case(container, case_id, _current_doctor(request))
 
     filename = file.filename or "questionnaire-upload.bin"
-    content = await file.read()
+    content_type = file.content_type or "application/octet-stream"
+    content = await _read_upload_with_limit(file, container.settings.max_upload_bytes)
+    intake = container.document_intake_service.preflight(
+        filename=filename,
+        content_type=content_type,
+        content=content,
+    )
+    if intake.validation_error:
+        raise HTTPException(status_code=422, detail=intake.validation_error)
     try:
         questionnaire = container.questionnaire_import_service.parse(
             filename=filename,
-            content_type=file.content_type or "application/octet-stream",
+            content_type=content_type,
             content=content,
         )
         case = container.case_service.import_questionnaire(case_id, questionnaire, filename=filename)

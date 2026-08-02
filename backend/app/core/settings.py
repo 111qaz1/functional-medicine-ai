@@ -51,7 +51,7 @@ class AppSettings:
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
     max_upload_bytes: int = 50 * 1024 * 1024
-    max_pdf_pages: int = 200
+    max_pdf_pages: int = 50
     analysis_worker_count: int = 20
     case_document_worker_count: int = 2
 
@@ -153,7 +153,7 @@ def load_settings() -> AppSettings:
         "off",
     }
     max_upload_bytes = int(float(os.getenv("FM_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
-    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "200"))
+    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "50"))
     analysis_worker_count = max(
         1,
         min(int(os.getenv("FM_ANALYSIS_WORKERS", "20")), 20),

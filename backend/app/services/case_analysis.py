@@ -61,8 +61,10 @@ from app.services.body_systems import (
 )
 from app.services.finding_standardization import STANDARDIZATION_VERSION
 from app.services.evidence_policy import classify_finding_evidence, system_evidence_score
+from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.report_content import (
     ReportAbnormalItem,
+    build_core_health_portrait,
     build_plan_summary,
     group_abnormal_items,
 )
@@ -101,7 +103,33 @@ def is_chronic_food_sensitivity_filename(filename: str) -> bool:
     stem = unicodedata.normalize("NFKC", Path(filename or "").stem).lower()
     normalized = re.sub(r"[\s_\-（）()\[\]【】]+", "", stem)
     normalized = re.sub(r"(?:副本|复件|copy)?\d+$", "", normalized)
-    return "慢性食物敏感" in normalized
+    return (
+        any(term in normalized for term in ("慢性食物敏感", "慢性食物过敏", "食物不耐受"))
+        or ("igg" in normalized and any(term in normalized for term in ("食物", "过敏", "敏感")))
+    )
+
+
+def is_chronic_food_sensitivity_result(result: Any) -> bool:
+    if is_chronic_food_sensitivity_filename(str(getattr(result, "file_name", "") or "")):
+        return True
+    if getattr(result, "food_sensitivity", None) is not None:
+        return True
+    report_type = unicodedata.normalize(
+        "NFKC",
+        str(getattr(result, "report_type", "") or ""),
+    ).lower()
+    compact_type = re.sub(r"[\s_\-]+", "", report_type)
+    return any(
+        term in compact_type
+        for term in (
+            "慢性食物敏感",
+            "慢性食物过敏",
+            "食物不耐受",
+            "foodsensitivity",
+            "foodintolerance",
+            "foodigg",
+        )
+    )
 
 
 class _StrictPayload(BaseModel):
@@ -2715,7 +2743,7 @@ class CaseAnalysisService:
             synthesis_results = [
                 result
                 for result in results
-                if not is_chronic_food_sensitivity_filename(result.file_name)
+                if not is_chronic_food_sensitivity_result(result)
             ]
             with self._provider_usage_context(
                 case_id=case.id,
@@ -2822,12 +2850,20 @@ class CaseAnalysisService:
             self._save(analysis)
             raise ValueError("病例资料已变化，请重新进行综合分析。")
         files_by_id = {item.id: item for item in case.files if item.id in analysis.file_ids}
+        food_sensitivity_file_ids = {
+            result.file_id
+            for result in analysis.document_results
+            if is_chronic_food_sensitivity_result(result)
+        }
         normalized_findings: list[AbnormalFinding] = []
         for finding in abnormal_findings:
             source_file = files_by_id.get(finding.source_file_id)
             if not source_file:
                 raise ValueError("异常发现引用了分析快照以外的文件。")
-            if is_chronic_food_sensitivity_filename(source_file.filename):
+            if (
+                source_file.id in food_sensitivity_file_ids
+                or is_chronic_food_sensitivity_filename(source_file.filename)
+            ):
                 continue
             finding = finding.model_copy(
                 update={"source_page": logical_source_page(source_file, finding.source_page)}
@@ -3071,7 +3107,7 @@ class CaseAnalysisService:
                 }
             )
             for result in analysis.document_results
-            if not is_chronic_food_sensitivity_filename(result.file_name)
+            if not is_chronic_food_sensitivity_result(result)
         ]
 
     @staticmethod
@@ -3501,7 +3537,7 @@ class CaseAnalysisService:
         ] = []
 
         for result in document_results:
-            if is_chronic_food_sensitivity_filename(result.file_name):
+            if is_chronic_food_sensitivity_result(result):
                 continue
             if not result.questionnaire:
                 continue
@@ -3617,7 +3653,7 @@ class CaseAnalysisService:
                 for warning in result.warnings
                 if not warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
             )
-            is_food_sensitivity_file = is_chronic_food_sensitivity_filename(result.file_name)
+            is_food_sensitivity_file = is_chronic_food_sensitivity_result(result)
             if is_food_sensitivity_file:
                 if result.food_sensitivity:
                     if result.food_sensitivity.valid:
@@ -4159,10 +4195,6 @@ class CaseAnalysisService:
     def _apply_final_report_sections(self, draft, analysis: CaseAnalysis, case) -> None:
         existing = draft.report_sections
         reviewed_findings = analysis.reviewed_abnormal_findings or analysis.abnormal_findings
-        health_portrait = self._public_health_portrait(
-            existing.get("核心结论与健康画像", []),
-            analysis.reviewed_case_summary or analysis.case_summary,
-        )
         structured_findings = self._enrich_structured_system_findings(
             list(getattr(draft, "structured_system_findings", []) or []),
             reviewed_findings,
@@ -4171,6 +4203,12 @@ class CaseAnalysisService:
                 or analysis.reviewed_system_findings
                 or analysis.system_findings
             ),
+        )
+        health_portrait = build_core_health_portrait(
+            structured_findings,
+            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
+            abnormal_findings=reviewed_findings,
+            risk_notices=getattr(draft, "red_flags", []) or [],
         )
         grouped_findings = self._group_abnormal_findings(
             case,
@@ -4255,7 +4293,14 @@ class CaseAnalysisService:
             sections["慢性食物敏感检测结果"] = food_lines
         if system_lines:
             sections["功能医学系统失衡分析"] = system_lines
-        sections["生活方式干预"] = existing.get("生活方式干预处方", draft.lifestyle_actions)
+        lifestyle_values = existing.get("生活方式干预处方", draft.lifestyle_actions)
+        if isinstance(lifestyle_values, str):
+            lifestyle_values = [lifestyle_values]
+        sections["生活方式干预"] = [
+            cleaned
+            for item in lifestyle_values
+            if (cleaned := remove_generic_lifestyle_confirmation(str(item)))
+        ]
         sections["首月营养素干预方案"] = existing.get("首月营养素干预方案", [])
         if total_advice:
             sections["总医嘱说明"] = total_advice
@@ -4266,16 +4311,6 @@ class CaseAnalysisService:
         draft.structured_system_findings = structured_findings
         if analysis.reviewed_case_summary:
             draft.case_summary = [analysis.reviewed_case_summary]
-
-    @staticmethod
-    def _public_health_portrait(items, case_summary: str | None) -> list[str]:
-        values = [str(item).strip() for item in (items if isinstance(items, list) else [items]) if str(item).strip()]
-        forbidden = ("RAG", "模型", "API", "规则命中", "产品编号", "接入边界", "内部")
-        public_values = [item for item in values if not any(term in item for term in forbidden)]
-        if public_values:
-            return public_values
-        summary = re.sub(r"\s+", " ", case_summary or "").strip()
-        return [f"一句话健康画像：{summary}"] if summary else []
 
     @staticmethod
     def _group_abnormal_findings(

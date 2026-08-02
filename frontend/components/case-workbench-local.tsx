@@ -152,6 +152,22 @@ type DosageOverrideDraft = {
   note: string;
 };
 
+type UploadFailure = {
+  id: string;
+  filename: string;
+  message: string;
+};
+
+async function fileSha256(file: File): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  try {
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
+}
+
 function effectiveDosageOption(item: DraftRecommendationItem, overrides: Record<string, DosageOverrideDraft>) {
   const selectedId = overrides[item.sku_id]?.option_id || item.dosage_option_id;
   return item.dosage_options?.find((option) => option.option_id === selectedId);
@@ -265,6 +281,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [reviewActionNotice, setReviewActionNotice] = useState<string | null>(null);
   const [operation, setOperation] = useState<OperationProgressState | null>(null);
+  const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([]);
   const [findingFilter, setFindingFilter] = useState<"all" | "attention" | "needs_review" | "verified">("all");
   const [findingSearch, setFindingSearch] = useState("");
 
@@ -460,31 +477,88 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   );
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
+    const input = event.currentTarget;
+    const files = Array.from(input.files ?? []);
+    input.value = "";
     if (!files.length) return;
+    const knownHashes = new Set(
+      (payload?.case.files ?? [])
+        .map((file) => file.content_sha256)
+        .filter((digest): digest is string => Boolean(digest))
+    );
+    const failures: UploadFailure[] = [];
+    let uploadedCount = 0;
+    let skippedCount = 0;
     try {
       setBusy(true);
+      setUploadFailures([]);
       setOperation({ placement: "upload", title: "上传并预解析资料", stage: `准备处理 ${files.length} 份文件`, percent: 0, status: "running" });
-      let latestOperation: CaseDetailResponse["operation"] = null;
       for (const [index, file] of files.entries()) {
-        latestOperation = await uploadCaseFile(caseId, file, (filePercent) => {
-          const percent = ((index + filePercent / 100) / files.length) * 100;
+        setOperation({
+          placement: "upload",
+          title: "上传并预解析资料",
+          stage: `正在检查第 ${index + 1}/${files.length} 份：${file.name}`,
+          percent: (index / files.length) * 100,
+          status: "running"
+        });
+        const digest = await fileSha256(file);
+        if (digest && knownHashes.has(digest)) {
+          skippedCount += 1;
           setOperation({
             placement: "upload",
             title: "上传并预解析资料",
-            stage: `正在处理第 ${index + 1}/${files.length} 份：${file.name}`,
-            percent,
+            stage: `已跳过重复文件：${file.name}`,
+            percent: ((index + 1) / files.length) * 100,
             status: "running"
           });
-        }).then((response) => response.operation ?? null);
-        if (latestOperation && !latestOperation.success) {
-          throw new Error(latestOperation.message);
+          continue;
+        }
+        try {
+          const response = await uploadCaseFile(caseId, file, (filePercent) => {
+            const percent = ((index + filePercent / 100) / files.length) * 100;
+            setOperation({
+              placement: "upload",
+              title: "上传并预解析资料",
+              stage: `正在处理第 ${index + 1}/${files.length} 份：${file.name}`,
+              percent,
+              status: "running"
+            });
+          });
+          const latestOperation: CaseDetailResponse["operation"] = response.operation ?? null;
+          if (latestOperation && !latestOperation.success) {
+            throw new Error(latestOperation.message);
+          }
+          uploadedCount += 1;
+          if (digest) knownHashes.add(digest);
+        } catch (err) {
+          failures.push({
+            id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+            filename: file.name,
+            message: err instanceof Error ? err.message : "上传失败"
+          });
+          setOperation({
+            placement: "upload",
+            title: "上传并预解析资料",
+            stage: `${file.name} 上传失败，继续处理其余文件。`,
+            percent: ((index + 1) / files.length) * 100,
+            status: "running"
+          });
         }
       }
+      setUploadFailures(failures);
       await loadCase();
-      await loadLatestAnalysis({ quiet404: true });
-      setOperation({ placement: "upload", title: "上传并预解析资料", stage: "全部资料已上传；可继续开始综合分析。", percent: 100, status: "success" });
-      setNotice("资料已上传。上传阶段未调用大模型，也未生成任何指标或草案。");
+      if (uploadedCount > 0) await loadLatestAnalysis({ quiet404: true });
+      const completedCount = uploadedCount + skippedCount;
+      const summary = `成功上传 ${uploadedCount} 份${skippedCount ? `，跳过重复文件 ${skippedCount} 份` : ""}${failures.length ? `，失败 ${failures.length} 份` : ""}。`;
+      setOperation({
+        placement: "upload",
+        title: "上传并预解析资料",
+        stage: failures.length ? summary : `${summary}可继续开始综合分析。`,
+        detail: failures.length ? "失败文件及具体原因已在下方列出，其他文件不受影响。" : null,
+        percent: 100,
+        status: failures.length ? (completedCount > 0 ? "partial" : "error") : "success"
+      });
+      setNotice(completedCount > 0 ? "已完成本批文件处理。上传阶段未调用大模型，也未生成任何指标或草案。" : null);
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "上传失败";
@@ -492,7 +566,6 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setOperation({ placement: "upload", title: "上传并预解析资料", stage: message, percent: 100, status: "error" });
     } finally {
       setBusy(false);
-      event.target.value = "";
     }
   }
 
@@ -757,10 +830,19 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
               disabled={busy}
             />
             <span>上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图</span>
-            <small>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、PDF 200 页。</small>
+            <small>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、单个 PDF 最多 50 页。</small>
           </label>
           {operation?.placement === "upload" ? <OperationProgress operation={operation} /> : null}
           <div className="stack">
+            {uploadFailures.map((failure) => (
+              <div className="file-row file-row--error" key={failure.id}>
+                <div>
+                  <strong>{failure.filename}</strong>
+                  <p className="error-text">上传失败：{failure.message}</p>
+                </div>
+                <span className="indicator-status indicator-status--attention">上传失败</span>
+              </div>
+            ))}
             {caseRecord.files.map((file) => (
               <div className="file-row" key={file.id}>
                 <div>
@@ -776,7 +858,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 </button>
               </div>
             ))}
-            {!caseRecord.files.length ? <p className="muted">尚未上传资料。</p> : null}
+            {!caseRecord.files.length && !uploadFailures.length ? <p className="muted">尚未上传资料。</p> : null}
           </div>
 
           <div className="section-divider">

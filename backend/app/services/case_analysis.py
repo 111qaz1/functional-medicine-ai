@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import random
 import re
 import threading
@@ -374,7 +375,10 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "只要存在患者已填写内容，questionnaire 就不得为 null。"
                 "必须将明确填写的主诉、症状、已知疾病、家族史、当前药物、过敏、妊娠、饮食、睡眠、"
                 "运动和排便信息映射到 questionnaire；手术史和意外史可写入 additional_notes。"
-                "营养补充剂写入 supplement_use，不得误写为处方药。"
+                "只有资料明确说明患者当前正在服用的营养补充剂，才可写入supplement_use；"
+                "supplement_use必须是单个字符串或null，不得返回列表或对象。"
+                "历史报告中的推荐方案、计划使用产品和营养素表格不得当成患者当前补充剂，"
+                "也不得误写为处方药。"
                 "普通医疗问卷不是 MSQ，msq_system_scores 应为空对象，缺少 MSQ 评分不得丢弃其他信息。"
                 "普通问卷的患者自述不得写入 abnormal_findings，也不得升级为医生诊断。"
                 "勾选题只提取明确勾选的答案；未勾选选项不是阴性证据，只有明确勾选“否”才可记录否定事实。"
@@ -659,7 +663,7 @@ class OpenAICompatibleCaseAnalysisProvider:
     def _compact_document_for_synthesis(
         cls, result: DocumentAnalysisResult
     ) -> dict[str, Any]:
-        unresolved_msq = any(
+        unresolved_questionnaire = any(
             warning.startswith("__MSQ_UNRESOLVED__:")
             for warning in result.warnings
         )
@@ -672,8 +676,8 @@ class OpenAICompatibleCaseAnalysisProvider:
             "report_type": result.report_type,
             "medical_content": result.medical_content,
             "summary": (
-                "该文件包含存在未确认字段的 MSQ 问卷；未确认字段不得用于病例事实。"
-                if unresolved_msq and result.questionnaire
+                "该文件包含存在未确认字段的问卷；未确认字段不得用于病例事实。"
+                if unresolved_questionnaire and result.questionnaire
                 else result.summary
             ),
             "abnormal_findings": [
@@ -725,6 +729,16 @@ class OpenAICompatibleCaseAnalysisProvider:
             "sleep_quality": None,
             "diet_pattern": None,
             "exercise_frequency": None,
+            "work_pattern": None,
+            "sitting_hours_per_day": None,
+            "dining_out_frequency": None,
+            "seafood_intake_ratio": None,
+            "red_meat_intake_ratio": None,
+            "supplement_use": None,
+            "chemical_sensitivity": None,
+            "bowel_habits": None,
+            "stress_level": None,
+            "additional_notes": None,
         }
         unresolved_fields = {
             warning.removeprefix("__MSQ_UNRESOLVED__:")
@@ -1576,7 +1590,15 @@ class OpenAICompatibleCaseAnalysisProvider:
             raw, "questionnaire", "questionnaire_data", "msq", "msq_summary"
         )
         if isinstance(questionnaire, dict):
-            normalized["questionnaire"] = cls._normalize_kimi_questionnaire(questionnaire)
+            (
+                normalized["questionnaire"],
+                questionnaire_warnings,
+            ) = cls._normalize_kimi_questionnaire(questionnaire)
+            normalized["warnings"] = list(
+                dict.fromkeys(
+                    [*normalized["warnings"], *questionnaire_warnings]
+                )
+            )
 
         food = cls._pick_payload_value(
             raw,
@@ -1684,7 +1706,10 @@ class OpenAICompatibleCaseAnalysisProvider:
         return {key: value for key, value in normalized.items() if value is not None}
 
     @classmethod
-    def _normalize_kimi_questionnaire(cls, item: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_kimi_questionnaire(
+        cls,
+        item: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
         aliases: dict[str, tuple[str, ...]] = {
             "chief_concerns": ("chief_concerns", "main_concerns", "main_complaints"),
             "symptoms": ("symptoms", "selected_symptoms"),
@@ -1697,8 +1722,44 @@ class OpenAICompatibleCaseAnalysisProvider:
             "goals": ("goals", "health_goals"),
             "msq_system_scores": ("msq_system_scores", "system_scores"),
         }
+        text_scalar_fields = (
+            "diet_pattern",
+            "work_pattern",
+            "dining_out_frequency",
+            "seafood_intake_ratio",
+            "red_meat_intake_ratio",
+            "supplement_use",
+            "chemical_sensitivity",
+            "sleep_quality",
+            "exercise_frequency",
+            "bowel_habits",
+            "additional_notes",
+        )
+        field_labels = {
+            "age": "患者年龄",
+            "sex": "患者性别",
+            "pregnant_or_lactating": "妊娠或哺乳状态",
+            "diet_pattern": "饮食模式",
+            "work_pattern": "工作模式",
+            "sitting_hours_per_day": "每日久坐时长",
+            "dining_out_frequency": "外出就餐频率",
+            "seafood_intake_ratio": "鱼类及海鲜摄入",
+            "red_meat_intake_ratio": "红肉摄入",
+            "supplement_use": "补充剂使用情况",
+            "chemical_sensitivity": "化学物质敏感情况",
+            "sleep_hours": "睡眠时长",
+            "sleep_quality": "睡眠质量",
+            "exercise_frequency": "运动习惯",
+            "bowel_habits": "排便情况",
+            "stress_level": "压力水平",
+            "additional_notes": "附加说明",
+        }
         allowed_fields = set(Questionnaire.model_fields)
         normalized = {key: value for key, value in item.items() if key in allowed_fields}
+        # Model-generated timestamps are not clinical questionnaire facts. Let
+        # the domain model assign its own stable default instead of attempting
+        # to repair arbitrary provider metadata.
+        normalized.pop("completed_at", None)
         for target, source_names in aliases.items():
             value = cls._pick_payload_value(item, *source_names)
             if value is not None:
@@ -1716,7 +1777,369 @@ class OpenAICompatibleCaseAnalysisProvider:
         ):
             if field_name in normalized:
                 normalized[field_name] = cls._normalize_text_list(normalized[field_name])
-        return normalized
+
+        unresolved: list[tuple[str, str]] = []
+        for field_name in text_scalar_fields:
+            if field_name not in normalized:
+                continue
+            value, branch, failure_reason = cls._normalize_questionnaire_text_scalar(
+                normalized[field_name]
+            )
+            if failure_reason is None:
+                normalized[field_name] = value
+                cls._log_questionnaire_field_normalization(
+                    field_name,
+                    item.get(field_name),
+                    branch,
+                )
+            else:
+                normalized.pop(field_name, None)
+                unresolved.append((field_name, failure_reason))
+
+        scalar_normalizers: tuple[
+            tuple[str, Callable[[Any], tuple[Any, str, str | None]]], ...
+        ] = (
+            ("sex", cls._normalize_questionnaire_sex),
+            ("stress_level", cls._normalize_questionnaire_stress_level),
+            (
+                "pregnant_or_lactating",
+                cls._normalize_questionnaire_optional_bool,
+            ),
+            (
+                "age",
+                lambda value: cls._normalize_questionnaire_number(
+                    value,
+                    minimum=0,
+                    maximum=120,
+                    integer_only=True,
+                ),
+            ),
+            (
+                "sleep_hours",
+                lambda value: cls._normalize_questionnaire_number(
+                    value,
+                    minimum=0,
+                    maximum=24,
+                    integer_only=False,
+                ),
+            ),
+            (
+                "sitting_hours_per_day",
+                lambda value: cls._normalize_questionnaire_number(
+                    value,
+                    minimum=0,
+                    maximum=24,
+                    integer_only=False,
+                ),
+            ),
+        )
+        for field_name, normalizer in scalar_normalizers:
+            if field_name not in normalized:
+                continue
+            value, branch, failure_reason = normalizer(normalized[field_name])
+            if failure_reason is None:
+                normalized[field_name] = value
+                cls._log_questionnaire_field_normalization(
+                    field_name,
+                    item.get(field_name),
+                    branch,
+                )
+            else:
+                normalized.pop(field_name, None)
+                unresolved.append((field_name, failure_reason))
+
+        form_version = normalized.get("form_version")
+        if form_version is not None:
+            if isinstance(form_version, str) and form_version.strip():
+                normalized["form_version"] = form_version.strip()
+            else:
+                normalized.pop("form_version", None)
+
+        warnings: list[str] = []
+        for field_name, failure_reason in unresolved:
+            logger.warning(
+                "Questionnaire scalar isolated field=%s input_type=%s reason=%s",
+                field_name,
+                type(item.get(field_name)).__name__,
+                failure_reason,
+            )
+            warnings.extend(
+                (
+                    f"__MSQ_UNRESOLVED__:{field_name}",
+                    f"问卷的{field_labels.get(field_name, field_name)}格式异常，请人工核对。",
+                )
+            )
+        return normalized, list(dict.fromkeys(warnings))
+
+    @staticmethod
+    def _log_questionnaire_field_normalization(
+        field_name: str,
+        original_value: Any,
+        branch: str,
+    ) -> None:
+        logger.info(
+            "Questionnaire scalar normalized field=%s input_type=%s branch=%s",
+            field_name,
+            type(original_value).__name__,
+            branch,
+        )
+
+    @classmethod
+    def _normalize_questionnaire_text_scalar(
+        cls,
+        value: Any,
+    ) -> tuple[str | None, str, str | None]:
+        if value is None:
+            return None, "null", None
+        if isinstance(value, str):
+            return value.strip() or None, "string", None
+
+        values = value if isinstance(value, list) else [value]
+        branch = "list" if isinstance(value, list) else "object"
+        if not values:
+            return None, branch, None
+        normalized_items: list[str] = []
+        for entry in values:
+            if isinstance(entry, str):
+                text = entry.strip()
+                if text:
+                    normalized_items.append(text)
+                continue
+            if not isinstance(entry, dict):
+                return None, branch, "unsupported_item_type"
+            text = cls._questionnaire_text_from_object(entry)
+            if text is None:
+                return None, branch, "unsupported_object_shape"
+            normalized_items.append(text)
+        return (
+            "；".join(dict.fromkeys(normalized_items)) or None,
+            branch,
+            None,
+        )
+
+    @staticmethod
+    def _questionnaire_text_from_object(value: dict[str, Any]) -> str | None:
+        key_order = (
+            "name",
+            "product",
+            "supplement",
+            "text",
+            "value",
+            "description",
+            "summary",
+            "dose",
+            "dosage",
+            "frequency",
+            "timing",
+        )
+        parts: list[str] = []
+        for key in key_order:
+            raw = value.get(key)
+            if raw is None or isinstance(raw, (dict, list, bool)):
+                continue
+            if not isinstance(raw, (str, int, float)):
+                continue
+            text = str(raw).strip()
+            if text:
+                parts.append(text)
+        return "，".join(dict.fromkeys(parts)) or None
+
+    @classmethod
+    def _normalize_questionnaire_sex(
+        cls,
+        value: Any,
+    ) -> tuple[str, str, str | None]:
+        aliases = {
+            "female": "female",
+            "f": "female",
+            "女": "female",
+            "女性": "female",
+            "woman": "female",
+            "male": "male",
+            "m": "male",
+            "男": "male",
+            "男性": "male",
+            "man": "male",
+            "other": "other",
+            "其他": "other",
+            "其它": "other",
+            "unknown": "unknown",
+            "未知": "unknown",
+            "不详": "unknown",
+            "未填写": "unknown",
+        }
+        return cls._normalize_questionnaire_enum(
+            value,
+            aliases=aliases,
+            default="unknown",
+            object_keys=("sex", "gender", "value", "text"),
+        )
+
+    @classmethod
+    def _normalize_questionnaire_stress_level(
+        cls,
+        value: Any,
+    ) -> tuple[str | None, str, str | None]:
+        aliases = {
+            "low": "low",
+            "低": "low",
+            "较低": "low",
+            "medium": "medium",
+            "moderate": "medium",
+            "中": "medium",
+            "中等": "medium",
+            "high": "high",
+            "高": "high",
+            "较高": "high",
+        }
+        return cls._normalize_questionnaire_enum(
+            value,
+            aliases=aliases,
+            default=None,
+            object_keys=("stress_level", "level", "value", "text"),
+        )
+
+    @classmethod
+    def _normalize_questionnaire_optional_bool(
+        cls,
+        value: Any,
+    ) -> tuple[bool | None, str, str | None]:
+        if value is None:
+            return None, "null", None
+        raw_values, branch, failure_reason = cls._questionnaire_scalar_candidates(
+            value,
+            object_keys=(
+                "pregnant_or_lactating",
+                "pregnant",
+                "lactating",
+                "value",
+                "text",
+            ),
+        )
+        if failure_reason is not None:
+            return None, branch, failure_reason
+        normalized: list[bool] = []
+        for raw in raw_values:
+            if isinstance(raw, bool):
+                normalized.append(raw)
+                continue
+            if not isinstance(raw, str):
+                return None, branch, "invalid_boolean_type"
+            compact = re.sub(r"\s+", "", raw).casefold()
+            if compact in {"true", "yes", "1", "是", "有", "已怀孕", "哺乳期"}:
+                normalized.append(True)
+            elif compact in {"false", "no", "0", "否", "无", "未怀孕", "未哺乳"}:
+                normalized.append(False)
+            else:
+                return None, branch, "unsupported_boolean_value"
+        distinct = list(dict.fromkeys(normalized))
+        if len(distinct) != 1:
+            return None, branch, "conflicting_boolean_values"
+        return distinct[0], branch, None
+
+    @classmethod
+    def _normalize_questionnaire_enum(
+        cls,
+        value: Any,
+        *,
+        aliases: dict[str, Any],
+        default: Any,
+        object_keys: tuple[str, ...],
+    ) -> tuple[Any, str, str | None]:
+        if value is None:
+            return default, "null", None
+        raw_values, branch, failure_reason = cls._questionnaire_scalar_candidates(
+            value,
+            object_keys=object_keys,
+        )
+        if failure_reason is not None:
+            return default, branch, failure_reason
+        normalized: list[Any] = []
+        for raw in raw_values:
+            if not isinstance(raw, str):
+                return default, branch, "invalid_enum_type"
+            compact = re.sub(r"\s+", "", raw).casefold()
+            mapped = aliases.get(compact)
+            if mapped is None:
+                return default, branch, "unsupported_enum_value"
+            normalized.append(mapped)
+        distinct = list(dict.fromkeys(normalized))
+        if len(distinct) != 1:
+            return default, branch, "conflicting_enum_values"
+        return distinct[0], branch, None
+
+    @classmethod
+    def _normalize_questionnaire_number(
+        cls,
+        value: Any,
+        *,
+        minimum: float,
+        maximum: float,
+        integer_only: bool,
+    ) -> tuple[int | float | None, str, str | None]:
+        if value is None:
+            return None, "null", None
+        raw_values, branch, failure_reason = cls._questionnaire_scalar_candidates(
+            value,
+            object_keys=(),
+            allow_objects=False,
+        )
+        if failure_reason is not None:
+            return None, branch, failure_reason
+        normalized: list[int | float] = []
+        for raw in raw_values:
+            if isinstance(raw, bool):
+                return None, branch, "boolean_number"
+            if isinstance(raw, (int, float)):
+                number = float(raw)
+            elif isinstance(raw, str) and re.fullmatch(
+                r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)",
+                raw.strip(),
+            ):
+                number = float(raw.strip())
+            else:
+                return None, branch, "invalid_number_type"
+            if not math.isfinite(number):
+                return None, branch, "non_finite_number"
+            if integer_only and not number.is_integer():
+                return None, branch, "non_integer_number"
+            if number < minimum or number > maximum:
+                return None, branch, "number_out_of_range"
+            normalized.append(int(number) if integer_only else number)
+        distinct = list(dict.fromkeys(normalized))
+        if len(distinct) != 1:
+            return None, branch, "conflicting_number_values"
+        return distinct[0], branch, None
+
+    @staticmethod
+    def _questionnaire_scalar_candidates(
+        value: Any,
+        *,
+        object_keys: tuple[str, ...],
+        allow_objects: bool = True,
+    ) -> tuple[list[Any], str, str | None]:
+        if isinstance(value, list):
+            branch = "list"
+            entries = value
+        elif isinstance(value, dict):
+            branch = "object"
+            entries = [value]
+        else:
+            return [value], "scalar", None
+        if not entries:
+            return [], branch, "empty_candidates"
+        result: list[Any] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                result.append(entry)
+                continue
+            if not allow_objects:
+                return [], branch, "unsupported_object_shape"
+            matched = [entry[key] for key in object_keys if key in entry]
+            if len(matched) != 1 or isinstance(matched[0], (dict, list)):
+                return [], branch, "unsupported_object_shape"
+            result.append(matched[0])
+        return result, branch, None
 
     @classmethod
     def _normalize_kimi_food_sensitivity(cls, item: dict[str, Any]) -> dict[str, Any]:
@@ -1938,6 +2361,9 @@ class OpenAICompatibleCaseAnalysisProvider:
             "普通医疗登记表、病史表或医疗调查问卷统一使用 report_type=medical_questionnaire；"
             "存在明确填写内容时必须返回 questionnaire。普通问卷允许 msq_system_scores 为空，"
             "患者自述只进入 questionnaire，不得伪装成检验异常或医生诊断。"
+            "只有资料明确说明患者当前正在服用的营养补充剂，才可写入supplement_use；"
+            "supplement_use必须返回单个字符串或null，不得返回列表或对象。"
+            "历史推荐方案、计划使用产品和营养素表格不得写入supplement_use。"
             "只有真正的 MSQ 症状评分问卷使用 report_type=msq 和 msq_system_scores。"
             "每条异常应从给定白名单中提出标准代码候选；检验指标写入 marker_code_candidate，"
             "非数值临床发现写入 finding_code_candidate，无法确定时必须返回 null，禁止创造代码。"
@@ -2571,6 +2997,16 @@ class CaseAnalysisService:
         "sleep_quality": "睡眠质量",
         "diet_pattern": "饮食模式",
         "exercise_frequency": "运动习惯",
+        "work_pattern": "工作模式",
+        "sitting_hours_per_day": "每日久坐时长",
+        "dining_out_frequency": "外出就餐频率",
+        "seafood_intake_ratio": "鱼类及海鲜摄入",
+        "red_meat_intake_ratio": "红肉摄入",
+        "supplement_use": "补充剂使用情况",
+        "chemical_sensitivity": "化学物质敏感情况",
+        "bowel_habits": "排便情况",
+        "stress_level": "压力水平",
+        "additional_notes": "附加说明",
     }
     MSQ_FIELD_WARNING_KEYWORDS = {
         "age": ("患者年龄",),
@@ -3986,19 +4422,19 @@ class CaseAnalysisService:
                     (self.MSQ_FIELD_LABELS.get(field_name, field_name),),
                 )
                 if any(
-                    warning.startswith("MSQ")
-                    and any(keyword in warning for keyword in keywords)
+                    any(keyword in warning for keyword in keywords)
+                    and ("格式异常" in warning or "尚未确认" in warning)
                     for warning in analysis.warnings
                 ):
                     continue
-                label = self.MSQ_FIELD_LABELS.get(field_name, field_name)
+                label = self.QUESTIONNAIRE_FIELD_LABELS.get(field_name, field_name)
                 if field_name == "msq_system_scores":
                     analysis.warnings.append(
                         "MSQ 系统评分格式异常，请人工核对。"
                     )
                 else:
                     analysis.warnings.append(
-                        f"MSQ 的{label}尚未确认，相关自动规则已执行安全降级。"
+                        f"问卷的{label}尚未确认，相关自动规则已执行安全降级。"
                     )
         case.flags = [
             flag for flag in case.flags if not flag.startswith("msq_unresolved:")
@@ -4035,6 +4471,16 @@ class CaseAnalysisService:
             "sleep_quality": None,
             "diet_pattern": None,
             "exercise_frequency": None,
+            "work_pattern": None,
+            "sitting_hours_per_day": None,
+            "dining_out_frequency": None,
+            "seafood_intake_ratio": None,
+            "red_meat_intake_ratio": None,
+            "supplement_use": None,
+            "chemical_sensitivity": None,
+            "bowel_habits": None,
+            "stress_level": None,
+            "additional_notes": None,
         }
         updates = {
             field_name: safe_defaults[field_name]

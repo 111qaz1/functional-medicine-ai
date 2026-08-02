@@ -365,6 +365,121 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(second.status, AnalysisStatus.ready_for_review)
         self.assertEqual(self.provider.document_calls, 1)
 
+    def test_in_range_hair_elements_are_excluded_before_abnormal_review(self) -> None:
+        case = self._create_case()
+        uploaded = UploadedFile(
+            id="file-hair-elements",
+            case_id=case.id,
+            filename="合成营养与毒性元素分析（头发）.pdf",
+            content_type="application/pdf",
+            size_bytes=100,
+            content_sha256="hair-elements-digest",
+            intake_status=FileIntakeStatus.uploaded,
+            page_count=1,
+            is_scanned=True,
+        )
+        self.case_service.add_uploaded_file(case.id, uploaded)
+        case = self.repository.get_case(case.id)
+        findings = [
+            AbnormalFinding(
+                id="finding-calcium",
+                name="钙（头发）",
+                raw_value="444",
+                unit="μg/g",
+                reference_range="200-1950",
+                abnormal_flag="low",
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                source_page=1,
+                source_text="Ca 钙 200-1950 结果 444",
+            ),
+            AbnormalFinding(
+                id="finding-magnesium",
+                name="镁（头发）",
+                raw_value="21.1",
+                unit="μg/g",
+                reference_range="19-260",
+                abnormal_flag="low",
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                source_page=1,
+                source_text="Mg 镁 19-260 结果 21.1",
+            ),
+            AbnormalFinding(
+                id="finding-nickel",
+                name="镍（头发）",
+                raw_value="0.735",
+                unit="μg/g",
+                reference_range="<0.470",
+                abnormal_flag="high",
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                source_page=1,
+                source_text="Ni 镍 <0.470 结果 0.735",
+            ),
+        ]
+        analysis = CaseAnalysis(
+            id="analysis-hair-elements",
+            case_id=case.id,
+            snapshot_hash=self.service.current_snapshot_hash(case),
+            file_ids=[uploaded.id],
+            model_version="synthetic-model",
+            document_results=[
+                DocumentAnalysisResult(
+                    file_id=uploaded.id,
+                    file_name=uploaded.filename,
+                    report_type="hair_elements",
+                    abnormal_findings=findings,
+                )
+            ],
+        )
+
+        self.service._assemble_and_validate(case, analysis)
+
+        self.assertEqual(
+            [finding.name for finding in analysis.abnormal_findings],
+            ["镍（头发）"],
+        )
+        self.assertEqual(
+            analysis.abnormal_findings[0].evidence_status,
+            EvidenceStatus.visual_model_only,
+        )
+        self.assertIn(
+            "已排除 2 项与报告参考范围不一致的模型异常结果。",
+            analysis.warnings,
+        )
+
+    def test_result_page_components_validate_without_contiguous_source_quote(self) -> None:
+        case = self._create_case()
+        case_with_file = self._add_text_file(
+            case.id,
+            filename="合成头发元素报告.pdf",
+            text=(
+                "Nickel / Ni / 镍\n"
+                "检测结果 0.735\n"
+                "单位 μg/g\n"
+                "报告参考范围 < 0.470"
+            ),
+        )
+        uploaded = case_with_file.files[-1]
+        finding = AbnormalFinding(
+            id="finding-nickel-source",
+            name="镍（头发）",
+            raw_value="0.735",
+            unit="μg/g",
+            reference_range="< 0.470",
+            abnormal_flag="high",
+            source_file_id=uploaded.id,
+            source_file_name=uploaded.filename,
+            source_page=1,
+            source_text="Ni 镍 <0.470 结果 0.735",
+        )
+
+        validated = self.service._validate_finding(uploaded, finding)
+
+        self.assertEqual(validated.evidence_status, EvidenceStatus.verified_text)
+        self.assertEqual(validated.evidence_notes, [])
+
     def test_documents_run_with_at_most_two_workers_and_preserve_upload_order(self) -> None:
         class ConcurrentProvider(FakeAnalysisProvider):
             def __init__(self) -> None:

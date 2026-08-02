@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import zipfile
 from io import BytesIO
 from pathlib import Path
 
@@ -23,6 +24,34 @@ def _pdf_with_pages(page_count: int) -> bytes:
         writer.add_blank_page(width=612, height=792)
     buffer = BytesIO()
     writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _pptx_with_text_slides() -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "ppt/slides/slide1.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                   xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+              <p:cSld><p:spTree><p:sp><p:txBody>
+                <a:p><a:r><a:t>第一页检查结果</a:t></a:r></a:p>
+              </p:txBody></p:sp></p:spTree></p:cSld>
+            </p:sld>
+            """,
+        )
+        archive.writestr(
+            "ppt/slides/slide2.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                   xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+              <p:cSld><p:spTree><p:sp><p:txBody>
+                <a:p><a:r><a:t>第二页病例总结</a:t></a:r></a:p>
+              </p:txBody></p:sp></p:spTree></p:cSld>
+            </p:sld>
+            """,
+        )
     return buffer.getvalue()
 
 
@@ -75,6 +104,30 @@ class PdfUploadLimitTests(unittest.TestCase):
             rejected.validation_error,
             "PDF 共 51 页，超过单个 PDF 最多 50 页的限制，请拆分为每份不超过 50 页后重新上传。",
         )
+
+    def test_document_intake_extracts_pptx_text_by_slide(self) -> None:
+        service = DocumentIntakeService(
+            max_upload_bytes=50 * 1024 * 1024,
+            max_pdf_pages=50,
+        )
+
+        result = service.preflight(
+            filename="case-deck.pptx",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation"
+            ),
+            content=_pptx_with_text_slides(),
+        )
+
+        self.assertIsNone(result.validation_error)
+        self.assertEqual(result.page_count, 2)
+        self.assertEqual(
+            [(page.page, page.text) for page in result.page_texts],
+            [(1, "第一页检查结果"), (2, "第二页病例总结")],
+        )
+        self.assertIn("第一页检查结果", result.extracted_text)
+        self.assertIn("第二页病例总结", result.extracted_text)
 
     def test_internal_upload_rejects_without_file_record_or_storage_write(self) -> None:
         created = self.client.post(

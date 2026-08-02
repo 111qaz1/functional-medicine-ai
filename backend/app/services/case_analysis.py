@@ -2967,7 +2967,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     DOCUMENT_ANALYSIS_CACHE_VERSION = (
-        "document-analysis-v6-food-sensitivity-structured-results"
+        "document-analysis-v7-pptx-text-intake"
     )
     FOOD_SENSITIVITY_EXTRACTION_FAILURE = (
         "慢性食物敏感结果提取失败，请重新分析或人工补录。"
@@ -4081,6 +4081,14 @@ class CaseAnalysisService:
         uploaded_file,
         result: DocumentAnalysisResult,
     ) -> bool:
+        no_model_readable_content = (
+            not result.medical_content
+            and not result.abnormal_findings
+            and any(
+                "没有可供模型读取的文本或图像内容" in warning
+                for warning in result.warnings
+            )
+        )
         empty_questionnaire = CaseAnalysisService._is_uncacheable_empty_questionnaire_result(
             uploaded_file,
             result,
@@ -4093,7 +4101,11 @@ class CaseAnalysisService:
             )
             and not has_chronic_food_sensitivity_content(result.food_sensitivity)
         )
-        return empty_questionnaire or empty_food_sensitivity
+        return (
+            no_model_readable_content
+            or empty_questionnaire
+            or empty_food_sensitivity
+        )
 
     @staticmethod
     def _is_uncacheable_empty_questionnaire_result(

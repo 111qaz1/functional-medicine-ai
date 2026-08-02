@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -80,6 +81,13 @@ class DocumentIntakeService:
                 result = self._pdf_result(digest, content)
             elif suffix == ".docx":
                 result = self._docx_result(digest, content)
+            elif suffix == ".pptx":
+                result = self._pptx_result(
+                    digest,
+                    filename=filename,
+                    content_type=content_type,
+                    content=content,
+                )
             elif suffix in self._IMAGE_SUFFIXES:
                 result = DocumentIntakeResult(
                     content_sha256=digest,
@@ -94,13 +102,6 @@ class DocumentIntakeService:
                     intake_status=FileIntakeStatus.uploaded,
                     page_count=1,
                     page_texts=[PageText(page=1, text=text)],
-                )
-            else:
-                # PPTX remains accepted for compatibility and is analyzed later.
-                result = DocumentIntakeResult(
-                    content_sha256=digest,
-                    intake_status=FileIntakeStatus.uploaded,
-                    page_count=0,
                 )
         except Exception:
             return self._invalid(digest, "文件损坏或无法读取。")
@@ -227,6 +228,52 @@ class DocumentIntakeService:
             intake_status=FileIntakeStatus.uploaded,
             page_count=1,
             page_texts=[PageText(page=1, text=text)],
+            is_scanned=False,
+        )
+
+    @staticmethod
+    def _pptx_result(
+        digest: str,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> DocumentIntakeResult:
+        # Reuse the existing deterministic PPTX extractor. It reads DrawingML
+        # text only and therefore does not invoke the configured vision model.
+        from app.providers.local import DocumentOCRProvider
+
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            slide_paths = [
+                name
+                for name in archive.namelist()
+                if name.startswith("ppt/slides/slide")
+                and name.endswith(".xml")
+                and "/_rels/" not in name
+            ]
+        page_count = len(slide_paths)
+
+        extraction = DocumentOCRProvider().extract(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+        )
+        page_lines: dict[int, list[str]] = {}
+        for span in extraction.spans:
+            if span.page < 1 or span.page > page_count:
+                continue
+            snippet = (span.snippet or "").strip()
+            if snippet:
+                page_lines.setdefault(span.page, []).append(snippet)
+
+        return DocumentIntakeResult(
+            content_sha256=digest,
+            intake_status=FileIntakeStatus.uploaded,
+            page_count=page_count,
+            page_texts=[
+                PageText(page=page, text="\n".join(page_lines.get(page, [])))
+                for page in range(1, page_count + 1)
+            ],
             is_scanned=False,
         )
 

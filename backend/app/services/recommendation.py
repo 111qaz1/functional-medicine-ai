@@ -10,6 +10,7 @@ from app.domain.models import (
     ProductRule,
     RecommendationDraft,
 )
+from app.core.llm_request_control import llm_request_context
 from app.providers.base import DraftCompositionInput, LLMProvider, VectorStoreProvider
 from app.repositories.in_memory import InMemoryRepository
 from app.services.case_service import CaseService
@@ -58,17 +59,21 @@ class RecommendationService:
         knowledge_hits = self.vector_store.search(retrieval_query, top_k=8)
         ranked_products, product_evidence_map, contraindications = self._rank_products(context, knowledge_hits)
 
-        composition = self.llm_provider.compose(
-            DraftCompositionInput(
-                customer_name=case.customer_name,
-                candidate_products=ranked_products,
-                knowledge_hits=knowledge_hits,
-                product_evidence_map=product_evidence_map,
-                red_flags=red_flags,
-                contraindications=contraindications,
-                missing_info=missing_info,
+        with llm_request_context(
+            case_id=case.id,
+            analysis_id=case.latest_analysis_id,
+        ):
+            composition = self.llm_provider.compose(
+                DraftCompositionInput(
+                    customer_name=case.customer_name,
+                    candidate_products=ranked_products,
+                    knowledge_hits=knowledge_hits,
+                    product_evidence_map=product_evidence_map,
+                    red_flags=red_flags,
+                    contraindications=contraindications,
+                    missing_info=missing_info,
+                )
             )
-        )
 
         recommended_items: list[DraftRecommendationItem] = []
         if not composition.abstain_reason:

@@ -41,13 +41,18 @@ class AppSettings:
     llm_retry_attempts: int = 2
     llm_retry_base_delay_seconds: float = 1.0
     llm_retry_max_delay_seconds: float = 10.0
+    llm_max_concurrency: int = 90
+    llm_rpm_soft_limit: int = 475
+    llm_tpm_soft_limit: int = 2_850_000
+    llm_rate_limit_window_seconds: float = 60.0
+    llm_default_completion_reservation: int = 32_768
     llm_draft_composer_enabled: bool = False
     rag_enabled: bool = True
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
     max_upload_bytes: int = 50 * 1024 * 1024
-    max_pdf_pages: int = 200
-    analysis_worker_count: int = 1
+    max_pdf_pages: int = 50
+    analysis_worker_count: int = 20
     case_document_worker_count: int = 2
 
 
@@ -113,6 +118,26 @@ def load_settings() -> AppSettings:
         llm_retry_base_delay_seconds,
         float(os.getenv("FM_LLM_RETRY_MAX_DELAY_SECONDS", "10")),
     )
+    llm_max_concurrency = max(
+        1,
+        min(int(os.getenv("FM_LLM_MAX_CONCURRENCY", "90")), 100),
+    )
+    llm_rpm_soft_limit = max(
+        1,
+        min(int(os.getenv("FM_LLM_RPM_SOFT_LIMIT", "475")), 500),
+    )
+    llm_tpm_soft_limit = max(
+        1,
+        min(int(os.getenv("FM_LLM_TPM_SOFT_LIMIT", "2850000")), 3_000_000),
+    )
+    llm_rate_limit_window_seconds = max(
+        1.0,
+        float(os.getenv("FM_LLM_RATE_LIMIT_WINDOW_SECONDS", "60")),
+    )
+    llm_default_completion_reservation = max(
+        1,
+        int(os.getenv("FM_LLM_DEFAULT_COMPLETION_RESERVATION", "32768")),
+    )
     llm_draft_composer_enabled = os.getenv("FM_LLM_DRAFT_COMPOSER_ENABLED", "0").strip().lower() in {
         "1",
         "true",
@@ -128,11 +153,14 @@ def load_settings() -> AppSettings:
         "off",
     }
     max_upload_bytes = int(float(os.getenv("FM_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
-    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "200"))
-    analysis_worker_count = max(1, int(os.getenv("FM_ANALYSIS_WORKERS", "1")))
+    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "50"))
+    analysis_worker_count = max(
+        1,
+        min(int(os.getenv("FM_ANALYSIS_WORKERS", "20")), 20),
+    )
     case_document_worker_count = max(
         1,
-        min(int(os.getenv("FM_CASE_DOCUMENT_WORKERS", "2")), 4),
+        min(int(os.getenv("FM_CASE_DOCUMENT_WORKERS", "2")), 2),
     )
 
     return AppSettings(
@@ -154,6 +182,11 @@ def load_settings() -> AppSettings:
         llm_retry_attempts=llm_retry_attempts,
         llm_retry_base_delay_seconds=llm_retry_base_delay_seconds,
         llm_retry_max_delay_seconds=llm_retry_max_delay_seconds,
+        llm_max_concurrency=llm_max_concurrency,
+        llm_rpm_soft_limit=llm_rpm_soft_limit,
+        llm_tpm_soft_limit=llm_tpm_soft_limit,
+        llm_rate_limit_window_seconds=llm_rate_limit_window_seconds,
+        llm_default_completion_reservation=llm_default_completion_reservation,
         llm_draft_composer_enabled=llm_draft_composer_enabled,
         rag_enabled=rag_enabled,
         rag_index_dir=rag_index_dir,

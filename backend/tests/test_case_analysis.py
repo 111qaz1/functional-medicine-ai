@@ -551,7 +551,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self._wait(self.service.create_analysis(second_case.id, third_party_processing_confirmed=True).id)
         self.assertEqual(self.provider.document_calls, 2)
 
-    def test_cache_is_reused_within_doctor_scope_and_remaps_file_evidence(self) -> None:
+    def test_cache_is_isolated_between_cases_for_same_doctor(self) -> None:
         first_case = self._create_case(owner="doctor-shared")
         second_case = self._create_case(owner="doctor-shared")
         self._add_text_file(first_case.id, file_id="file-first")
@@ -560,7 +560,7 @@ class CaseAnalysisTests(unittest.TestCase):
         second = self._wait(
             self.service.create_analysis(second_case.id, third_party_processing_confirmed=True).id
         )
-        self.assertEqual(self.provider.document_calls, 1)
+        self.assertEqual(self.provider.document_calls, 2)
         self.assertTrue(all(item.source_file_id == "file-second" for item in second.abnormal_findings))
         self.assertEqual(second.food_sensitivity.source_file_id, "file-second")
 
@@ -804,7 +804,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(
             list(draft.report_sections),
-            ["核心结论与健康画像", "异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "总医嘱说明"],
+            ["核心结论与健康画像", "异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "总医嘱说明", "方案总结"],
         )
         review_service = ReviewService(
             self.repository,
@@ -814,13 +814,14 @@ class CaseAnalysisTests(unittest.TestCase):
         )
         rendered = review_service._render_report(draft, self.case_service.get_case(case.id))
         headings = [
-            "## 核心结论与健康画像",
-            "## 异常指标汇总",
-            "## 慢性食物敏感检测结果",
-            "## 功能医学系统失衡分析",
-            "## 生活方式干预",
-            "## 首月营养素干预方案",
-            "## 总医嘱说明",
+            "## 一、核心结论与健康画像",
+            "## 二、异常指标汇总",
+            "## 三、慢性食物敏感检测结果",
+            "## 四、功能医学系统失衡分析",
+            "## 五、生活方式干预",
+            "## 六、首月营养素干预方案",
+            "### 总医嘱说明",
+            "## 七、方案总结",
         ]
         positions = [rendered.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
@@ -853,7 +854,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertNotEqual(repeated_draft.id, draft.id)
         self.assertGreater(repeated.revision, saved.revision)
 
-    def test_final_report_groups_abnormal_findings_by_upload_order_without_pages(self) -> None:
+    def test_final_report_groups_abnormal_findings_by_system_without_sources(self) -> None:
         case = self._create_case()
         self._add_text_file(
             case.id,
@@ -882,8 +883,8 @@ class CaseAnalysisTests(unittest.TestCase):
         completed = self._wait_final(queued.id)
         draft = self.repository.get_draft(completed.draft_id)
         grouped = draft.report_sections["异常指标汇总"]
-        headings = [item for item in grouped if item.startswith("### ")]
-        self.assertEqual(headings, ["### 1. first-report.txt", "### 2. second-report.txt"])
+        self.assertTrue(any("合成指标A" in item for item in grouped))
+        self.assertFalse(any("first-report.txt" in item or "second-report.txt" in item for item in grouped))
         self.assertFalse(any("页" in item or "page" in item.lower() for item in grouped))
         self.assertEqual(list(draft.report_sections)[0], "核心结论与健康画像")
 
@@ -1265,6 +1266,8 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(request["timeout"], 600)
         self.assertEqual(request["json"]["thinking"], {"type": "enabled"})
         self.assertNotIn("temperature", request["json"])
+        self.assertNotIn("max_tokens", request["json"])
+        self.assertNotIn("max_completion_tokens", request["json"])
         self.assertEqual(
             request["json"]["messages"][1]["content"][1],
             {

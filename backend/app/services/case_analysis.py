@@ -11,17 +11,24 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.llm_compat import chat_generation_options, is_kimi_k2_model
+from app.core.llm_rate_limiter import (
+    LLMRateLimitLease,
+    LLMRateLimiter,
+    estimate_llm_prompt_tokens,
+)
 from app.domain.models import (
     AbnormalFinding,
     AnalysisStatus,
@@ -33,6 +40,7 @@ from app.domain.models import (
     EvidenceStatus,
     FileIntakeStatus,
     FinalGenerationStatus,
+    LLMRequestUsage,
     Questionnaire,
     SemanticEvidenceReference,
     SemanticEvidenceStrength,
@@ -53,8 +61,10 @@ from app.services.body_systems import (
 )
 from app.services.finding_standardization import STANDARDIZATION_VERSION
 from app.services.evidence_policy import classify_finding_evidence, system_evidence_score
+from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.report_content import (
     ReportAbnormalItem,
+    build_core_health_portrait,
     build_plan_summary,
     group_abnormal_items,
 )
@@ -63,6 +73,10 @@ from app.services.questionnaire_import import QuestionnaireParseResult
 
 logger = logging.getLogger(__name__)
 
+_LLM_USAGE_CONTEXT: ContextVar[dict[str, str | None] | None] = ContextVar(
+    "case_analysis_llm_usage_context",
+    default=None,
+)
 _SYSTEM_DISPLAY_ORDER = {
     system_id: index for index, (system_id, _) in enumerate(BODY_SYSTEMS)
 }
@@ -89,7 +103,17 @@ def is_chronic_food_sensitivity_filename(filename: str) -> bool:
     stem = unicodedata.normalize("NFKC", Path(filename or "").stem).lower()
     normalized = re.sub(r"[\s_\-（）()\[\]【】]+", "", stem)
     normalized = re.sub(r"(?:副本|复件|copy)?\d+$", "", normalized)
-    return "慢性食物敏感" in normalized
+    return (
+        any(term in normalized for term in ("慢性食物敏感", "慢性食物过敏", "食物不耐受"))
+        or ("igg" in normalized and any(term in normalized for term in ("食物", "过敏", "敏感")))
+    )
+
+
+def is_chronic_food_sensitivity_result(result: Any) -> bool:
+    return is_chronic_food_sensitivity_report(
+        filename=str(getattr(result, "file_name", "") or ""),
+        report_type=str(getattr(result, "report_type", "") or ""),
+    )
 
 
 _FOOD_SENSITIVITY_REPORT_TYPES = {
@@ -239,6 +263,8 @@ class OpenAICompatibleCaseAnalysisProvider:
         retry_attempts: int = 2,
         retry_base_delay_seconds: float = 1.0,
         retry_max_delay_seconds: float = 10.0,
+        usage_recorder: Callable[[LLMRequestUsage], Any] | None = None,
+        rate_limiter: LLMRateLimiter | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -262,6 +288,17 @@ class OpenAICompatibleCaseAnalysisProvider:
             self.retry_base_delay_seconds,
             float(retry_max_delay_seconds),
         )
+        self.usage_recorder = usage_recorder
+        self.rate_limiter = rate_limiter
+
+    @contextmanager
+    def usage_context(self, **values: str | None) -> Iterator[None]:
+        current = _LLM_USAGE_CONTEXT.get() or {}
+        token = _LLM_USAGE_CONTEXT.set({**current, **values})
+        try:
+            yield
+        finally:
+            _LLM_USAGE_CONTEXT.reset(token)
 
     def analyze_document(self, uploaded_file) -> DocumentAnalysisResult:
         result = self._analyze_document_once(
@@ -834,8 +871,27 @@ class OpenAICompatibleCaseAnalysisProvider:
         request_timeout = (
             self.thinking_timeout_seconds if thinking_type == "enabled" else self.timeout_seconds
         )
+        request_group_id = f"llm_group_{uuid.uuid4().hex}"
+        response_payload: dict[str, Any] | None = None
+        context = _LLM_USAGE_CONTEXT.get() or {}
+        operation = self._usage_operation(
+            schema_name,
+            context.get("operation"),
+        )
+        estimated_prompt_tokens = estimate_llm_prompt_tokens(
+            instructions=instructions,
+            content=content,
+            schema=schema,
+        )
         try:
-            for attempt in range(self.retry_attempts + 1):
+            for attempt_index in range(self.retry_attempts + 1):
+                lease = self._acquire_rate_limit(
+                    operation=operation,
+                    estimated_prompt_tokens=estimated_prompt_tokens,
+                )
+                started_at = utc_now()
+                response: httpx.Response | None = None
+                attempt_response_payload: dict[str, Any] | None = None
                 try:
                     if self.api_style == "chat":
                         response = client.post(
@@ -878,11 +934,43 @@ class OpenAICompatibleCaseAnalysisProvider:
                             timeout=request_timeout,
                         )
                     response.raise_for_status()
+                    raw_response_payload = response.json()
+                    if not isinstance(raw_response_payload, dict):
+                        raise ValueError("Model response must be a JSON object")
+                    response_payload = raw_response_payload
+                    attempt_response_payload = response_payload
+                    self._record_request_usage(
+                        request_group_id=request_group_id,
+                        attempt=attempt_index + 1,
+                        schema_name=schema_name,
+                        started_at=started_at,
+                        response=response,
+                        response_payload=response_payload,
+                        status="completed",
+                        lease=lease,
+                    )
                     break
                 except Exception as exc:
-                    if attempt >= self.retry_attempts or not self._is_retryable_request_error(exc):
+                    attempt_response_payload = self._safe_response_json(response)
+                    self._record_request_usage(
+                        request_group_id=request_group_id,
+                        attempt=attempt_index + 1,
+                        schema_name=schema_name,
+                        started_at=started_at,
+                        response=response,
+                        response_payload=attempt_response_payload,
+                        status="failed",
+                        error_code=exc.__class__.__name__,
+                        lease=lease,
+                    )
+                    self._complete_rate_limit(
+                        lease,
+                        attempt_response_payload,
+                    )
+                    lease = None
+                    if attempt_index >= self.retry_attempts or not self._is_retryable_request_error(exc):
                         raise
-                    retry_number = attempt + 1
+                    retry_number = attempt_index + 1
                     delay = self._retry_delay_seconds(exc, retry_number)
                     status_code = (
                         exc.response.status_code
@@ -901,7 +989,14 @@ class OpenAICompatibleCaseAnalysisProvider:
                     )
                     if delay > 0:
                         time.sleep(delay)
-            text = self._extract_response_text(response.json())
+                finally:
+                    self._complete_rate_limit(
+                        lease,
+                        attempt_response_payload,
+                    )
+            if response_payload is None:
+                raise ValueError("Model response did not contain a JSON object")
+            text = self._extract_response_text(response_payload)
             try:
                 parsed = self._parse_json_object(text)
             except json.JSONDecodeError:
@@ -928,6 +1023,168 @@ class OpenAICompatibleCaseAnalysisProvider:
         finally:
             if close_client:
                 client.close()
+
+    @staticmethod
+    def _safe_response_json(response: httpx.Response | None) -> dict[str, Any] | None:
+        if response is None:
+            return None
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _record_request_usage(
+        self,
+        *,
+        request_group_id: str,
+        attempt: int,
+        schema_name: str,
+        started_at: datetime,
+        response: httpx.Response | None,
+        response_payload: dict[str, Any] | None,
+        status: str,
+        error_code: str | None = None,
+        lease: LLMRateLimitLease | None = None,
+    ) -> None:
+        if self.usage_recorder is None:
+            return
+        completed_at = utc_now()
+        token_usage = self._extract_token_usage(response_payload)
+        recorded_status = status
+        if status == "completed" and token_usage["total_tokens"] is None:
+            recorded_status = "completed_without_usage"
+        context = _LLM_USAGE_CONTEXT.get() or {}
+        usage = LLMRequestUsage(
+            id=f"llm_usage_{uuid.uuid4().hex}",
+            request_group_id=request_group_id,
+            attempt=attempt,
+            case_id=context.get("case_id"),
+            analysis_id=context.get("analysis_id"),
+            file_id=context.get("file_id"),
+            draft_id=context.get("draft_id"),
+            operation=self._usage_operation(schema_name, context.get("operation")),
+            schema_name=schema_name,
+            model=self.model,
+            api_style="chat" if self.api_style == "chat" else "responses",
+            status=recorded_status,
+            http_status=response.status_code if response is not None else None,
+            error_code=error_code,
+            prompt_tokens=token_usage["prompt_tokens"],
+            completion_tokens=token_usage["completion_tokens"],
+            cached_tokens=token_usage["cached_tokens"],
+            total_tokens=token_usage["total_tokens"],
+            reserved_tokens=lease.reserved_tokens if lease else 0,
+            queue_duration_ms=lease.queue_duration_ms if lease else 0,
+            request_duration_ms=max(
+                0,
+                int((completed_at - started_at).total_seconds() * 1000),
+            ),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        try:
+            self.usage_recorder(usage)
+        except Exception:
+            # Accounting must never turn an otherwise valid clinical response
+            # into a failed analysis. The exception remains visible in logs.
+            logger.exception("Failed to persist LLM request usage id=%s", usage.id)
+
+    def _acquire_rate_limit(
+        self,
+        *,
+        operation: str,
+        estimated_prompt_tokens: int,
+    ) -> LLMRateLimitLease | None:
+        if self.rate_limiter is None:
+            return None
+        return self.rate_limiter.acquire(
+            operation=operation,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+        )
+
+    def _complete_rate_limit(
+        self,
+        lease: LLMRateLimitLease | None,
+        response_payload: dict[str, Any] | None,
+    ) -> None:
+        if self.rate_limiter is None or lease is None:
+            return
+        token_usage = self._extract_token_usage(response_payload)
+        self.rate_limiter.complete(
+            lease,
+            prompt_tokens=token_usage["prompt_tokens"],
+            completion_tokens=token_usage["completion_tokens"],
+            total_tokens=token_usage["total_tokens"],
+        )
+
+    def rate_limit_snapshot(self) -> dict[str, int] | None:
+        if self.rate_limiter is None:
+            return None
+        return self.rate_limiter.snapshot()
+
+    @classmethod
+    def _extract_token_usage(
+        cls,
+        response_payload: dict[str, Any] | None,
+    ) -> dict[str, int | None]:
+        usage = response_payload.get("usage") if response_payload else None
+        if not isinstance(usage, dict):
+            return {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "cached_tokens": None,
+                "total_tokens": None,
+            }
+        prompt_tokens = cls._nonnegative_int(
+            usage.get("prompt_tokens", usage.get("input_tokens"))
+        )
+        completion_tokens = cls._nonnegative_int(
+            usage.get("completion_tokens", usage.get("output_tokens"))
+        )
+        total_tokens = cls._nonnegative_int(usage.get("total_tokens"))
+        details = usage.get("prompt_tokens_details")
+        if not isinstance(details, dict):
+            details = usage.get("input_tokens_details")
+        cached_tokens = cls._nonnegative_int(usage.get("cached_tokens"))
+        if cached_tokens is None and isinstance(details, dict):
+            cached_tokens = cls._nonnegative_int(details.get("cached_tokens"))
+        if cached_tokens is None:
+            cached_tokens = 0
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @staticmethod
+    def _nonnegative_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int) and value >= 0:
+            return value
+        return None
+
+    @staticmethod
+    def _usage_operation(schema_name: str, operation: str | None) -> str:
+        if operation:
+            base = operation
+        elif schema_name.startswith("document_analysis"):
+            base = "document_analysis"
+        elif schema_name.startswith("case_synthesis"):
+            base = "case_synthesis"
+        else:
+            base = schema_name
+        if schema_name.endswith("_json_repair"):
+            return f"{base}_json_repair"
+        if "format_repair" in schema_name or schema_name == "document_analysis_retry":
+            return f"{base}_format_repair"
+        if "questionnaire_retry" in schema_name:
+            return f"{base}_questionnaire_retry"
+        if "zh_retry" in schema_name:
+            return f"{base}_language_retry"
+        return base
 
     @staticmethod
     def _is_retryable_request_error(exc: Exception) -> bool:
@@ -2416,8 +2673,11 @@ class CaseAnalysisService:
         self.standardization_service = standardization_service
         self.semantic_support_service = semantic_support_service
         self.questionnaire_import_service = questionnaire_import_service
-        self.document_worker_count = max(1, min(int(document_worker_count), 4))
-        self.executor = ThreadPoolExecutor(max_workers=max(1, worker_count), thread_name_prefix="case-analysis")
+        self.document_worker_count = max(1, min(int(document_worker_count), 2))
+        self.executor = ThreadPoolExecutor(
+            max_workers=max(1, min(int(worker_count), 20)),
+            thread_name_prefix="case-analysis",
+        )
         self._submit_lock = threading.Lock()
         self._review_lock = threading.Lock()
 
@@ -2505,7 +2765,12 @@ class CaseAnalysisService:
                     thread_name_prefix="case-document",
                 )
                 future_to_file = {
-                    document_executor.submit(self._analyze_with_cache, case, uploaded_file): uploaded_file
+                    document_executor.submit(
+                        self._analyze_with_cache,
+                        case,
+                        uploaded_file,
+                        analysis.id,
+                    ): uploaded_file
                     for uploaded_file in pending_files
                 }
                 try:
@@ -2546,22 +2811,24 @@ class CaseAnalysisService:
             synthesis_results = [
                 result
                 for result in results
-                if not is_chronic_food_sensitivity_report(
-                    filename=result.file_name,
-                    report_type=result.report_type,
-                )
+                if not is_chronic_food_sensitivity_result(result)
             ]
-            synthesis = self.provider.synthesize_case(
-                clinical_summary_text=case.clinical_summary_text,
-                document_results=synthesis_results,
-                questionnaire=questionnaire_context.questionnaire,
-                support_goal_definitions=(
-                    self.semantic_support_service.prompt_catalog()
-                    if self.semantic_support_service
-                    else None
-                ),
-                thinking_type="disabled",
-            )
+            with self._provider_usage_context(
+                case_id=case.id,
+                analysis_id=analysis.id,
+                operation="initial_case_synthesis",
+            ):
+                synthesis = self.provider.synthesize_case(
+                    clinical_summary_text=case.clinical_summary_text,
+                    document_results=synthesis_results,
+                    questionnaire=questionnaire_context.questionnaire,
+                    support_goal_definitions=(
+                        self.semantic_support_service.prompt_catalog()
+                        if self.semantic_support_service
+                        else None
+                    ),
+                    thinking_type="disabled",
+                )
             analysis.case_summary = synthesis.case_summary
             analysis.system_findings = synthesis.system_findings
             analysis.final_structured_system_findings = list(
@@ -2651,20 +2918,20 @@ class CaseAnalysisService:
             self._save(analysis)
             raise ValueError("病例资料已变化，请重新进行综合分析。")
         files_by_id = {item.id: item for item in case.files if item.id in analysis.file_ids}
-        food_report_file_ids = {
+        food_sensitivity_file_ids = {
             result.file_id
             for result in analysis.document_results
-            if is_chronic_food_sensitivity_report(
-                filename=result.file_name,
-                report_type=result.report_type,
-            )
+            if is_chronic_food_sensitivity_result(result)
         }
         normalized_findings: list[AbnormalFinding] = []
         for finding in abnormal_findings:
             source_file = files_by_id.get(finding.source_file_id)
             if not source_file:
                 raise ValueError("异常发现引用了分析快照以外的文件。")
-            if source_file.id in food_report_file_ids:
+            if (
+                source_file.id in food_sensitivity_file_ids
+                or is_chronic_food_sensitivity_filename(source_file.filename)
+            ):
                 continue
             finding = finding.model_copy(
                 update={"source_page": logical_source_page(source_file, finding.source_page)}
@@ -2763,18 +3030,23 @@ class CaseAnalysisService:
                     FinalGenerationStatus.final_synthesizing,
                     20,
                 )
-                synthesis = self.provider.synthesize_case(
-                    clinical_summary_text=case.clinical_summary_text,
-                    document_results=self._reviewed_document_results(analysis),
-                    reviewed_findings=analysis.reviewed_abnormal_findings,
-                    questionnaire=analysis.questionnaire,
-                    support_goal_definitions=(
-                        self.semantic_support_service.prompt_catalog()
-                        if self.semantic_support_service
-                        else None
-                    ),
-                    thinking_type="disabled",
-                )
+                with self._provider_usage_context(
+                    case_id=case.id,
+                    analysis_id=analysis.id,
+                    operation="final_case_synthesis",
+                ):
+                    synthesis = self.provider.synthesize_case(
+                        clinical_summary_text=case.clinical_summary_text,
+                        document_results=self._reviewed_document_results(analysis),
+                        reviewed_findings=analysis.reviewed_abnormal_findings,
+                        questionnaire=analysis.questionnaire,
+                        support_goal_definitions=(
+                            self.semantic_support_service.prompt_catalog()
+                            if self.semantic_support_service
+                            else None
+                        ),
+                        thinking_type="disabled",
+                    )
                 analysis.reviewed_case_summary = synthesis.case_summary
                 analysis.reviewed_system_findings = synthesis.system_findings
                 analysis.final_structured_system_findings = list(
@@ -2903,10 +3175,7 @@ class CaseAnalysisService:
                 }
             )
             for result in analysis.document_results
-            if not is_chronic_food_sensitivity_report(
-                filename=result.file_name,
-                report_type=result.report_type,
-            )
+            if not is_chronic_food_sensitivity_result(result)
         ]
 
     @staticmethod
@@ -3267,13 +3536,19 @@ class CaseAnalysisService:
             }
         )
 
-    def _analyze_with_cache(self, case, uploaded_file) -> DocumentAnalysisResult:
+    def _analyze_with_cache(
+        self,
+        case,
+        uploaded_file,
+        analysis_id: str | None = None,
+    ) -> DocumentAnalysisResult:
         owner_scope = f"case:{case.id}"
         parser_version = getattr(
             self.questionnaire_import_service,
             "PARSER_VERSION",
             "msq-parser-unconfigured",
         )
+        uses_msq_cache_version = self._uses_msq_cache_version(uploaded_file)
         raw_key = "|".join(
             [
                 str(case.id),
@@ -3283,7 +3558,7 @@ class CaseAnalysisService:
                 self.DOCUMENT_ANALYSIS_CACHE_VERSION,
                 *(
                     [parser_version]
-                    if self._uses_msq_cache_version(uploaded_file)
+                    if uses_msq_cache_version
                     else []
                 ),
             ]
@@ -3336,7 +3611,12 @@ class CaseAnalysisService:
             )
         result = self._structured_questionnaire_result(uploaded_file)
         if result is None:
-            result = self.provider.analyze_document(uploaded_file)
+            with self._provider_usage_context(
+                case_id=case.id,
+                analysis_id=analysis_id,
+                file_id=uploaded_file.id,
+            ):
+                result = self.provider.analyze_document(uploaded_file)
         result = self._normalize_food_sensitivity_result(uploaded_file, result)
         if self._is_uncacheable_document_result(
             uploaded_file,
@@ -3353,6 +3633,12 @@ class CaseAnalysisService:
                 result.model_dump(mode="json"),
             )
         return result
+
+    def _provider_usage_context(self, **values: str | None):
+        context_factory = getattr(self.provider, "usage_context", None)
+        if not callable(context_factory):
+            return nullcontext()
+        return context_factory(**values)
 
     @staticmethod
     def _is_uncacheable_document_result(
@@ -3494,10 +3780,7 @@ class CaseAnalysisService:
         ] = []
 
         for result in document_results:
-            if is_chronic_food_sensitivity_report(
-                filename=result.file_name,
-                report_type=result.report_type,
-            ):
+            if is_chronic_food_sensitivity_result(result):
                 continue
             if not result.questionnaire:
                 continue
@@ -3614,10 +3897,7 @@ class CaseAnalysisService:
                 for warning in result.warnings
                 if not warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
             )
-            is_food_sensitivity_file = is_chronic_food_sensitivity_report(
-                filename=result.file_name,
-                report_type=result.report_type,
-            )
+            is_food_sensitivity_file = is_chronic_food_sensitivity_result(result)
             if is_food_sensitivity_file:
                 food_result = result.food_sensitivity
                 if has_chronic_food_sensitivity_content(food_result) and food_result:
@@ -4327,10 +4607,6 @@ class CaseAnalysisService:
     def _apply_final_report_sections(self, draft, analysis: CaseAnalysis, case) -> None:
         existing = draft.report_sections
         reviewed_findings = analysis.reviewed_abnormal_findings or analysis.abnormal_findings
-        health_portrait = self._public_health_portrait(
-            existing.get("核心结论与健康画像", []),
-            analysis.reviewed_case_summary or analysis.case_summary,
-        )
         structured_findings = self._enrich_structured_system_findings(
             list(getattr(draft, "structured_system_findings", []) or []),
             reviewed_findings,
@@ -4339,6 +4615,12 @@ class CaseAnalysisService:
                 or analysis.reviewed_system_findings
                 or analysis.system_findings
             ),
+        )
+        health_portrait = build_core_health_portrait(
+            structured_findings,
+            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
+            abnormal_findings=reviewed_findings,
+            risk_notices=getattr(draft, "red_flags", []) or [],
         )
         grouped_findings = self._group_abnormal_findings(
             case,
@@ -4423,7 +4705,14 @@ class CaseAnalysisService:
             sections["慢性食物敏感检测结果"] = food_lines
         if system_lines:
             sections["功能医学系统失衡分析"] = system_lines
-        sections["生活方式干预"] = existing.get("生活方式干预处方", draft.lifestyle_actions)
+        lifestyle_values = existing.get("生活方式干预处方", draft.lifestyle_actions)
+        if isinstance(lifestyle_values, str):
+            lifestyle_values = [lifestyle_values]
+        sections["生活方式干预"] = [
+            cleaned
+            for item in lifestyle_values
+            if (cleaned := remove_generic_lifestyle_confirmation(str(item)))
+        ]
         sections["首月营养素干预方案"] = existing.get("首月营养素干预方案", [])
         if total_advice:
             sections["总医嘱说明"] = total_advice
@@ -4434,16 +4723,6 @@ class CaseAnalysisService:
         draft.structured_system_findings = structured_findings
         if analysis.reviewed_case_summary:
             draft.case_summary = [analysis.reviewed_case_summary]
-
-    @staticmethod
-    def _public_health_portrait(items, case_summary: str | None) -> list[str]:
-        values = [str(item).strip() for item in (items if isinstance(items, list) else [items]) if str(item).strip()]
-        forbidden = ("RAG", "模型", "API", "规则命中", "产品编号", "接入边界", "内部")
-        public_values = [item for item in values if not any(term in item for term in forbidden)]
-        if public_values:
-            return public_values
-        summary = re.sub(r"\s+", " ", case_summary or "").strip()
-        return [f"一句话健康画像：{summary}"] if summary else []
 
     @staticmethod
     def _group_abnormal_findings(

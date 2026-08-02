@@ -39,10 +39,14 @@ from app.services.body_systems import (
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.evidence_policy import classify_confirmed_evidence
 from app.services.dosage_rules import select_dosage_option
-from app.services.lifestyle_planning import LifestylePlanningService
+from app.services.lifestyle_planning import (
+    LifestylePlanningService,
+    remove_generic_lifestyle_confirmation,
+)
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
 from app.services.report_content import (
     ReportAbnormalItem,
+    build_core_health_portrait,
     build_plan_summary,
     group_abnormal_items,
 )
@@ -800,7 +804,7 @@ class RecommendationService:
             support_profiles=support_profiles,
             key_lab_highlights=key_lab_highlights,
             report_guidance=report_guidance,
-            red_flags=[],
+            red_flags=risk_notices,
             contraindications=contraindications,
         )
         # Product selection is deliberately local. The second-stage synthesis model
@@ -1034,6 +1038,16 @@ class RecommendationService:
             composition.section_overrides,
         )
         report_sections = self._apply_rag_enhancements(report_sections, rag_hits, rag_audit)
+        # Deterministic sections must not be expanded by composition overrides or RAG.
+        report_sections["核心结论与健康画像"] = health_portrait
+        lifestyle_values = report_sections.get("生活方式干预处方", [])
+        if isinstance(lifestyle_values, str):
+            lifestyle_values = [lifestyle_values]
+        report_sections["生活方式干预处方"] = [
+            cleaned
+            for item in lifestyle_values
+            if (cleaned := remove_generic_lifestyle_confirmation(str(item)))
+        ]
         rag_audit_items = report_sections.pop("RAG内部审查", [])
 
         draft = RecommendationDraft(
@@ -1058,7 +1072,7 @@ class RecommendationService:
             confidence=composition.confidence,
             abstain_reason=effective_abstain_reason,
             manual_review_required=True,
-            red_flags=[],
+            red_flags=risk_notices,
             structured_system_findings=structured_system_findings,
             uncovered_system_ids=uncovered_system_ids,
             report_sections=report_sections,
@@ -3956,25 +3970,13 @@ class RecommendationService:
             anti_aging_findings=anti_aging_findings,
         )
         if not priority_findings:
-            return ["一句话健康画像：当前资料已完成异常梳理，但尚缺少足够证据形成明确的身体系统优先主线。"]
-
-        top_names = "、".join(SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0]) for item in priority_findings[:3])
-        portrait = [
-            f"一句话健康画像：当前问题主要集中在{top_names}，应按证据强弱分层处理，并结合症状与复查趋势持续校正。"
-        ]
-        for index, finding in enumerate(priority_findings[:5], start=1):
-            evidence = "、".join(self._system_evidence_names(context, finding.system_id)[:3]) or "已确认异常和症状"
-            portrait.append(
-                f"核心问题主线{index}：{SYSTEM_NAMES.get(finding.system_id, finding.title.split('（', 1)[0])}，主要依据为{evidence}，当前分级为{finding.priority_level}。"
-            )
-        first_month_names = "、".join(
-            SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0])
-            for item in priority_findings[:2]
+            return build_core_health_portrait([])
+        return build_core_health_portrait(
+            priority_findings,
+            confirmed_findings=context.clinical_findings,
+            objective_evidence_items=key_lab_highlights,
+            risk_notices=risk_notices,
         )
-        portrait.append(
-            f"首月优先方向：先围绕{first_month_names}调整饮食、睡眠和活动节律，再按医生确认后的异常匹配营养支持并观察耐受。"
-        )
-        return portrait
 
     def _build_system_analysis(
         self,

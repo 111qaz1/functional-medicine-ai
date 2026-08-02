@@ -39,10 +39,14 @@ from app.services.body_systems import (
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.evidence_policy import classify_confirmed_evidence
 from app.services.dosage_rules import select_dosage_option
-from app.services.lifestyle_planning import LifestylePlanningService
+from app.services.lifestyle_planning import (
+    LifestylePlanningService,
+    remove_generic_lifestyle_confirmation,
+)
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
 from app.services.report_content import (
     ReportAbnormalItem,
+    build_core_health_portrait,
     build_plan_summary,
     group_abnormal_items,
 )
@@ -141,6 +145,7 @@ class ClientRecallRule:
 
 
 class RecommendationService:
+    MAX_RECOMMENDED_PRODUCTS = 12
     _ADMIN_METADATA_PREFIXES = (
         "医嘱名",
         "姓名",
@@ -600,6 +605,151 @@ class RecommendationService:
         return None
 
     @staticmethod
+    def _system_rank(
+        system_id: str | None,
+        priority_findings: list[SystemPriority] | None,
+    ) -> int | None:
+        if not system_id:
+            return None
+        for index, finding in enumerate(priority_findings or [], start=1):
+            if finding.system_id == system_id:
+                return index
+        return None
+
+    def _covered_system_ids_for_product(
+        self,
+        product: ProductRule,
+        evidence_ids: list[str],
+        *,
+        support_need_by_id: dict[str, object],
+        priority_findings: list[SystemPriority],
+    ) -> list[str]:
+        capability = self.product_capabilities.get(product.sku_id, {})
+        supported_goals = {
+            str(goal)
+            for goal in [
+                *(capability.get("primary_goal_codes") or []),
+                *(capability.get("secondary_goal_codes") or []),
+            ]
+        }
+        final_system_ids = {finding.system_id for finding in priority_findings}
+        covered: set[str] = set()
+        for evidence_id in evidence_ids:
+            if not evidence_id.startswith("finding:"):
+                continue
+            finding_id = evidence_id.split(":", 1)[1]
+            need = support_need_by_id.get(finding_id)
+            if not need:
+                continue
+            goal_code = str(getattr(need, "support_goal_code", "") or "")
+            system_id = str(getattr(need, "system_id", "") or "")
+            if goal_code in supported_goals and system_id in final_system_ids:
+                covered.add(system_id)
+        if not covered:
+            fallback = self._primary_system_for_product(product, priority_findings)
+            if fallback in final_system_ids:
+                covered.add(fallback)
+        priority = {finding.system_id: index for index, finding in enumerate(priority_findings)}
+        return sorted(covered, key=lambda system_id: priority.get(system_id, 999))
+
+    @staticmethod
+    def _covered_system_sort_rank(
+        covered_system_ids: list[str],
+        priority_findings: list[SystemPriority],
+    ) -> int:
+        priority = {finding.system_id: index for index, finding in enumerate(priority_findings)}
+        return min(
+            (priority.get(system_id, 999) for system_id in covered_system_ids),
+            default=999,
+        )
+
+    def classify_uncovered_system_reasons(
+        self,
+        uncovered_system_ids: list[str],
+        *,
+        support_needs: list[object] | None = None,
+        safety_decisions: list[SafetyDecision] | None = None,
+    ) -> dict[str, str]:
+        """Explain why a locally validated system has no selected product."""
+
+        eligible_by_system: dict[str, list[object]] = {}
+        for need in support_needs or []:
+            status = getattr(
+                getattr(need, "eligibility_status", None),
+                "value",
+                getattr(need, "eligibility_status", None),
+            )
+            system_id = str(getattr(need, "system_id", "") or "")
+            goal_code = str(getattr(need, "support_goal_code", "") or "")
+            if status == "eligible" and system_id and goal_code:
+                eligible_by_system.setdefault(system_id, []).append(need)
+
+        excluded_skus = {
+            str(decision.sku_id)
+            for decision in (safety_decisions or [])
+            if decision.sku_id
+            and decision.action == SafetyRuleAction.exclude
+        }
+
+        def mapped_primary_skus(goal_code: str, direction: str | None = None) -> set[str]:
+            mapped: set[str] = set()
+            for sku_id, capability in self.product_capabilities.items():
+                if not capability.get("enabled", True) or goal_code not in set(
+                    capability.get("primary_goal_codes") or []
+                ):
+                    continue
+                requirements = capability.get("goal_direction_requirements") or {}
+                allowed = {
+                    str(value)
+                    for value in requirements.get(goal_code, [])
+                    if str(value)
+                }
+                if allowed and direction and direction not in allowed:
+                    continue
+                mapped.add(str(sku_id))
+            return mapped
+
+        reasons: dict[str, str] = {}
+        for system_id in uncovered_system_ids:
+            needs = eligible_by_system.get(system_id, [])
+            mapped_for_evidence: set[str] = set()
+            for need in needs:
+                direction = getattr(
+                    getattr(need, "support_direction", None),
+                    "value",
+                    getattr(need, "support_direction", None),
+                )
+                mapped_for_evidence.update(
+                    mapped_primary_skus(
+                        str(getattr(need, "support_goal_code", "") or ""),
+                        str(direction) if direction else None,
+                    )
+                )
+            if mapped_for_evidence:
+                reasons[system_id] = (
+                    "safety_excluded"
+                    if mapped_for_evidence.issubset(excluded_skus)
+                    else "evidence_not_eligible"
+                )
+                continue
+
+            catalog_goals = {
+                goal_code
+                for goal_code, goal in self.support_goals.items()
+                if str(goal.get("system_id") or "") == system_id
+            }
+            has_approved_mapping = any(
+                mapped_primary_skus(goal_code)
+                for goal_code in catalog_goals
+            )
+            reasons[system_id] = (
+                "evidence_not_eligible"
+                if has_approved_mapping
+                else "no_approved_mapping"
+            )
+        return reasons
+
+    @staticmethod
     def _matched_finding_signals(evidence_ids: list[str]) -> list[str]:
         return [
             evidence_id.split(":", 1)[1]
@@ -740,7 +890,7 @@ class RecommendationService:
             support_profiles=support_profiles,
             key_lab_highlights=key_lab_highlights,
             report_guidance=report_guidance,
-            red_flags=[],
+            red_flags=risk_notices,
             contraindications=contraindications,
         )
         # Product selection is deliberately local. The second-stage synthesis model
@@ -764,11 +914,28 @@ class RecommendationService:
             ranked_products,
             composition.selected_sku_ids,
             product_evidence_map,
+            support_need_by_id=support_need_by_id,
+            priority_findings=priority_findings,
         )
+        product_covered_systems = {
+            product.sku_id: self._covered_system_ids_for_product(
+                product,
+                product_evidence_map.get(product.sku_id, []),
+                support_need_by_id=support_need_by_id,
+                priority_findings=priority_findings,
+            )
+            for product in selected_products
+        }
         ranked_position = {product.sku_id: index for index, product in enumerate(ranked_products)}
         selected_products.sort(
             key=lambda product: (
-                self._system_priority_rank_for_product(product, priority_findings) or 999,
+                self._product_output_evidence_rank(
+                    product_evidence_map.get(product.sku_id, [])
+                ),
+                self._covered_system_sort_rank(
+                    product_covered_systems.get(product.sku_id, []),
+                    priority_findings,
+                ),
                 ranked_position.get(product.sku_id, len(ranked_position)),
             )
         )
@@ -776,6 +943,12 @@ class RecommendationService:
         if not effective_abstain_reason:
             for product in selected_products:
                 all_evidence_ids = product_evidence_map.get(product.sku_id, [])
+                covered_system_ids = product_covered_systems.get(product.sku_id, [])
+                primary_system_id = (
+                    covered_system_ids[0]
+                    if covered_system_ids
+                    else self._primary_system_for_product(product, priority_findings)
+                )
                 evidence_ids = all_evidence_ids[:4]
                 matched_signal_ids = self._matched_finding_signals(all_evidence_ids)
                 matched_support_need_ids = [
@@ -838,13 +1011,38 @@ class RecommendationService:
                                 ]
                             )
                         )[:6],
-                        primary_system_id=self._primary_system_for_product(product, priority_findings),
+                        primary_system_id=primary_system_id,
+                        covered_system_ids=covered_system_ids,
                         matched_finding_ids=list(dict.fromkeys(matched_finding_ids)),
                         matched_support_need_ids=matched_support_need_ids,
-                        system_priority_rank=self._system_priority_rank_for_product(product, priority_findings),
+                        system_priority_rank=self._system_rank(primary_system_id, priority_findings),
                         safety_decisions=safety_decisions_by_sku.get(product.sku_id, []),
                     )
                 )
+
+        covered_system_ids = {
+            system_id
+            for item in recommended_items
+            for system_id in (
+                item.covered_system_ids
+                or ([item.primary_system_id] if item.primary_system_id else [])
+            )
+        }
+        uncovered_system_ids = [
+            finding.system_id
+            for finding in priority_findings
+            if finding.system_id not in covered_system_ids
+        ]
+        all_safety_decisions = [
+            decision
+            for sku_id in sorted(safety_decisions_by_sku)
+            for decision in safety_decisions_by_sku[sku_id]
+        ]
+        uncovered_system_reasons = self.classify_uncovered_system_reasons(
+            uncovered_system_ids,
+            support_needs=list(latest_analysis.support_needs) if latest_analysis else [],
+            safety_decisions=all_safety_decisions,
+        )
 
         selected_evidence = [
             evidence_id
@@ -936,6 +1134,16 @@ class RecommendationService:
             composition.section_overrides,
         )
         report_sections = self._apply_rag_enhancements(report_sections, rag_hits, rag_audit)
+        # Deterministic sections must not be expanded by composition overrides or RAG.
+        report_sections["核心结论与健康画像"] = health_portrait
+        lifestyle_values = report_sections.get("生活方式干预处方", [])
+        if isinstance(lifestyle_values, str):
+            lifestyle_values = [lifestyle_values]
+        report_sections["生活方式干预处方"] = [
+            cleaned
+            for item in lifestyle_values
+            if (cleaned := remove_generic_lifestyle_confirmation(str(item)))
+        ]
         rag_audit_items = report_sections.pop("RAG内部审查", [])
 
         draft = RecommendationDraft(
@@ -951,17 +1159,15 @@ class RecommendationService:
             evidence_ids=evidence_ids,
             evidence_details=evidence_details,
             contraindications=list(dict.fromkeys(contraindications)),
-            safety_decisions=[
-                decision
-                for sku_id in sorted(safety_decisions_by_sku)
-                for decision in safety_decisions_by_sku[sku_id]
-            ],
+            safety_decisions=all_safety_decisions,
             missing_info=missing_info,
             confidence=composition.confidence,
             abstain_reason=effective_abstain_reason,
             manual_review_required=True,
-            red_flags=[],
+            red_flags=risk_notices,
             structured_system_findings=structured_system_findings,
+            uncovered_system_ids=uncovered_system_ids,
+            uncovered_system_reasons=uncovered_system_reasons,
             report_sections=report_sections,
             internal_audit={
                 "rag": list(rag_audit_items) if isinstance(rag_audit_items, list) else [],
@@ -972,6 +1178,14 @@ class RecommendationService:
                     product_evidence_map=product_evidence_map,
                     safety_decisions_by_sku=safety_decisions_by_sku,
                 ),
+                "system_coverage": {
+                    "covered": {
+                        item.sku_id: list(item.covered_system_ids)
+                        for item in recommended_items
+                    },
+                    "uncovered_system_ids": list(uncovered_system_ids),
+                    "uncovered_system_reasons": dict(uncovered_system_reasons),
+                },
                 "lifestyle": {
                     "rule_version": lifestyle_plan.rule_version,
                     "status": lifestyle_plan.status,
@@ -2363,7 +2577,9 @@ class RecommendationService:
                         finding_ids=tuple(item.finding_ids),
                     )
                 )
-            return sorted(structured, key=lambda value: value.score, reverse=True)
+            # The stored order is evidence-tier aware. Sorting by score alone
+            # would move symptom-only systems back ahead of objective findings.
+            return structured
 
         text = self._pattern_text(context)
         guidance_text = self._normalize(" ".join(report_guidance or []))
@@ -2686,6 +2902,9 @@ class RecommendationService:
             evidence_ids.append(f"signal:model_support_goal_{best_goal}")
             evidence_ids.append(f"signal:primary_support_goal_{best_goal}")
             evidence_ids.append(f"signal:evidence_class_{primary_evidence_class.value}")
+            evidence_ids.append(
+                f"signal:{self._support_evidence_tier_signal(matched_findings, primary_evidence_class)}"
+            )
             goal_config = self.support_goals.get(best_goal, {})
             if goal_config.get("must_cover_when_direct") and primary_evidence_class in {
                 ClinicalEvidenceClass.lab_abnormal,
@@ -2710,6 +2929,9 @@ class RecommendationService:
             }[secondary_class]
             association += secondary_bonus + 2 * confidence
             evidence_ids.append(f"signal:model_support_goal_{best_goal}")
+            evidence_ids.append(
+                f"signal:{self._support_evidence_tier_signal(matched_findings, secondary_class)}"
+            )
             evidence_ids.extend(f"finding:{finding.finding_id}" for finding in matched_findings[:2])
         if marker_hits:
             association += min(25, len(marker_hits) * 15)
@@ -2747,6 +2969,25 @@ class RecommendationService:
             evidence_ids.insert(1, f"signal:system_priority_{int(max(system_scores))}")
         score = association_percent / 100 * 2.2
         return round(score, 3), list(dict.fromkeys(evidence_ids))
+
+    @staticmethod
+    def _support_evidence_tier_signal(
+        findings: list,
+        evidence_class: ClinicalEvidenceClass,
+    ) -> str:
+        flags = {
+            str(getattr(finding, "abnormal_flag", "") or "").lower()
+            for finding in findings
+        }
+        if evidence_class == ClinicalEvidenceClass.lab_abnormal:
+            return "evidence_tier_objective"
+        if "patient_reported" in flags:
+            return "evidence_tier_patient_condition"
+        if evidence_class == ClinicalEvidenceClass.clinical_confirmed:
+            return "evidence_tier_objective"
+        if evidence_class == ClinicalEvidenceClass.exposure or "patient_reported_exposure" in flags:
+            return "evidence_tier_exposure"
+        return "evidence_tier_symptom"
 
     @staticmethod
     def _strongest_support_finding_class(findings: list) -> ClinicalEvidenceClass:
@@ -3032,6 +3273,10 @@ class RecommendationService:
         if signal_id == "requires_manual_confirmation":
             return "该产品需要医生人工确认后使用"
         labels = {
+            "evidence_tier_objective": "客观检验或医生确认病情",
+            "evidence_tier_patient_condition": "明确患者自述病情",
+            "evidence_tier_symptom": "明确症状、主要诉求或有效问卷评分",
+            "evidence_tier_exposure": "化学敏感或环境暴露辅助依据",
             "lipid_balance": "血脂与心血管支持",
             "iron_repletion": "缺铁与造血支持",
             "glycemic_balance": "血糖与代谢支持",
@@ -3819,25 +4064,13 @@ class RecommendationService:
             anti_aging_findings=anti_aging_findings,
         )
         if not priority_findings:
-            return ["一句话健康画像：当前资料已完成异常梳理，但尚缺少足够证据形成明确的身体系统优先主线。"]
-
-        top_names = "、".join(SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0]) for item in priority_findings[:3])
-        portrait = [
-            f"一句话健康画像：当前问题主要集中在{top_names}，应按证据强弱分层处理，并结合症状与复查趋势持续校正。"
-        ]
-        for index, finding in enumerate(priority_findings[:5], start=1):
-            evidence = "、".join(self._system_evidence_names(context, finding.system_id)[:3]) or "已确认异常和症状"
-            portrait.append(
-                f"核心问题主线{index}：{SYSTEM_NAMES.get(finding.system_id, finding.title.split('（', 1)[0])}，主要依据为{evidence}，当前分级为{finding.priority_level}。"
-            )
-        first_month_names = "、".join(
-            SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0])
-            for item in priority_findings[:2]
+            return build_core_health_portrait([])
+        return build_core_health_portrait(
+            priority_findings,
+            confirmed_findings=context.clinical_findings,
+            objective_evidence_items=key_lab_highlights,
+            risk_notices=risk_notices,
         )
-        portrait.append(
-            f"首月优先方向：先围绕{first_month_names}调整饮食、睡眠和活动节律，再按医生确认后的异常匹配营养支持并观察耐受。"
-        )
-        return portrait
 
     def _build_system_analysis(
         self,
@@ -4159,6 +4392,9 @@ class RecommendationService:
         ranked_products: list[ProductRule],
         selected_sku_ids: list[str],
         product_evidence_map: dict[str, list[str]],
+        *,
+        support_need_by_id: dict[str, object],
+        priority_findings: list[SystemPriority],
     ) -> list[ProductRule]:
         min_option_count = min(4, len(ranked_products))
         by_id = {product.sku_id: product for product in ranked_products}
@@ -4172,6 +4408,69 @@ class RecommendationService:
         covered_goals: set[str] = set()
         system_counts: dict[str, int] = {}
 
+        # Reserve one highest-ranked safe product for every locally validated
+        # system that has an approved support-goal route. A shared SKU may cover
+        # several systems and is therefore added only once.
+        for finding in priority_findings:
+            product = next(
+                (
+                    candidate
+                    for candidate in ranked_products
+                    if finding.system_id
+                    in self._covered_system_ids_for_product(
+                        candidate,
+                        product_evidence_map.get(candidate.sku_id, []),
+                        support_need_by_id=support_need_by_id,
+                        priority_findings=priority_findings,
+                    )
+                ),
+                None,
+            )
+            if not product:
+                continue
+            newly_selected = product not in selected_products
+            if newly_selected:
+                selected_products.append(product)
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
+            primary_goal = self._selection_primary_goal(evidence_ids)
+            if primary_goal:
+                covered_goals.add(primary_goal)
+            if newly_selected:
+                for system_id in self._covered_system_ids_for_product(
+                    product,
+                    evidence_ids,
+                    support_need_by_id=support_need_by_id,
+                    priority_findings=priority_findings,
+                ):
+                    system_counts[system_id] = system_counts.get(system_id, 0) + 1
+            if len(selected_products) >= self.MAX_RECOMMENDED_PRODUCTS:
+                return selected_products
+
+        # Reserve one product for every model-proposed support goal backed by an
+        # objective abnormality before contextual questionnaire goals are added.
+        # This preserves the existing model -> goal -> local product route while
+        # preventing symptom-only products from crowding out confirmed findings.
+        objective_goal_products: dict[str, ProductRule] = {}
+        for product in ranked_products:
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
+            primary_goal = self._selection_primary_goal(evidence_ids)
+            if not primary_goal or not self._has_objective_model_goal_evidence(
+                evidence_ids
+            ):
+                continue
+            objective_goal_products.setdefault(primary_goal, product)
+        for goal, product in objective_goal_products.items():
+            if product not in selected_products:
+                selected_products.append(product)
+            covered_goals.add(goal)
+            system_id = self._selection_system_id(
+                product_evidence_map.get(product.sku_id, [])
+            )
+            if system_id:
+                system_counts[system_id] = system_counts.get(system_id, 0) + 1
+            if len(selected_products) >= self.MAX_RECOMMENDED_PRODUCTS:
+                return selected_products
+
         # Direct actionable deficiencies are reserved before the general top-N
         # pass. This prevents broad multi-goal products from crowding out a
         # precise product such as VD3+K after the list is truncated.
@@ -4180,15 +4479,18 @@ class RecommendationService:
             evidence_ids = product_evidence_map.get(product.sku_id, [])
             if not any(evidence_id.startswith("signal:client_recall_") for evidence_id in evidence_ids):
                 continue
-            selected_products.append(product)
+            newly_selected = product not in selected_products
+            if newly_selected:
+                selected_products.append(product)
             primary_goal = self._selection_primary_goal(evidence_ids)
             if primary_goal:
                 covered_goals.add(primary_goal)
             system_id = self._selection_system_id(evidence_ids)
-            if system_id:
+            if system_id and newly_selected:
                 system_counts[system_id] = system_counts.get(system_id, 0) + 1
-            if len(selected_products) >= 10:
+            if len(selected_products) >= self.MAX_RECOMMENDED_PRODUCTS:
                 return selected_products
+
         for product in ranked_products:
             evidence_ids = product_evidence_map.get(product.sku_id, [])
             for goal in self._must_cover_goals(evidence_ids):
@@ -4220,7 +4522,7 @@ class RecommendationService:
                 covered_goals.add(primary_goal)
             if system_id:
                 system_counts[system_id] = system_counts.get(system_id, 0) + 1
-            if len(selected_products) >= 10:
+            if len(selected_products) >= self.MAX_RECOMMENDED_PRODUCTS:
                 break
 
         if len(selected_products) < min_option_count:
@@ -4239,7 +4541,7 @@ class RecommendationService:
                 if len(selected_products) >= min_option_count:
                     break
 
-        return (selected_products or ranked_products)[:10]
+        return (selected_products or ranked_products)[: self.MAX_RECOMMENDED_PRODUCTS]
 
     @staticmethod
     def _must_cover_goals(evidence_ids: list[str]) -> list[str]:
@@ -4266,6 +4568,45 @@ class RecommendationService:
                 continue
             return system_id
         return None
+
+    @staticmethod
+    def _has_objective_model_goal_evidence(evidence_ids: list[str]) -> bool:
+        has_model_goal = any(
+            evidence_id.startswith("signal:model_support_goal_")
+            for evidence_id in evidence_ids
+        )
+        has_objective_evidence = (
+            "signal:evidence_class_lab_abnormal" in evidence_ids
+            or (
+                "signal:evidence_class_clinical_confirmed" in evidence_ids
+                and "signal:evidence_tier_patient_condition" not in evidence_ids
+            )
+        )
+        return has_model_goal and has_objective_evidence
+
+    @classmethod
+    def _product_output_evidence_rank(cls, evidence_ids: list[str]) -> int:
+        if cls._has_objective_model_goal_evidence(evidence_ids) or any(
+            evidence_id.startswith("signal:tag_marker_")
+            or evidence_id.startswith("signal:direct_marker_rule_")
+            for evidence_id in evidence_ids
+        ):
+            return 0
+        if "signal:evidence_tier_patient_condition" in evidence_ids:
+            return 1
+        if "signal:evidence_tier_symptom" in evidence_ids:
+            return 2
+        if "signal:evidence_tier_exposure" in evidence_ids:
+            return 3
+        return 4
+
+    def _product_system_sort_rank(
+        self,
+        product: ProductRule,
+        priority_findings: list[SystemPriority],
+    ) -> int:
+        rank = self._system_priority_rank_for_product(product, priority_findings)
+        return 999 if rank is None else rank
 
     @staticmethod
     def _has_direct_product_evidence(evidence_ids: list[str]) -> bool:

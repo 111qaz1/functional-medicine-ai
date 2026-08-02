@@ -14,6 +14,7 @@ import httpx
 from pypdf import PdfReader
 
 from app.core.llm_compat import chat_generation_options
+from app.core.llm_request_control import LLMRequestController
 from app.core.settings import LLMConfig, llm_config_validation_error
 from app.domain.models import KnowledgeStatement, SourceSpan
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, KnowledgeHit, OCRExtraction
@@ -64,6 +65,7 @@ class DocumentOCRProvider:
         api_style: str = "auto",
         timeout_seconds: float = 45.0,
         http_client: httpx.Client | None = None,
+        request_controller: LLMRequestController | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/") if base_url else None
         self.api_key = api_key
@@ -71,6 +73,7 @@ class DocumentOCRProvider:
         self.api_style = api_style.strip().lower()
         self.timeout_seconds = timeout_seconds
         self.http_client = http_client
+        self.request_controller = request_controller
 
     def extract(self, filename: str, content_type: str, content: bytes) -> OCRExtraction:
         suffix = Path(filename).suffix.lower()
@@ -339,11 +342,12 @@ class DocumentOCRProvider:
         try:
             if self.api_style in {"auto", "responses"}:
                 try:
-                    response = client.post(
-                        f"{self.base_url}/responses",
-                        headers=self._headers(),
-                        json=self._build_responses_payload(data_uri),
-                        timeout=self.timeout_seconds,
+                    response_payload = self._build_responses_payload(data_uri)
+                    response = self._post_model_request(
+                        client=client,
+                        url=f"{self.base_url}/responses",
+                        payload=response_payload,
+                        api_style="responses",
                     )
                     response.raise_for_status()
                     return self._parse_ocr_response(self._extract_response_text(response.json())), None
@@ -357,11 +361,12 @@ class DocumentOCRProvider:
                     if self.api_style == "responses":
                         return "", "图片 OCR 服务返回格式无法解析，请检查当前模型是否支持图片识别。"
 
-            response = client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=self._build_chat_payload(data_uri),
-                timeout=self.timeout_seconds,
+            chat_payload = self._build_chat_payload(data_uri)
+            response = self._post_model_request(
+                client=client,
+                url=f"{self.base_url}/chat/completions",
+                payload=chat_payload,
+                api_style="chat",
             )
             response.raise_for_status()
             return self._parse_ocr_response(self._extract_response_text(response.json())), None
@@ -374,6 +379,31 @@ class DocumentOCRProvider:
         finally:
             if close_client:
                 client.close()
+
+    def _post_model_request(
+        self,
+        *,
+        client: httpx.Client,
+        url: str,
+        payload: dict[str, object],
+        api_style: str,
+    ) -> httpx.Response:
+        def send() -> httpx.Response:
+            return client.post(
+                url,
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+        if self.request_controller is None:
+            return send()
+        return self.request_controller.post(
+            operation="document_ocr",
+            schema_name="document_ocr",
+            api_style=api_style,
+            request_payload=payload,
+            send=send,
+        )
 
     def _format_ocr_http_error(self, exc: httpx.HTTPStatusError) -> str:
         status_code = exc.response.status_code

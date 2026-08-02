@@ -8,6 +8,7 @@ from typing import Any, Literal
 import httpx
 
 from app.core.llm_compat import chat_generation_options
+from app.core.llm_request_control import LLMRequestController, llm_request_context
 from app.core.settings import AppSettings
 
 
@@ -45,12 +46,25 @@ class PrescriptionAdviceResult:
 
 
 class PrescriptionAdviceService:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        *,
+        request_controller: LLMRequestController | None = None,
+        http_client: httpx.Client | None = None,
+    ) -> None:
         self.settings = settings
+        self.request_controller = request_controller
+        self.http_client = http_client
 
     def build_advice(self, draft: Any) -> PrescriptionAdviceResult:
         fallback = self._local_fallback(draft)
-        remote = self._remote_polish(draft)
+        with llm_request_context(
+            case_id=getattr(draft, "case_id", None),
+            analysis_id=getattr(draft, "source_analysis_id", None),
+            draft_id=getattr(draft, "id", None),
+        ):
+            remote = self._remote_polish(draft)
         if remote:
             return PrescriptionAdviceResult(medical_advice=remote, advice_source="llm")
         return PrescriptionAdviceResult(medical_advice=fallback, advice_source="local_fallback")
@@ -99,27 +113,76 @@ class PrescriptionAdviceService:
         base_url = self.settings.llm_base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {self.settings.llm_api_key}", "Content-Type": "application/json"}
         timeout = min(max(float(self.settings.llm_timeout_seconds), 3.0), 20.0)
-        with httpx.Client(timeout=timeout) as client:
-            if self.settings.llm_api_style in {"auto", "responses"}:
-                try:
-                    response = client.post(
-                        f"{base_url}/responses",
-                        headers=headers,
-                        json=self._responses_payload(payload),
-                    )
-                    response.raise_for_status()
-                    return self._extract_response_text(response.json())
-                except httpx.HTTPError:
-                    if self.settings.llm_api_style == "responses":
-                        raise
-
-            response = client.post(
-                f"{base_url}/chat/completions",
+        if self.http_client is not None:
+            return self._call_remote_model_with_client(
+                self.http_client,
+                base_url=base_url,
                 headers=headers,
-                json=self._chat_payload(payload),
+                payload=payload,
             )
-            response.raise_for_status()
-            return self._extract_response_text(response.json())
+        with httpx.Client(timeout=timeout) as client:
+            return self._call_remote_model_with_client(
+                client,
+                base_url=base_url,
+                headers=headers,
+                payload=payload,
+            )
+
+    def _call_remote_model_with_client(
+        self,
+        client: httpx.Client,
+        *,
+        base_url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> str:
+        if self.settings.llm_api_style in {"auto", "responses"}:
+            try:
+                response_payload = self._responses_payload(payload)
+                response = self._post_model_request(
+                    client=client,
+                    url=f"{base_url}/responses",
+                    headers=headers,
+                    payload=response_payload,
+                    api_style="responses",
+                )
+                response.raise_for_status()
+                return self._extract_response_text(response.json())
+            except httpx.HTTPError:
+                if self.settings.llm_api_style == "responses":
+                    raise
+
+        chat_payload = self._chat_payload(payload)
+        response = self._post_model_request(
+            client=client,
+            url=f"{base_url}/chat/completions",
+            headers=headers,
+            payload=chat_payload,
+            api_style="chat",
+        )
+        response.raise_for_status()
+        return self._extract_response_text(response.json())
+
+    def _post_model_request(
+        self,
+        *,
+        client: httpx.Client,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        api_style: str,
+    ) -> httpx.Response:
+        def send() -> httpx.Response:
+            return client.post(url, headers=headers, json=payload)
+        if self.request_controller is None:
+            return send()
+        return self.request_controller.post(
+            operation="prescription_advice",
+            schema_name="prescription_advice",
+            api_style=api_style,
+            request_payload=payload,
+            send=send,
+        )
 
     def _system_prompt(self) -> str:
         return (

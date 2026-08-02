@@ -19,6 +19,7 @@ from app.domain.models import (
     ExtractedLabItem,
     IndicatorStatus,
     KnowledgeManifestEntry,
+    LLMRequestUsage,
     ProductRule,
     Questionnaire,
     RecommendationDraft,
@@ -236,6 +237,33 @@ class LLMConfigUpdateRequest(BaseModel):
     api_style: str = "auto"
     timeout_seconds: float = 45.0
     temperature: float = 0.1
+
+
+class LLMUsageListResponse(BaseModel):
+    items: list[LLMRequestUsage] = Field(default_factory=list)
+
+
+class LLMUsageSummaryResponse(BaseModel):
+    since: datetime
+    until: datetime
+    window_minutes: int
+    request_count: int
+    failed_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    total_tokens: int
+
+
+class LLMRateLimitStatusResponse(BaseModel):
+    max_concurrency: int
+    inflight: int
+    queued: int
+    rpm_soft_limit: int
+    requests_in_window: int
+    tpm_soft_limit: int
+    reserved_tokens_in_window: int
+    default_completion_reservation: int
 
 
 class DoctorAccountResponse(BaseModel):

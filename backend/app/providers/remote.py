@@ -7,6 +7,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.llm_compat import chat_generation_options
+from app.core.llm_request_control import LLMRequestController
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, LLMProvider
 
 
@@ -35,6 +36,36 @@ class RemoteLLMHTTPStatusError(RuntimeError):
         super().__init__(f"Remote LLM HTTP {self.status_code}: {self.error_code}")
 
 
+def _controlled_post(
+    *,
+    controller: LLMRequestController | None,
+    operation: str,
+    schema_name: str,
+    api_style: str,
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> httpx.Response:
+    def send() -> httpx.Response:
+        return client.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=timeout_seconds,
+        )
+    if controller is None:
+        return send()
+    return controller.post(
+        operation=operation,
+        schema_name=schema_name,
+        api_style=api_style,
+        request_payload=payload,
+        send=send,
+    )
+
+
 class OpenAICompatibleCaseAssistant:
     """Remote case assistant that answers with grounded case context only."""
 
@@ -48,6 +79,7 @@ class OpenAICompatibleCaseAssistant:
         timeout_seconds: float = 45.0,
         temperature: float = 0.2,
         http_client: httpx.Client | None = None,
+        request_controller: LLMRequestController | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -56,6 +88,7 @@ class OpenAICompatibleCaseAssistant:
         self.timeout_seconds = timeout_seconds
         self.temperature = temperature
         self.http_client = http_client
+        self.request_controller = request_controller
 
     def reply(
         self,
@@ -80,11 +113,17 @@ class OpenAICompatibleCaseAssistant:
         try:
             if self.api_style in {"auto", "responses"}:
                 try:
-                    response = client.post(
-                        f"{self.base_url}/responses",
+                    response_payload = self._build_responses_payload(payload, history)
+                    response = _controlled_post(
+                        controller=self.request_controller,
+                        operation="case_assistant",
+                        schema_name="case_assistant",
+                        api_style="responses",
+                        client=client,
+                        url=f"{self.base_url}/responses",
                         headers=self._headers(),
-                        json=self._build_responses_payload(payload, history),
-                        timeout=self.timeout_seconds,
+                        payload=response_payload,
+                        timeout_seconds=self.timeout_seconds,
                     )
                     response.raise_for_status()
                     return self._extract_response_text(response.json())
@@ -92,11 +131,17 @@ class OpenAICompatibleCaseAssistant:
                     if self.api_style == "responses":
                         raise
 
-            response = client.post(
-                f"{self.base_url}/chat/completions",
+            chat_payload = self._build_chat_payload(payload, history)
+            response = _controlled_post(
+                controller=self.request_controller,
+                operation="case_assistant",
+                schema_name="case_assistant",
+                api_style="chat",
+                client=client,
+                url=f"{self.base_url}/chat/completions",
                 headers=self._headers(),
-                json=self._build_chat_payload(payload, history),
-                timeout=self.timeout_seconds,
+                payload=chat_payload,
+                timeout_seconds=self.timeout_seconds,
             )
             response.raise_for_status()
             return self._extract_response_text(response.json())
@@ -251,6 +296,7 @@ class OpenAICompatibleGroundedComposer:
         timeout_seconds: float = 45.0,
         temperature: float = 0.1,
         http_client: httpx.Client | None = None,
+        request_controller: LLMRequestController | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -260,6 +306,7 @@ class OpenAICompatibleGroundedComposer:
         self.timeout_seconds = timeout_seconds
         self.temperature = temperature
         self.http_client = http_client
+        self.request_controller = request_controller
 
     def compose(self, draft_input: DraftCompositionInput) -> DraftCompositionResult:
         if self._should_use_local_only(draft_input):
@@ -333,11 +380,17 @@ class OpenAICompatibleGroundedComposer:
         try:
             if self.api_style in {"auto", "responses"}:
                 try:
-                    response = client.post(
-                        f"{self.base_url}/responses",
+                    response_payload = self._build_responses_payload(grounded_payload)
+                    response = _controlled_post(
+                        controller=self.request_controller,
+                        operation="grounded_composer",
+                        schema_name="grounded_composer",
+                        api_style="responses",
+                        client=client,
+                        url=f"{self.base_url}/responses",
                         headers=self._headers(),
-                        json=self._build_responses_payload(grounded_payload),
-                        timeout=self.timeout_seconds,
+                        payload=response_payload,
+                        timeout_seconds=self.timeout_seconds,
                     )
                     response.raise_for_status()
                     return self._extract_response_text(response.json())
@@ -345,11 +398,17 @@ class OpenAICompatibleGroundedComposer:
                     if self.api_style == "responses":
                         raise
 
-            response = client.post(
-                f"{self.base_url}/chat/completions",
+            chat_payload = self._build_chat_payload(grounded_payload)
+            response = _controlled_post(
+                controller=self.request_controller,
+                operation="grounded_composer",
+                schema_name="grounded_composer",
+                api_style="chat",
+                client=client,
+                url=f"{self.base_url}/chat/completions",
                 headers=self._headers(),
-                json=self._build_chat_payload(grounded_payload),
-                timeout=self.timeout_seconds,
+                payload=chat_payload,
+                timeout_seconds=self.timeout_seconds,
             )
             response.raise_for_status()
             return self._extract_response_text(response.json())
@@ -713,8 +772,8 @@ class OpenAICompatibleRagReportFusion:
         api_style: str = "auto",
         timeout_seconds: float = 45.0,
         temperature: float = 0.1,
-        max_output_tokens: int = 1800,
         http_client: httpx.Client | None = None,
+        request_controller: LLMRequestController | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -722,8 +781,8 @@ class OpenAICompatibleRagReportFusion:
         self.api_style = api_style.strip().lower()
         self.timeout_seconds = timeout_seconds
         self.temperature = temperature
-        self.max_output_tokens = max_output_tokens
         self.http_client = http_client
+        self.request_controller = request_controller
 
     def fuse_report_sections(
         self,
@@ -754,11 +813,17 @@ class OpenAICompatibleRagReportFusion:
         try:
             if self.api_style in {"auto", "responses"}:
                 try:
-                    response = client.post(
-                        f"{self.base_url}/responses",
+                    response_payload = self._build_responses_payload(payload)
+                    response = _controlled_post(
+                        controller=self.request_controller,
+                        operation="rag_report_fusion",
+                        schema_name="rag_report_fusion",
+                        api_style="responses",
+                        client=client,
+                        url=f"{self.base_url}/responses",
                         headers=self._headers(),
-                        json=self._build_responses_payload(payload),
-                        timeout=self.timeout_seconds,
+                        payload=response_payload,
+                        timeout_seconds=self.timeout_seconds,
                     )
                     self._raise_for_status(response)
                     return self._extract_response_text(response.json())
@@ -768,11 +833,17 @@ class OpenAICompatibleRagReportFusion:
                     if isinstance(exc, RemoteLLMHTTPStatusError) and exc.status_code in {401, 403, 429}:
                         raise
 
-            response = client.post(
-                f"{self.base_url}/chat/completions",
+            chat_payload = self._build_chat_payload(payload)
+            response = _controlled_post(
+                controller=self.request_controller,
+                operation="rag_report_fusion",
+                schema_name="rag_report_fusion",
+                api_style="chat",
+                client=client,
+                url=f"{self.base_url}/chat/completions",
                 headers=self._headers(),
-                json=self._build_chat_payload(payload),
-                timeout=self.timeout_seconds,
+                payload=chat_payload,
+                timeout_seconds=self.timeout_seconds,
             )
             self._raise_for_status(response)
             return self._extract_response_text(response.json())
@@ -788,7 +859,6 @@ class OpenAICompatibleRagReportFusion:
                 temperature=self.temperature,
                 thinking_type="disabled",
             ),
-            "max_tokens": self.max_output_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
@@ -801,7 +871,6 @@ class OpenAICompatibleRagReportFusion:
             "model": self.model,
             "temperature": self.temperature,
             "thinking": {"type": "disabled"},
-            "max_output_tokens": self.max_output_tokens,
             "instructions": self._system_prompt(),
             "input": [
                 {

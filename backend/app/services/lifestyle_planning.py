@@ -14,6 +14,30 @@ from app.domain.models import (
 )
 
 
+_GENERIC_CONFIRMATION_PATTERNS = (
+    re.compile(r"(?:仅)?在(?:医生或营养师|医生|顾问)确认(?:适用)?后(?:再)?[，,]?\s*"),
+    re.compile(
+        r"(?:执行|实施|开始)前(?:需|需要|请)?(?:先)?(?:由|经|与)?"
+        r"(?:医生|顾问)(?:评估|沟通)?确认(?:适用)?[。；;，,]?\s*"
+    ),
+    re.compile(r"(?:需|需要)?(?:先)?(?:由|经)(?:医生|顾问)确认后(?:再)?执行[。；;，,]?\s*"),
+)
+
+
+def remove_generic_lifestyle_confirmation(value: str) -> str:
+    """Remove generic pre-execution approval boilerplate without hiding safety actions."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    for pattern in _GENERIC_CONFIRMATION_PATTERNS:
+        text = pattern.sub("", text)
+    text = re.sub(r"^[；;，,。\s]+", "", text)
+    text = re.sub(r"[；;，,]\s*。", "。", text)
+    text = re.sub(r"([；;，,。])\1+", r"\1", text)
+    text = re.sub(r"[；;，,\s]+$", "", text).strip()
+    if text and not re.search(r"[。！？!?]$", text):
+        text += "。"
+    return text
+
+
 DOMAIN_TITLES = {
     "diet": "饮食建议",
     "movement": "运动建议",
@@ -167,10 +191,9 @@ class LifestylePlanningService:
                     items.append(f"### {section_number}.{category_number} {label}")
                     category_number += 1
                 for action in actions:
-                    text = action.text
-                    if action.clinician_review_required and "医生" not in text and "专科" not in text:
-                        text = f"{text.rstrip('。')}；执行前需由医生确认。"
-                    items.append(text)
+                    text = remove_generic_lifestyle_confirmation(action.text)
+                    if text:
+                        items.append(text)
             section_number += 1
         return items
 

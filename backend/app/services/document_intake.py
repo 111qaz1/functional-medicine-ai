@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -80,6 +81,13 @@ class DocumentIntakeService:
                 result = self._pdf_result(digest, content)
             elif suffix == ".docx":
                 result = self._docx_result(digest, content)
+            elif suffix == ".pptx":
+                result = self._pptx_result(
+                    digest,
+                    filename=filename,
+                    content_type=content_type,
+                    content=content,
+                )
             elif suffix in self._IMAGE_SUFFIXES:
                 result = DocumentIntakeResult(
                     content_sha256=digest,
@@ -95,13 +103,6 @@ class DocumentIntakeService:
                     page_count=1,
                     page_texts=[PageText(page=1, text=text)],
                 )
-            else:
-                # PPTX remains accepted for compatibility and is analyzed later.
-                result = DocumentIntakeResult(
-                    content_sha256=digest,
-                    intake_status=FileIntakeStatus.uploaded,
-                    page_count=0,
-                )
         except Exception:
             return self._invalid(digest, "文件损坏或无法读取。")
 
@@ -110,22 +111,104 @@ class DocumentIntakeService:
 
     def _pdf_result(self, digest: str, content: bytes) -> DocumentIntakeResult:
         reader = PdfReader(BytesIO(content))
-        if len(reader.pages) > self.max_pdf_pages:
-            return self._invalid(digest, "PDF 页数超过允许的上限。")
+        page_count = len(reader.pages)
+        if page_count > self.max_pdf_pages:
+            return self._invalid(
+                digest,
+                f"PDF 共 {page_count} 页，超过单个 PDF 最多 {self.max_pdf_pages} 页的限制，"
+                f"请拆分为每份不超过 {self.max_pdf_pages} 页后重新上传。",
+                page_count=page_count,
+            )
+        layout_pages = self._pdf_layout_pages(content, page_count)
         pages: list[PageText] = []
         readable_pages = 0
         for page_number, page in enumerate(reader.pages, start=1):
-            text = (page.extract_text() or "").strip()
+            plain_text = (page.extract_text() or "").strip()
+            layout_text = layout_pages.get(page_number, "")
+            text = (
+                layout_text
+                if self._prefer_layout_text(plain_text, layout_text)
+                else plain_text
+            )
             pages.append(PageText(page=page_number, text=text))
             if len(re.sub(r"\s+", "", text)) >= 40:
                 readable_pages += 1
         return DocumentIntakeResult(
             content_sha256=digest,
             intake_status=FileIntakeStatus.uploaded,
-            page_count=len(reader.pages),
+            page_count=page_count,
             page_texts=pages,
             is_scanned=bool(reader.pages) and readable_pages == 0,
         )
+
+    @classmethod
+    def _pdf_layout_pages(
+        cls,
+        content: bytes,
+        page_count: int,
+    ) -> dict[int, str]:
+        """Extract coordinate-aware text without making medical judgments.
+
+        PDF content streams frequently store table result values separately from
+        their labels.  Plain extraction then moves all values to the end of the
+        page.  Coordinate-aware extraction restores the visible row relationship
+        before the text is sent to the document model.
+        """
+        try:
+            import pdfplumber
+
+            extracted: dict[int, str] = {}
+            with pdfplumber.open(BytesIO(content)) as document:
+                for page_number, page in enumerate(
+                    document.pages[:page_count],
+                    start=1,
+                ):
+                    text = page.extract_text(
+                        layout=True,
+                        x_tolerance=2,
+                        y_tolerance=8,
+                    ) or ""
+                    normalized = cls._normalize_layout_text(text)
+                    if normalized:
+                        extracted[page_number] = normalized
+            return extracted
+        except Exception:
+            # The existing pypdf extraction remains the safe fallback for a PDF
+            # whose coordinate data cannot be parsed.
+            return {}
+
+    @staticmethod
+    def _normalize_layout_text(text: str) -> str:
+        lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            # Keep visible column boundaries explicit while avoiding thousands
+            # of padding spaces from layout-mode extraction.
+            line = re.sub(r"[\t ]{2,}", " | ", line)
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _prefer_layout_text(plain_text: str, layout_text: str) -> bool:
+        if not layout_text:
+            return False
+        plain_length = len(re.sub(r"\s+", "", plain_text))
+        layout_length = len(re.sub(r"\s+", "", layout_text))
+        if layout_length < 40:
+            return False
+        if plain_length < 40:
+            return True
+        # Only replace otherwise readable text when the layout extractor found
+        # several genuine multi-column rows.  Narrative pages retain the prior
+        # pypdf behavior.
+        table_rows = sum(
+            1
+            for line in layout_text.splitlines()
+            if line.count(" | ") >= 2
+        )
+        return table_rows >= 3 and layout_length >= int(plain_length * 0.7)
 
     def _docx_result(self, digest: str, content: bytes) -> DocumentIntakeResult:
         try:
@@ -148,6 +231,52 @@ class DocumentIntakeService:
             is_scanned=False,
         )
 
+    @staticmethod
+    def _pptx_result(
+        digest: str,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> DocumentIntakeResult:
+        # Reuse the existing deterministic PPTX extractor. It reads DrawingML
+        # text only and therefore does not invoke the configured vision model.
+        from app.providers.local import DocumentOCRProvider
+
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            slide_paths = [
+                name
+                for name in archive.namelist()
+                if name.startswith("ppt/slides/slide")
+                and name.endswith(".xml")
+                and "/_rels/" not in name
+            ]
+        page_count = len(slide_paths)
+
+        extraction = DocumentOCRProvider().extract(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+        )
+        page_lines: dict[int, list[str]] = {}
+        for span in extraction.spans:
+            if span.page < 1 or span.page > page_count:
+                continue
+            snippet = (span.snippet or "").strip()
+            if snippet:
+                page_lines.setdefault(span.page, []).append(snippet)
+
+        return DocumentIntakeResult(
+            content_sha256=digest,
+            intake_status=FileIntakeStatus.uploaded,
+            page_count=page_count,
+            page_texts=[
+                PageText(page=page, text="\n".join(page_lines.get(page, [])))
+                for page in range(1, page_count + 1)
+            ],
+            is_scanned=False,
+        )
+
     def _apply_irrelevant_hint(self, result: DocumentIntakeResult, filename: str) -> None:
         if result.intake_status == FileIntakeStatus.invalid:
             return
@@ -156,9 +285,16 @@ class DocumentIntakeService:
             result.intake_status = FileIntakeStatus.suspected_irrelevant
             result.precheck_warning = "疑似与病例分析无关，请确认是否误传。"
 
-    def _invalid(self, digest: str, message: str) -> DocumentIntakeResult:
+    def _invalid(
+        self,
+        digest: str,
+        message: str,
+        *,
+        page_count: int = 0,
+    ) -> DocumentIntakeResult:
         return DocumentIntakeResult(
             content_sha256=digest,
             intake_status=FileIntakeStatus.invalid,
+            page_count=page_count,
             validation_error=message,
         )

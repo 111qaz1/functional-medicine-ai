@@ -144,12 +144,17 @@ def system_evidence_score(findings: Iterable[AbnormalFinding]) -> float:
     sources: set[str] = set()
     for finding in findings:
         evidence_class = classify_finding_evidence(finding)
+        weight = (
+            18.0
+            if str(finding.abnormal_flag or "").lower() == "patient_reported"
+            else weights[evidence_class]
+        )
         key = (
             finding.source_file_id,
             re.sub(r"\s+", "", finding.name or "").lower(),
             re.sub(r"\s+", "", finding.result_text or "").lower(),
         )
-        unique[key] = max(unique.get(key, 0.0), weights[evidence_class])
+        unique[key] = max(unique.get(key, 0.0), weight)
         if evidence_class not in {
             ClinicalEvidenceClass.genetic_risk,
             ClinicalEvidenceClass.follow_up_only,

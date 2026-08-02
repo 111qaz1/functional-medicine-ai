@@ -140,10 +140,20 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `FM_LLM_RETRY_ATTEMPTS`（默认 `2`，表示初次请求失败后最多重试两次）
 - `FM_LLM_RETRY_BASE_DELAY_SECONDS`（默认 `1`）
 - `FM_LLM_RETRY_MAX_DELAY_SECONDS`（默认 `10`）
+- `FM_LLM_MAX_CONCURRENCY`（默认 `90`，Tier2 官方上限为 `100`）
+- `FM_LLM_RPM_SOFT_LIMIT`（默认 `475`，Tier2 官方上限为 `500`）
+- `FM_LLM_TPM_SOFT_LIMIT`（默认 `2850000`，Tier2 官方上限为 `3000000`）
+- `FM_LLM_RATE_LIMIT_WINDOW_SECONDS`（默认 `60`）
+- `FM_LLM_DEFAULT_COMPLETION_RESERVATION`（默认 `32768`，仅用于本地排队预约，不会作为输出上限发送给模型）
 - `FM_MAX_UPLOAD_MB`（默认 `50`）
-- `FM_MAX_PDF_PAGES`（默认 `200`）
-- `FM_ANALYSIS_WORKERS`（默认 `1`）
-- `FM_CASE_DOCUMENT_WORKERS`（默认 `2`，限制范围 `1-4`）
+- `FM_MAX_PDF_PAGES`（默认 `50`，单个 PDF 超过 50 页时拒绝上传并提示拆分）
+- `FM_ANALYSIS_WORKERS`（默认且最大 `20`）
+- `FM_CASE_DOCUMENT_WORKERS`（默认且最大 `2`）
+
+病例分析、OCR、病例助手、可选 Composer、RAG 报告融合和处方建议请求
+都会进入同一个进程内 FIFO 队列，同时受全局并发、RPM 和 TPM 软限制约束。
+服务会保存响应中的真实 token 用量，并在同类调用积累至少 5 条数据后使用
+历史 P95 动态调整后续预约量。应用不会向模型发送输出 token 上限。
 
 前端：
 - `NEXT_PUBLIC_API_BASE_URL`
@@ -163,6 +173,8 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 功能稳定后，可以直接用 Docker 方式把同一套本地版交给其他人部署。
 
 新成员第一次用 Docker 启动项目时，优先参考：`docs/docker-first-run.md`。
+Windows Docker 部署参考：`docs/windows-docker-deployment.md`。
+Ubuntu Docker 部署参考：`docs/ubuntu-docker-deployment.md`。
 如果以接口形式交付给外部系统，优先参考：`docs/customer-api-delivery-guide.md`。
 正式环境建议使用 Nginx 统一代理和 HTTPS，参考：`docs/nginx-production-deployment.md`。
 甲方正式部署推荐配置参考：`docs/production-recommended-config.md`。

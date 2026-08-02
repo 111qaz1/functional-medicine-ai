@@ -18,6 +18,7 @@ from app.domain.models import (
     DoctorAccount,
     KnowledgeManifestEntry,
     KnowledgeStatement,
+    LLMRequestUsage,
     ProductRule,
     RecommendationDraft,
     ReviewDecision,
@@ -79,6 +80,36 @@ class LocalRepository:
                     created_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS llm_request_usage (
+                    id TEXT PRIMARY KEY,
+                    request_group_id TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    case_id TEXT,
+                    analysis_id TEXT,
+                    file_id TEXT,
+                    draft_id TEXT,
+                    operation TEXT NOT NULL,
+                    schema_name TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api_style TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    http_status INTEGER,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    cached_tokens INTEGER,
+                    total_tokens INTEGER,
+                    reserved_tokens INTEGER NOT NULL DEFAULT 0,
+                    queue_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_llm_request_usage_started
+                    ON llm_request_usage(started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_llm_request_usage_analysis_started
+                    ON llm_request_usage(analysis_id, started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_llm_request_usage_case_started
+                    ON llm_request_usage(case_id, started_at DESC);
                 CREATE TABLE IF NOT EXISTS knowledge (
                     statement_id TEXT PRIMARY KEY,
                     review_status TEXT NOT NULL,
@@ -126,6 +157,18 @@ class LocalRepository:
             self._ensure_column(connection, "clinician_rules", "scope", "TEXT NOT NULL DEFAULT 'public'")
             self._ensure_column(connection, "clinician_rules", "owner_doctor_id", "TEXT")
             self._ensure_column(connection, "clinician_rules", "created_by_doctor_id", "TEXT")
+            self._ensure_column(
+                connection,
+                "llm_request_usage",
+                "reserved_tokens",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "llm_request_usage",
+                "queue_duration_ms",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
 
     def _ensure_column(self, connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -328,6 +371,7 @@ class LocalRepository:
             connection.execute("DELETE FROM cases WHERE id = ?", (case_id,))
             connection.execute("DELETE FROM audit_logs WHERE entity_id = ?", (case_id,))
             connection.execute("DELETE FROM case_analyses WHERE case_id = ?", (case_id,))
+            connection.execute("DELETE FROM llm_request_usage WHERE case_id = ?", (case_id,))
             for draft_id in draft_ids:
                 connection.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
                 connection.execute("DELETE FROM review_decisions WHERE draft_id = ?", (draft_id,))
@@ -491,6 +535,111 @@ class LocalRepository:
                 (entity_id,),
             ).fetchall()
         return [AuditLog.model_validate_json(row["payload"]) for row in rows]
+
+    def save_llm_request_usage(self, usage: LLMRequestUsage) -> LLMRequestUsage:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO llm_request_usage (
+                    id, request_group_id, attempt, case_id, analysis_id, file_id,
+                    draft_id, operation, schema_name, model, api_style, status,
+                    http_status, prompt_tokens, completion_tokens, cached_tokens,
+                    total_tokens, reserved_tokens, queue_duration_ms, started_at,
+                    completed_at, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    usage.id,
+                    usage.request_group_id,
+                    usage.attempt,
+                    usage.case_id,
+                    usage.analysis_id,
+                    usage.file_id,
+                    usage.draft_id,
+                    usage.operation,
+                    usage.schema_name,
+                    usage.model,
+                    usage.api_style,
+                    usage.status,
+                    usage.http_status,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.cached_tokens,
+                    usage.total_tokens,
+                    usage.reserved_tokens,
+                    usage.queue_duration_ms,
+                    usage.started_at.isoformat(),
+                    usage.completed_at.isoformat(),
+                    usage.model_dump_json(),
+                ),
+            )
+        return usage
+
+    def list_llm_request_usage(
+        self,
+        *,
+        case_id: str | None = None,
+        analysis_id: str | None = None,
+        limit: int = 100,
+    ) -> list[LLMRequestUsage]:
+        clauses: list[str] = []
+        params: list[str | int] = []
+        if case_id:
+            clauses.append("case_id = ?")
+            params.append(case_id)
+        if analysis_id:
+            clauses.append("analysis_id = ?")
+            params.append(analysis_id)
+        sql = "SELECT payload FROM llm_request_usage"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY started_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        with self._lock, closing(self._connect()) as connection, connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [LLMRequestUsage.model_validate_json(row["payload"]) for row in rows]
+
+    def summarize_llm_request_usage(
+        self,
+        *,
+        since: datetime,
+        case_id: str | None = None,
+        analysis_id: str | None = None,
+    ) -> dict[str, int]:
+        clauses = ["started_at >= ?"]
+        params: list[str] = [since.isoformat()]
+        if case_id:
+            clauses.append("case_id = ?")
+            params.append(case_id)
+        if analysis_id:
+            clauses.append("analysis_id = ?")
+            params.append(analysis_id)
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS request_count,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                    SUM(COALESCE(prompt_tokens, 0)) AS prompt_tokens,
+                    SUM(COALESCE(completion_tokens, 0)) AS completion_tokens,
+                    SUM(COALESCE(cached_tokens, 0)) AS cached_tokens,
+                    SUM(COALESCE(total_tokens, 0)) AS total_tokens
+                FROM llm_request_usage
+                WHERE {" AND ".join(clauses)}
+                """,
+                tuple(params),
+            ).fetchone()
+        return {
+            key: int(row[key] or 0)
+            for key in (
+                "request_count",
+                "failed_count",
+                "prompt_tokens",
+                "completion_tokens",
+                "cached_tokens",
+                "total_tokens",
+            )
+        }
 
     def list_knowledge(self, *, reviewed_only: bool = False) -> list[KnowledgeStatement]:
         sql = "SELECT payload FROM knowledge"

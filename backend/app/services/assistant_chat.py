@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.settings import AppSettings
+from app.core.llm_request_control import LLMRequestController, llm_request_context
 from app.domain.models import ClinicianRule, RecommendationDraft
 from app.providers.remote import OpenAICompatibleCaseAssistant
 from app.repositories.in_memory import LocalRepository
@@ -35,12 +36,14 @@ class CaseAssistantService:
         case_service: CaseService,
         indicator_service: CaseIndicatorService,
         assistant_rule_service: ClinicianRuleService,
+        request_controller: LLMRequestController | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.case_service = case_service
         self.indicator_service = indicator_service
         self.assistant_rule_service = assistant_rule_service
+        self.request_controller = request_controller
         self.remote_assistant = self._build_remote_assistant()
 
     def reply(
@@ -65,11 +68,20 @@ class CaseAssistantService:
 
         if self.remote_assistant:
             try:
-                reply = self.remote_assistant.reply(
-                    case_snapshot=case_snapshot,
-                    user_message=user_message,
-                    history=history or [],
-                )
+                with llm_request_context(
+                    case_id=case.id,
+                    analysis_id=(
+                        latest_draft.source_analysis_id
+                        if latest_draft
+                        else case.latest_analysis_id
+                    ),
+                    draft_id=latest_draft.id if latest_draft else None,
+                ):
+                    reply = self.remote_assistant.reply(
+                        case_snapshot=case_snapshot,
+                        user_message=user_message,
+                        history=history or [],
+                    )
                 return AssistantChatResult(
                     reply=reply,
                     mode="llm",
@@ -101,6 +113,7 @@ class CaseAssistantService:
             api_style=self.settings.llm_api_style,
             timeout_seconds=self.settings.llm_timeout_seconds,
             temperature=min(max(self.settings.llm_temperature, 0.0), 0.5),
+            request_controller=self.request_controller,
         )
 
     def _build_case_snapshot(

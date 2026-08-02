@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -32,6 +33,9 @@ from app.api.schemas import (
     KnowledgeManifestResponse,
     LLMConfigResponse,
     LLMConfigUpdateRequest,
+    LLMRateLimitStatusResponse,
+    LLMUsageListResponse,
+    LLMUsageSummaryResponse,
     ParsingReviewRequest,
     ProductCatalogResponse,
     ProductRuleCreateRequest,
@@ -57,6 +61,7 @@ from app.domain.models import (
     CaseIndicator,
     DoctorAccount,
     DoctorRole,
+    FileIntakeStatus,
     ProductRule,
     RuleScope,
     SourceSpan,
@@ -446,15 +451,38 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         content_type=file.content_type or "application/octet-stream",
         content=content,
     )
-    storage_uri = None
-    if intake.validation_error is None:
-        try:
-            storage_uri = container.recommendation_service.object_store.save(filename, content)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="文件保存失败，请检查服务器存储空间或目录权限。",
-            ) from exc
+    if intake.validation_error:
+        raise HTTPException(status_code=422, detail=intake.validation_error)
+    duplicate = next(
+        (
+            existing
+            for existing in case.files
+            if existing.content_sha256
+            and existing.content_sha256 == intake.content_sha256
+            and existing.intake_status != FileIntakeStatus.invalid
+        ),
+        None,
+    )
+    if duplicate is not None:
+        return _case_detail_response(
+            container,
+            case,
+            operation=ProcessingOperationResponse(
+                success=True,
+                stage="upload_preflight",
+                status="succeeded",
+                parsing_succeeded=bool(duplicate.raw_extracted_text),
+                message=f"文件“{duplicate.filename}”已存在，已跳过重复上传。",
+                filename=filename,
+            ),
+        )
+    try:
+        storage_uri = container.recommendation_service.object_store.save(filename, content)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="文件保存失败，请检查服务器存储空间或目录权限。",
+        ) from exc
     uploaded_file = UploadedFile(
         id=f"file_{uuid.uuid4().hex[:12]}",
         case_id=case_id,
@@ -472,16 +500,7 @@ async def upload_file(case_id: str, request: Request, file: UploadFile = File(..
         validation_error=intake.validation_error,
     )
     case = container.case_service.add_uploaded_file(case.id, uploaded_file)
-    if intake.validation_error:
-        operation = ProcessingOperationResponse(
-            success=False,
-            stage="upload_preflight",
-            status="failed",
-            parsing_succeeded=False,
-            message=intake.validation_error,
-            filename=filename,
-        )
-    elif intake.extracted_text:
+    if intake.extracted_text:
         operation = ProcessingOperationResponse(
             success=True,
             stage="upload_preflight",
@@ -605,6 +624,8 @@ def reparse_file(case_id: str, file_id: str, request: Request):
         filename=target_file.filename,
         content_type=target_file.content_type,
         content=content,
+        case_id=case.id,
+        file_id=target_file.id,
     )
     parse_warnings = container.parsing_service.normalization_service.find_unknown_lab_candidates(
         spans=extraction.spans,
@@ -650,11 +671,19 @@ async def import_questionnaire_file(case_id: str, request: Request, file: Upload
     _authorized_case(container, case_id, _current_doctor(request))
 
     filename = file.filename or "questionnaire-upload.bin"
-    content = await file.read()
+    content_type = file.content_type or "application/octet-stream"
+    content = await _read_upload_with_limit(file, container.settings.max_upload_bytes)
+    intake = container.document_intake_service.preflight(
+        filename=filename,
+        content_type=content_type,
+        content=content,
+    )
+    if intake.validation_error:
+        raise HTTPException(status_code=422, detail=intake.validation_error)
     try:
         questionnaire = container.questionnaire_import_service.parse(
             filename=filename,
-            content_type=file.content_type or "application/octet-stream",
+            content_type=content_type,
             content=content,
         )
         case = container.case_service.import_questionnaire(case_id, questionnaire, filename=filename)
@@ -704,6 +733,7 @@ async def import_clinical_summary_image(case_id: str, request: Request, file: Up
         filename=filename,
         content_type=file.content_type or "application/octet-stream",
         content=content,
+        case_id=case.id,
     )
     if extraction.error_message:
         raise HTTPException(status_code=400, detail=extraction.error_message)
@@ -1094,6 +1124,67 @@ def update_llm_config(payload: LLMConfigUpdateRequest, request: Request):
         temperature=refreshed_config.temperature,
         configured=bool(refreshed_config.base_url and refreshed_config.api_key and refreshed_config.model and not refreshed_validation_error),
         validation_error=refreshed_validation_error,
+    )
+
+
+@router.get("/system/llm-usage", response_model=LLMUsageListResponse)
+def list_llm_usage(
+    request: Request,
+    case_id: str | None = None,
+    analysis_id: str | None = None,
+    limit: int = 100,
+):
+    container = _container(request)
+    _require_admin(request)
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 1000")
+    return LLMUsageListResponse(
+        items=container.repository.list_llm_request_usage(
+            case_id=case_id,
+            analysis_id=analysis_id,
+            limit=limit,
+        )
+    )
+
+
+@router.get(
+    "/system/llm-rate-limit",
+    response_model=LLMRateLimitStatusResponse,
+)
+def get_llm_rate_limit_status(request: Request):
+    container = _container(request)
+    _require_admin(request)
+    return LLMRateLimitStatusResponse(
+        **container.llm_rate_limiter.snapshot()
+    )
+
+
+@router.get("/system/llm-usage/summary", response_model=LLMUsageSummaryResponse)
+def summarize_llm_usage(
+    request: Request,
+    window_minutes: int = 60,
+    case_id: str | None = None,
+    analysis_id: str | None = None,
+):
+    container = _container(request)
+    _require_admin(request)
+    if window_minutes < 1 or window_minutes > 1440:
+        raise HTTPException(
+            status_code=422,
+            detail="window_minutes must be between 1 and 1440",
+        )
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(minutes=window_minutes)
+    totals = container.repository.summarize_llm_request_usage(
+        since=since,
+        case_id=case_id,
+        analysis_id=analysis_id,
+    )
+    return LLMUsageSummaryResponse(
+        since=since,
+        until=until,
+        window_minutes=window_minutes,
+        **totals,
     )
 
 

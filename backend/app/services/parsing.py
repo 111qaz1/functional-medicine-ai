@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from app.domain.models import AbnormalFlag, ExtractedLabItem, ReferenceRange, SourceSpan
+from app.core.llm_request_control import llm_request_context
 from app.providers.base import OCRExtraction, OCRProvider
 
 
@@ -850,10 +851,37 @@ class DocumentParsingService:
         self.ocr_provider = ocr_provider
         self.normalization_service = normalization_service
 
-    def extract_text(self, *, filename: str, content_type: str, content: bytes) -> OCRExtraction:
-        return self.ocr_provider.extract(filename=filename, content_type=content_type, content=content)
+    def extract_text(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        case_id: str | None = None,
+        file_id: str | None = None,
+    ) -> OCRExtraction:
+        with llm_request_context(case_id=case_id, file_id=file_id):
+            return self.ocr_provider.extract(
+                filename=filename,
+                content_type=content_type,
+                content=content,
+            )
 
-    def parse(self, *, filename: str, content_type: str, content: bytes) -> tuple[OCRExtraction, list[ExtractedLabItem]]:
-        extraction = self.extract_text(filename=filename, content_type=content_type, content=content)
+    def parse(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        case_id: str | None = None,
+        file_id: str | None = None,
+    ) -> tuple[OCRExtraction, list[ExtractedLabItem]]:
+        extraction = self.extract_text(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            case_id=case_id,
+            file_id=file_id,
+        )
         lab_items = self.normalization_service.normalize(spans=extraction.spans)
         return extraction, lab_items

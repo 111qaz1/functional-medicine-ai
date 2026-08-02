@@ -1,226 +1,184 @@
-﻿# Functional Medicine Nutrition AI 本地部署版
+# Functional Medicine Nutrition AI
 
-本项目现在收敛为一个“本地可跑通”的功能医学营养推荐工作台。
+面向功能医学病例分析与营养干预审核的本地化工作台。系统负责病例资料预检、结构化提取、医生校对、身体系统分析、营养素草案、安全复核、报告发布和 PDF 导出。
 
-核心原则：
-- 不调用 `ima`
-- 上传阶段只做格式、大小、哈希、PDF 页数和文本层预检，不生成指标
-- 综合分析使用已配置的 Doubao Responses 模型；模型失败时明确失败并允许重试，不回退旧规则解析器
-- 营养素草案只基于医生确认后的异常、问卷和本地产品/禁忌/剂量规则生成
-- 所有推荐 SKU 只能来自本地 `30` 款产品目录
+## 核心原则
 
-## 当前已实现
+- 上传阶段只进行格式、大小、哈希、PDF 页数和文本层预检，不生成医学结论。
+- 病例资料经用户授权后才发送至配置的大模型服务。
+- 大模型负责文档语义提取和病例综合，不直接决定 SKU、剂量、禁忌或发布结果。
+- 产品资格、证据准入、产品排序、禁忌、剂量档位和审核发布由本地版本化规则控制。
+- 所有推荐产品均来自 `backend/app/data/product_catalog.json` 中的本地目录。
+- 最终结果必须经过医生校对和审核，不能替代医学诊断或治疗。
 
-- `backend/`：FastAPI 后端，包含统一资料预检、SQLite 分析任务、逐文件模型缓存、病例综合、异常校对、草案生成、审核发布和 PDF
-- `frontend/`：Next.js 工作台，支持统一上传、异步进度、只读 MSQ/专项摘要、数值及非数值异常校对、草案审核和发布
-- `MSQ`：与其他病例资料从同一上传区进入，由大模型转换为现有问卷结构；工作台只读展示
-- `frontend/app/products`：支持新增、修改、删除产品规则；保存后会直接影响后续新生成的推荐草案
-- `backend/app/data/product_catalog.json`：已替换为真实 `30` 款本地产品目录
-- `backend/app/data/knowledge_statements.json`：已替换为本地已审核知识条目
-- `backend/app/data/marker_dictionary.json`：已清理为可直接匹配中文指标的本地指标字典
-- `backend/app/repositories/in_memory.py`：已替换为基于 SQLite 的本地持久化仓储
-- `backend/tests/`：后端单测覆盖了解析和推荐边界
+## 主要功能
 
-## 本地目录约束
+- 统一上传病例报告、问卷、检查结果和补充说明。
+- 异步逐文件分析与病例级综合，支持失败重试和病例内文档缓存。
+- 固定 MSQ 模板本地结构化提取，普通医疗问卷由文档模型提取并进入人工校对。
+- 数值型、非数值型及患者自述病情校对，保留来源文件、页码和原文证据。
+- 异常指标按身体系统归类，并区分客观异常、患者自述和背景信息。
+- 本地产品目录、支持目标、系统覆盖、禁忌和安全规则匹配。
+- 按病例场景选择已批准剂量档位，支持医生改档并记录备注。
+- 慢性食物敏感、MSQ 等专项结果独立展示。
+- 可选本地 RAG 检索和患者可见报告解释融合。
+- 草案审核、发布、PDF 下载及外部 `/api/v1` 接口。
 
-产品目录已按当前业务规则收口：
-- `25 + 8` 个来源 sheet 最终保留 `30` 个逻辑 SKU
-- 删除 `综合消化酶`
-- 鱼油只保留 `11rTG鱼油90%`
-- 甘氨酸镁保留一个逻辑 SKU，并标记为 `pending_spec_decision`
+## 支持的资料格式
 
-## 如何打开程序
+- 文档：PDF、DOCX、PPTX、TXT、Markdown、CSV、JSON。
+- 图片：PNG、JPG/JPEG、BMP、GIF、TIF/TIFF、WebP。
+- 单文件默认上限为 50 MB。
+- 单个 PDF 默认最多 50 页，超出后需拆分上传。
+- PPTX 可提取幻灯片中的原生 DrawingML 文本；仅存在于嵌入图片中的文字不属于原生文本提取范围。
 
-推荐先进入项目根目录：
+## 技术架构
+
+- `backend/`：FastAPI、SQLite、异步分析任务、文档解析、病例综合、推荐与报告服务。
+- `frontend/`：Next.js 病例工作台、异常校对、草案审核、产品管理和系统配置界面。
+- `backend/app/data/`：产品目录、剂量映射、支持目标、知识和本地规则数据。
+- `.runtime/`：运行数据库、上传附件和生成结果；该目录不应提交到 Git。
+- `knowledge/`：部署方提供的本地知识目录。
+- `compose.yaml`：前后端 Docker Compose 编排。
+
+## Docker 快速启动
+
+### 1. 获取主分支
 
 ```bash
-cd <项目目录>
+git clone --branch main https://github.com/111qaz1/functional-medicine-ai.git
+cd functional-medicine-ai
 ```
 
-### 方式一：使用启动脚本
+### 2. 配置环境变量
 
-这是当前最推荐的本地打开方式，会同时拉起后端和前端，并按项目现有配置接入本地运行环境。
+```bash
+cp .env.example .env
+```
 
-当前综合分析使用 Doubao Responses 配置，先在项目根目录 `.env` 中确认：
+Windows PowerShell 可使用：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+至少设置模型 API Key 和外部接口共享密钥：
 
 ```env
-LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-LLM_API_KEY=你的 Ark API Key
-LLM_MODEL=doubao-seed-2-0-mini-260215
-LLM_API_STYLE=responses
+NEXT_PUBLIC_API_BASE_URL=http://localhost:7800
+BACKEND_PORT=7800
+FRONTEND_PORT=3100
+
+LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_API_KEY=替换为实际_API_Key
+LLM_MODEL=kimi-k2.6
+LLM_API_STYLE=chat
+
+FM_EXTERNAL_TRUST_SHARED_SECRET=替换为随机高强度字符串
 ```
 
-然后启动：
+如果部署机没有本地 `bge-m3` 模型，将 RAG 关闭：
 
-```bat
-scripts\start-local-doubao.cmd
+```env
+FM_RAG_ENABLED=0
+FM_RAG_LLM_FUSION_ENABLED=0
 ```
 
-启动后默认访问：
-- 前端工作台：`http://127.0.0.1:3000`
-- 后端健康检查：`http://127.0.0.1:8000/health`
+如果启用 RAG，请将完整模型放入项目根目录的 `bge-m3/`，并保留 `.env.example` 中的模型路径配置。
 
-停止本地服务：
-
-```bat
-scripts\stop-local.cmd
-```
-
-### 方式二：手动启动
-
-#### 后端
+### 3. 构建并启动
 
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+docker compose config
+docker compose up -d --build --remove-orphans
+docker compose ps
 ```
 
-后端健康检查：
-`http://127.0.0.1:8000/health`
+默认访问地址：
 
-#### 前端
+- 前端工作台：`http://localhost:3100`
+- 后端健康检查：`http://127.0.0.1:7800/health`
+- RAG 健康检查：`http://127.0.0.1:7800/health/rag`
 
-```bash
-cd frontend
-npm install
-npm run dev -- --hostname 127.0.0.1 --port 3000
-```
+端口以 `.env` 中的 `FRONTEND_PORT` 和 `BACKEND_PORT` 为准。
 
-前端默认地址：
-`http://127.0.0.1:3000`
+## 业务流程
 
-如果 `3000` 端口已被占用，Next.js 在某些启动方式下可能会自动切到 `3001` 或更高端口；请以终端日志里实际显示的地址为准。
+1. 创建病例并上传资料。
+2. 按需填写医生病例总结。
+3. 确认第三方模型处理授权并开始综合分析。
+4. 校对异常指标、患者自述病情及来源证据。
+5. 保存校对并生成营养素草案。
+6. 审核产品、剂量档位、安全提示和系统覆盖情况。
+7. 发布报告并下载 PDF。
 
-### 打开后如何确认程序正常
+## 模型与本地规则边界
 
-- 浏览器能打开前端工作台页面
-- 访问 `http://127.0.0.1:8000/health` 返回 `{"status":"ok"}`
-- 上传病例后，病例列表可以正常刷新
-
-## 默认流程
-
-1. 创建病例
-2. 从统一上传区上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图
-3. 确认第三方模型处理授权，点击“确认资料并开始综合分析”
-4. 等待逐文件分析、病例级综合和证据校验完成
-5. 医生修改、删除或补充数值与非数值异常
-6. 点击“保存校对并生成营养素草案”
-7. 审核发布并下载 PDF
-
-系统统一由大模型完成报告语义提取和病例综合；产品资格、产品排序、安全检查与剂量映射继续由本地版本化规则控制。
-
-## 产品管理说明
-
-在首页点击 `产品规则` 可进入产品管理页。
-
-目前支持：
-- 新增产品
-- 修改现有产品规则
-- 删除旧产品
-
-这些变更保存后会立即写入本地产品目录和 SQLite 仓储，后续重新生成的健康报告会自动读取最新产品规则，不需要额外重启服务。
+- 文本型资料由文档模型进行语义提取；扫描 PDF 和图片可进入视觉识别路径。
+- 固定 MSQ 模板优先使用本地确定性解析，歧义字段按字段或条目隔离，不清空整份问卷。
+- 病例缓存按病例隔离，不在不同病例之间复用文档分析结果。
+- 模型提出支持目标并引用证据，本地规则验证证据资格并映射候选产品。
+- 本地系统覆盖规则可以从已验证身体系统问题补充批准的支持目标，但不能创造异常或绕过安全规则。
+- 硬禁忌、用药、孕哺、年龄、肝肾安全、医生复核和剂量规则优先于覆盖数量。
+- RAG 仅用于经过过滤的知识解释，不修改病例事实、异常归属、产品、剂量或禁忌。
 
 ## 关键环境变量
 
-后端路径全部已环境变量化，避免写死本机绝对路径：
-- `FM_PROJECT_ROOT`
-- `FM_DATA_DIR`
-- `FM_RUNTIME_DIR`
-- `FM_UPLOAD_DIR`
-- `FM_SQLITE_PATH`
-- `FM_KNOWLEDGE_ROOT`
-- `FM_REPORT_REFERENCE_PATH`
-- `LLM_BASE_URL`
-- `LLM_API_KEY`
-- `LLM_MODEL`
-- `LLM_API_STYLE`
-- `LLM_TIMEOUT_SECONDS`
-- `LLM_TEMPERATURE`
-- `FM_LLM_RETRY_ATTEMPTS`（默认 `2`，表示初次请求失败后最多重试两次）
-- `FM_LLM_RETRY_BASE_DELAY_SECONDS`（默认 `1`）
-- `FM_LLM_RETRY_MAX_DELAY_SECONDS`（默认 `10`）
-- `FM_LLM_MAX_CONCURRENCY`（默认 `90`，Tier2 官方上限为 `100`）
-- `FM_LLM_RPM_SOFT_LIMIT`（默认 `475`，Tier2 官方上限为 `500`）
-- `FM_LLM_TPM_SOFT_LIMIT`（默认 `2850000`，Tier2 官方上限为 `3000000`）
-- `FM_LLM_RATE_LIMIT_WINDOW_SECONDS`（默认 `60`）
-- `FM_LLM_DEFAULT_COMPLETION_RESERVATION`（默认 `32768`，仅用于本地排队预约，不会作为输出上限发送给模型）
-- `FM_MAX_UPLOAD_MB`（默认 `50`）
-- `FM_MAX_PDF_PAGES`（默认 `50`，单个 PDF 超过 50 页时拒绝上传并提示拆分）
-- `FM_ANALYSIS_WORKERS`（默认且最大 `20`）
-- `FM_CASE_DOCUMENT_WORKERS`（默认且最大 `2`）
+完整配置以 `.env.example` 为准，常用项目包括：
 
-病例分析、OCR、病例助手、可选 Composer、RAG 报告融合和处方建议请求
-都会进入同一个进程内 FIFO 队列，同时受全局并发、RPM 和 TPM 软限制约束。
-服务会保存响应中的真实 token 用量，并在同类调用积累至少 5 条数据后使用
-历史 P95 动态调整后续预约量。应用不会向模型发送输出 token 上限。
+- `NEXT_PUBLIC_API_BASE_URL`：浏览器访问的后端地址；修改后需要重新构建前端镜像。
+- `BACKEND_PORT`、`FRONTEND_PORT`：宿主机端口。
+- `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_API_STYLE`：模型服务配置。
+- `LLM_TIMEOUT_SECONDS`、`LLM_THINKING_TIMEOUT_SECONDS`：普通请求和思考请求超时。
+- `FM_LLM_RETRY_ATTEMPTS`：临时网络或服务错误的自动重试次数。
+- `FM_LLM_MAX_CONCURRENCY`、`FM_LLM_RPM_SOFT_LIMIT`、`FM_LLM_TPM_SOFT_LIMIT`：全局并发及软限流。
+- `FM_ANALYSIS_WORKERS`、`FM_CASE_DOCUMENT_WORKERS`：分析任务和单病例文件并发。
+- `FM_MAX_UPLOAD_MB`、`FM_MAX_PDF_PAGES`：上传大小和 PDF 页数限制。
+- `FM_RAG_ENABLED`、`FM_RAG_LLM_FUSION_ENABLED`、`FM_RAG_MODEL_HOST_DIR`：RAG 开关和模型路径。
+- `FM_SESSION_COOKIE_SECURE`、`FM_CORS_ALLOW_ORIGINS`：生产环境 Cookie 和浏览器来源安全配置。
 
-前端：
-- `NEXT_PUBLIC_API_BASE_URL`
+## 产品与知识管理
 
-可直接参考仓库根目录的 `.env.example`。
+- 产品规则可在工作台的产品管理页面维护；新草案会读取保存后的目录。
+- 当前仓库产品目录包含 31 个逻辑 SKU，实际交付以版本库中的目录文件为准。
+- 原始 Excel、真实病例、患者附件、`.env`、`.runtime`、本地数据库和模型文件不得提交到 Git。
+- 进入自动推荐的知识必须具备已审核状态；参考资料不能直接改变产品、剂量或禁忌规则。
 
-## Docker 交付
-
-项目已补齐：
-- `backend/Dockerfile`
-- `frontend/Dockerfile`
-- `compose.yaml`
-- `.env.example`
-- `docs/deployment.md`
-- `docs/customer-api-delivery-guide.md`
-
-功能稳定后，可以直接用 Docker 方式把同一套本地版交给其他人部署。
-
-新成员第一次用 Docker 启动项目时，优先参考：`docs/docker-first-run.md`。
-Windows Docker 部署参考：`docs/windows-docker-deployment.md`。
-Ubuntu Docker 部署参考：`docs/ubuntu-docker-deployment.md`。
-如果以接口形式交付给外部系统，优先参考：`docs/customer-api-delivery-guide.md`。
-正式环境建议使用 Nginx 统一代理和 HTTPS，参考：`docs/nginx-production-deployment.md`。
-甲方正式部署推荐配置参考：`docs/production-recommended-config.md`。
-
-## 团队协作
-
-推荐使用“私有 Git 仓库或源码包交付 + Docker Compose 统一启动环境”的方式协作。Git 负责提交历史和版本追踪；Docker Compose 负责让部署方快速跑起同一套前后端环境。
-
-医学资料需要分级管理：整理后的 JSON/CSV 规则数据可以进入仓库，真实病例、原始 PDF/Word/Excel、`.env`、`.runtime` 和本地数据库不要进入 Git。
-
-## 验证
+## 验证命令
 
 后端测试：
+
 ```bash
 python -m unittest discover -s backend/tests -v
 ```
 
-前端构建：
+前端类型检查和构建：
+
 ```bash
 cd frontend
+npx tsc --noEmit
 npm run build
 ```
 
-## 当前边界
+Docker 配置检查：
 
-- `0316测试报告1.pdf` 当前只作为报告结构参考，不做 1:1 版式复刻
-- `功能医学相关资料` 目前按“全量纳管、仅已审核知识参与自动推荐”的方式处理
-- 病例综合分析必须配置 Doubao Responses 模型；产品、禁忌、剂量和审核发布仍由本地逻辑约束
-
-## 模型配置与边界
-
-当同时配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 和 `LLM_API_STYLE=responses` 后，工作台可启动异步病例综合分析。
-
-当前推荐配置：
-
-```env
-LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-LLM_API_KEY=你的 Ark API Key
-LLM_MODEL=doubao-seed-2-0-mini-260215
-LLM_API_STYLE=responses
+```bash
+docker compose config
 ```
 
-这套模式的边界是：
-- 医生确认第三方处理授权后，病例分析模型会读取上传资料的文本层或扫描页图像；上传阶段本身不调用模型
-- 病例分析模型不得输出产品、SKU、剂量和疗程；非法 JSON、超时或模型失败会明确标记任务失败，不走旧解析规则兜底
-- 医生校对后，模型只基于确认异常做一次文本重新综合，不重新读取 PDF
-- 草案阶段只把结构化病例上下文、本地候选产品和已审核知识命中交给 composer
-- 模型只能从本地规则已经筛出的候选 SKU 中做选择，任何目录外 SKU 都会被后端丢弃
-- 红旗风险、禁忌、剂量和人工审核等硬性边界由本地规则层决定，模型不能绕过
+## 部署文档
+
+- [Windows + Docker 部署](docs/windows-docker-deployment.md)
+- [Ubuntu + Docker 部署](docs/ubuntu-docker-deployment.md)
+- [Docker 首次启动](docs/docker-first-run.md)
+- [通用部署说明](docs/deployment.md)
+- [Nginx 正式环境部署](docs/nginx-production-deployment.md)
+- [生产环境推荐配置](docs/production-recommended-config.md)
+- [外部 API 交付指南](docs/customer-api-delivery-guide.md)
+
+## 安全与数据管理
+
+- 医疗资料应按敏感数据管理，仅授权人员可以访问运行目录、数据库、备份和日志。
+- 正式环境应使用 HTTPS、强随机密钥、受控 CORS、Secure Cookie、最小权限账号和定期备份。
+- 日志不得记录患者原文、模型原始响应、API Key、服务器绝对路径或附件文件名。
+- 删除病例、附件或运行目录前应确认备份和保留策略。

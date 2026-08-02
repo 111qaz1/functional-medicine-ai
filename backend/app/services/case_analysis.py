@@ -92,6 +92,53 @@ def is_chronic_food_sensitivity_filename(filename: str) -> bool:
     return "慢性食物敏感" in normalized
 
 
+_FOOD_SENSITIVITY_REPORT_TYPES = {
+    "food_sensitivity",
+    "chronic_food_sensitivity",
+    "food_igg",
+    "food_allergy",
+    "food_allergy_igg",
+    "chronic_food_allergy",
+}
+
+
+def is_chronic_food_sensitivity_report(
+    *,
+    filename: str = "",
+    report_type: str = "",
+    page_texts: list[Any] | None = None,
+) -> bool:
+    if is_chronic_food_sensitivity_filename(filename):
+        return True
+    normalized_type = re.sub(
+        r"[\s\-]+",
+        "_",
+        unicodedata.normalize("NFKC", report_type or "").strip().lower(),
+    )
+    if normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES:
+        return True
+    if not page_texts:
+        return False
+    text = unicodedata.normalize(
+        "NFKC",
+        "\n".join(str(getattr(page, "text", "") or "") for page in page_texts),
+    ).lower()
+    compact = re.sub(r"\s+", "", text)
+    return (
+        ("慢性食物敏感" in compact or "慢性食物过敏" in compact)
+        and "igg" in compact
+    )
+
+
+def has_chronic_food_sensitivity_content(
+    result: ChronicFoodSensitivityResult | None,
+) -> bool:
+    return bool(
+        result
+        and (result.mild_foods or result.moderate_foods or result.high_foods)
+    )
+
+
 class _StrictPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -304,7 +351,10 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "妊娠、用药或过敏信息有勾选冲突且无法确认时不得猜测，并在 warnings 中分别写入"
                 "__MSQ_UNRESOLVED__:pregnant_or_lactating、__MSQ_UNRESOLVED__:medications 或"
                 "__MSQ_UNRESOLVED__:allergies。"
-                "如为慢性食物敏感报告，单独提取轻/中/重度食物和三条原文解读。"
+                "如为慢性食物敏感或慢性食物过敏IgG报告，report_type必须返回food_sensitivity，"
+                "food_sensitivity不得为null；0级/阴性食物不得写入列表，1级/轻度写入mild_foods，"
+                "2级/中度写入moderate_foods，3级/重度写入high_foods，并提取最多三条原文解读。"
+                "报告明确存在阳性食物时，必须完整填入对应列表，不得只在summary中叙述。"
             )
             if questionnaire_content_retry:
                 prompt += (
@@ -2234,7 +2284,23 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     DOCUMENT_ANALYSIS_CACHE_VERSION = (
-        "document-analysis-v5-strict-reference-boundaries"
+        "document-analysis-v6-food-sensitivity-structured-results"
+    )
+    FOOD_SENSITIVITY_EXTRACTION_FAILURE = (
+        "慢性食物敏感结果提取失败，请重新分析或人工补录。"
+    )
+    _FOOD_LEVEL_BY_GRADE = {"1": "mild", "2": "moderate", "3": "high"}
+    _FOOD_RESULT_ROW_PATTERN = re.compile(
+        r"^\s*(?P<name>[\u4e00-\u9fffA-Za-zΑ-Ωα-ω·（）()\-\s]{1,40}?)\s+"
+        r"(?P<value>[<>≤≥]?\s*\d+(?:\.\d+)?)"
+        r"(?:\s*[A-Za-zμµ/%]+)?\s*"
+        r"(?P<grade>[0-3])\s*级\s*"
+        r"(?P<degree>阴性|(?:轻度|中度|重度)(?:慢性)?(?:食物)?过敏)\s*$"
+    )
+    _FOOD_SUMMARY_ROW_PATTERN = re.compile(
+        r"[“\"]?(?P<grade>[1-3])\s*级\s*[”\"]?\s*"
+        r"(?P<degree>(?:轻度|中度|重度)(?:慢性)?(?:食物)?过敏)\s*"
+        r"(?P<foods>[^\n]+?)\s*$"
     )
     MSQ_FIELD_LABELS = {
         "age": "患者年龄",
@@ -2480,7 +2546,10 @@ class CaseAnalysisService:
             synthesis_results = [
                 result
                 for result in results
-                if not is_chronic_food_sensitivity_filename(result.file_name)
+                if not is_chronic_food_sensitivity_report(
+                    filename=result.file_name,
+                    report_type=result.report_type,
+                )
             ]
             synthesis = self.provider.synthesize_case(
                 clinical_summary_text=case.clinical_summary_text,
@@ -2582,12 +2651,20 @@ class CaseAnalysisService:
             self._save(analysis)
             raise ValueError("病例资料已变化，请重新进行综合分析。")
         files_by_id = {item.id: item for item in case.files if item.id in analysis.file_ids}
+        food_report_file_ids = {
+            result.file_id
+            for result in analysis.document_results
+            if is_chronic_food_sensitivity_report(
+                filename=result.file_name,
+                report_type=result.report_type,
+            )
+        }
         normalized_findings: list[AbnormalFinding] = []
         for finding in abnormal_findings:
             source_file = files_by_id.get(finding.source_file_id)
             if not source_file:
                 raise ValueError("异常发现引用了分析快照以外的文件。")
-            if is_chronic_food_sensitivity_filename(source_file.filename):
+            if source_file.id in food_report_file_ids:
                 continue
             finding = finding.model_copy(
                 update={"source_page": logical_source_page(source_file, finding.source_page)}
@@ -2826,7 +2903,10 @@ class CaseAnalysisService:
                 }
             )
             for result in analysis.document_results
-            if not is_chronic_food_sensitivity_filename(result.file_name)
+            if not is_chronic_food_sensitivity_report(
+                filename=result.file_name,
+                report_type=result.report_type,
+            )
         ]
 
     @staticmethod
@@ -3036,6 +3116,157 @@ class CaseAnalysisService:
     def shutdown(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)
 
+    @staticmethod
+    def _food_degree_level(degree: str) -> str | None:
+        if "轻度" in degree:
+            return "mild"
+        if "中度" in degree:
+            return "moderate"
+        if "重度" in degree:
+            return "high"
+        return None
+
+    @classmethod
+    def _source_food_sensitivity_entries(
+        cls,
+        uploaded_file,
+    ) -> tuple[list[tuple[str, str, int]], list[str]]:
+        entries: list[tuple[str, str, int]] = []
+        warnings: list[str] = []
+        for page in uploaded_file.page_texts:
+            page_number = logical_source_page(uploaded_file, page.page)
+            text = unicodedata.normalize("NFKC", page.text or "")
+            for raw_line in text.splitlines():
+                line = re.sub(r"\s+", " ", raw_line).strip()
+                if not line:
+                    continue
+                row_match = cls._FOOD_RESULT_ROW_PATTERN.match(line)
+                if row_match:
+                    grade = row_match.group("grade")
+                    degree = row_match.group("degree")
+                    if grade == "0" or degree == "阴性":
+                        continue
+                    grade_level = cls._FOOD_LEVEL_BY_GRADE.get(grade)
+                    degree_level = cls._food_degree_level(degree)
+                    name = row_match.group("name").strip(" ：:，,；;、")
+                    if not name or grade_level != degree_level:
+                        warnings.append(
+                            f"慢性食物敏感项目{name or '未命名项目'}的等级与程度不一致，已留待确认。"
+                        )
+                        continue
+                    entries.append((name, degree_level, page_number))
+                    continue
+
+                summary_match = cls._FOOD_SUMMARY_ROW_PATTERN.search(line)
+                if not summary_match:
+                    continue
+                grade = summary_match.group("grade")
+                degree = summary_match.group("degree")
+                grade_level = cls._FOOD_LEVEL_BY_GRADE.get(grade)
+                degree_level = cls._food_degree_level(degree)
+                if grade_level != degree_level:
+                    warnings.append(
+                        "慢性食物敏感汇总行的等级与程度不一致，已留待确认。"
+                    )
+                    continue
+                foods = [
+                    item.strip(" ：:，,；;、。")
+                    for item in re.split(r"[、,，;；]", summary_match.group("foods"))
+                ]
+                for name in foods:
+                    if (
+                        not name
+                        or len(name) > 40
+                        or any(token in name for token in ("项目名称", "检测结果", "过敏等级"))
+                    ):
+                        continue
+                    entries.append((name, degree_level, page_number))
+        return entries, list(dict.fromkeys(warnings))
+
+    @classmethod
+    def _normalize_food_sensitivity_result(
+        cls,
+        uploaded_file,
+        result: DocumentAnalysisResult,
+    ) -> DocumentAnalysisResult:
+        if not is_chronic_food_sensitivity_report(
+            filename=result.file_name,
+            report_type=result.report_type,
+            page_texts=uploaded_file.page_texts,
+        ):
+            return result
+
+        food = result.food_sensitivity or ChronicFoodSensitivityResult(
+            source_file_id=uploaded_file.id,
+            source_file_name=uploaded_file.filename,
+        )
+        entries: list[tuple[str, str, int]] = []
+        entries.extend((name, "mild", food.source_page) for name in food.mild_foods)
+        entries.extend(
+            (name, "moderate", food.source_page) for name in food.moderate_foods
+        )
+        entries.extend((name, "high", food.source_page) for name in food.high_foods)
+        source_entries, source_warnings = cls._source_food_sensitivity_entries(
+            uploaded_file
+        )
+        entries.extend(source_entries)
+
+        foods_by_key: dict[str, tuple[str, str, int]] = {}
+        conflicting_keys: set[str] = set()
+        warnings = (
+            [food.warning]
+            if food.warning
+            and cls.FOOD_SENSITIVITY_EXTRACTION_FAILURE not in food.warning
+            else []
+        )
+        warnings.extend(source_warnings)
+        for name, level, page_number in entries:
+            clean_name = re.sub(r"\s+", " ", name).strip()
+            key = re.sub(r"[\s_\-（）()\[\]【】]+", "", clean_name).lower()
+            if not key or key in conflicting_keys:
+                continue
+            existing = foods_by_key.get(key)
+            if existing and existing[1] != level:
+                conflicting_keys.add(key)
+                foods_by_key.pop(key, None)
+                warnings.append(
+                    f"慢性食物敏感项目{clean_name}存在不同等级，已留待确认。"
+                )
+                continue
+            if not existing:
+                foods_by_key[key] = (clean_name, level, page_number)
+
+        normalized_lists = {
+            level: [
+                name
+                for name, entry_level, _ in foods_by_key.values()
+                if entry_level == level
+            ]
+            for level in ("mild", "moderate", "high")
+        }
+        positive_pages = [page for _, _, page in foods_by_key.values()]
+        has_content = any(normalized_lists.values())
+        if not has_content:
+            warnings.append(cls.FOOD_SENSITIVITY_EXTRACTION_FAILURE)
+        normalized_food = food.model_copy(
+            update={
+                "source_file_id": uploaded_file.id,
+                "source_file_name": uploaded_file.filename,
+                "source_page": min(positive_pages) if positive_pages else food.source_page,
+                "mild_foods": normalized_lists["mild"],
+                "moderate_foods": normalized_lists["moderate"],
+                "high_foods": normalized_lists["high"],
+                "valid": has_content,
+                "warning": "；".join(dict.fromkeys(warnings)) if warnings else None,
+            }
+        )
+        return result.model_copy(
+            update={
+                "report_type": "food_sensitivity",
+                "food_sensitivity": normalized_food,
+            }
+        )
+
     def _analyze_with_cache(self, case, uploaded_file) -> DocumentAnalysisResult:
         owner_scope = f"case:{case.id}"
         parser_version = getattr(
@@ -3060,8 +3291,11 @@ class CaseAnalysisService:
         cache_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
         cached = self.repository.get_document_analysis_cache(cache_key, owner_scope)
         if cached:
-            result = DocumentAnalysisResult.model_validate(cached)
-            if not self._is_uncacheable_empty_questionnaire_result(
+            result = self._normalize_food_sensitivity_result(
+                uploaded_file,
+                DocumentAnalysisResult.model_validate(cached),
+            )
+            if not self._is_uncacheable_document_result(
                 uploaded_file,
                 result,
             ):
@@ -3103,13 +3337,14 @@ class CaseAnalysisService:
         result = self._structured_questionnaire_result(uploaded_file)
         if result is None:
             result = self.provider.analyze_document(uploaded_file)
-        if self._is_uncacheable_empty_questionnaire_result(
+        result = self._normalize_food_sensitivity_result(uploaded_file, result)
+        if self._is_uncacheable_document_result(
             uploaded_file,
             result,
         ):
             logger.warning(
-                "Medical questionnaire result was not cached because structured "
-                "content is empty"
+                "Document result was not cached because required structured content "
+                "is empty"
             )
         else:
             self.repository.save_document_analysis_cache(
@@ -3118,6 +3353,25 @@ class CaseAnalysisService:
                 result.model_dump(mode="json"),
             )
         return result
+
+    @staticmethod
+    def _is_uncacheable_document_result(
+        uploaded_file,
+        result: DocumentAnalysisResult,
+    ) -> bool:
+        empty_questionnaire = CaseAnalysisService._is_uncacheable_empty_questionnaire_result(
+            uploaded_file,
+            result,
+        )
+        empty_food_sensitivity = (
+            is_chronic_food_sensitivity_report(
+                filename=result.file_name,
+                report_type=result.report_type,
+                page_texts=uploaded_file.page_texts,
+            )
+            and not has_chronic_food_sensitivity_content(result.food_sensitivity)
+        )
+        return empty_questionnaire or empty_food_sensitivity
 
     @staticmethod
     def _is_uncacheable_empty_questionnaire_result(
@@ -3240,7 +3494,10 @@ class CaseAnalysisService:
         ] = []
 
         for result in document_results:
-            if is_chronic_food_sensitivity_filename(result.file_name):
+            if is_chronic_food_sensitivity_report(
+                filename=result.file_name,
+                report_type=result.report_type,
+            ):
                 continue
             if not result.questionnaire:
                 continue
@@ -3357,16 +3614,21 @@ class CaseAnalysisService:
                 for warning in result.warnings
                 if not warning.startswith(self.MSQ_UNRESOLVED_PREFIX)
             )
-            is_food_sensitivity_file = is_chronic_food_sensitivity_filename(result.file_name)
+            is_food_sensitivity_file = is_chronic_food_sensitivity_report(
+                filename=result.file_name,
+                report_type=result.report_type,
+            )
             if is_food_sensitivity_file:
-                if result.food_sensitivity:
-                    if result.food_sensitivity.valid:
-                        food_results.append((result_order.get(result.file_id, 0), result.food_sensitivity))
-                    elif result.food_sensitivity.warning:
-                        analysis.warnings.append(result.food_sensitivity.warning)
-                else:
+                food_result = result.food_sensitivity
+                if has_chronic_food_sensitivity_content(food_result) and food_result:
+                    food_results.append(
+                        (result_order.get(result.file_id, 0), food_result)
+                    )
+                if food_result and food_result.warning:
+                    analysis.warnings.append(food_result.warning)
+                elif not has_chronic_food_sensitivity_content(food_result):
                     analysis.warnings.append(
-                        f"{result.file_name} 的慢性食物敏感结果识别失败，已跳过该章节。"
+                        self.FOOD_SENSITIVITY_EXTRACTION_FAILURE
                     )
                 # This report has a dedicated optional section. Its table rows must
                 # never re-enter generic abnormal review, system ranking or products.
@@ -3397,10 +3659,11 @@ class CaseAnalysisService:
                             )
                         findings.append(validated_projected)
             if result.food_sensitivity:
-                if result.food_sensitivity.valid:
-                    food_results.append((result_order.get(result.file_id, 0), result.food_sensitivity))
-                elif result.food_sensitivity.warning:
-                    analysis.warnings.append(result.food_sensitivity.warning)
+                food_result = result.food_sensitivity
+                if has_chronic_food_sensitivity_content(food_result):
+                    food_results.append((result_order.get(result.file_id, 0), food_result))
+                if food_result.warning:
+                    analysis.warnings.append(food_result.warning)
             elif "food" in result.report_type.lower() or "食物敏感" in result.report_type:
                 analysis.warnings.append(f"{result.file_name} 的慢性食物敏感结果识别失败，已跳过该章节。")
             for finding in result.abnormal_findings:
@@ -3469,6 +3732,8 @@ class CaseAnalysisService:
             if len(food_results) > 1:
                 analysis.warnings.append("检测到多份慢性食物敏感报告，已采用最后上传且有效的一份。")
             analysis.food_sensitivity = sorted(food_results, key=lambda item: item[0])[-1][1]
+        else:
+            analysis.food_sensitivity = None
         analysis.abnormal_findings = findings
         analysis.ignored_files = ignored_files
         analysis.warnings = list(dict.fromkeys(analysis.warnings))
@@ -4148,7 +4413,7 @@ class CaseAnalysisService:
         if grouped_findings:
             sections["异常指标汇总"] = grouped_findings
         food = analysis.food_sensitivity
-        if food and food.valid:
+        if has_chronic_food_sensitivity_content(food):
             food_lines = [
                 "轻度：" + ("、".join(food.mild_foods) if food.mild_foods else "无"),
                 "中度：" + ("、".join(food.moderate_foods) if food.moderate_foods else "无"),

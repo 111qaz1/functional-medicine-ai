@@ -49,8 +49,9 @@ class QuestionnaireParseResult:
 
 
 class QuestionnaireImportService:
-    PARSER_VERSION = "msq-structured-v3-local-only"
+    PARSER_VERSION = "msq-structured-v5-medication-fields"
     _WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    _MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
     _DOCX_SUFFIXES = {".docx"}
     _PDF_SUFFIXES = {".pdf"}
     _CHECKED_MARKERS = {"☑", "√", "■"}
@@ -106,9 +107,13 @@ class QuestionnaireImportService:
     def matches_template(self, *, filename: str, content_type: str, content: bytes) -> bool:
         """Recognize the fixed MSQ form from its content, never from filename alone."""
         suffix = Path(filename).suffix.lower()
+        has_structured_symptom_table = False
         try:
             if suffix in self._DOCX_SUFFIXES:
                 paragraphs, tables = self._extract_docx_structure(content)
+                has_structured_symptom_table = bool(
+                    self._find_msq_symptom_tables(tables)
+                )
                 text = " ".join(
                     [*paragraphs, *(cell for table in tables for row in table for cell in row)]
                 )
@@ -122,9 +127,12 @@ class QuestionnaireImportService:
         compact = re.sub(r"\s+", "", text)
         marker_count = sum(marker in compact for marker in self._TEMPLATE_MARKERS)
         has_symptom_matrix = (
-            "级别序号症状描述从来没有" in compact
+            has_structured_symptom_table
+            or self._has_msq_symptom_header(compact)
             or ("症状评估" in compact and all(score in compact for score in ("0", "1", "2", "3", "4")))
         )
+        if has_structured_symptom_table and self._TEMPLATE_MARKERS[1] not in compact:
+            marker_count += 1
         return has_symptom_matrix and marker_count >= 2
 
     def parse(self, *, filename: str, content_type: str, content: bytes) -> Questionnaire:
@@ -182,6 +190,8 @@ class QuestionnaireImportService:
         except ET.ParseError as exc:
             raise ValueError("问卷 DOCX 结构无法解析，请确认文件格式正确。") from exc
 
+        self._select_active_alternate_content(root)
+
         paragraphs: list[str] = []
         body = root.find("w:body", self._WORD_NS)
         if body is not None:
@@ -207,6 +217,38 @@ class QuestionnaireImportService:
             if rows:
                 tables.append(rows)
         return paragraphs, tables
+
+    def _select_active_alternate_content(self, root: ET.Element) -> None:
+        """Keep one Word compatibility branch so visible content is parsed once."""
+        alternate_tag = f"{{{self._MC_NS}}}AlternateContent"
+        choice_tag = f"{{{self._MC_NS}}}Choice"
+        fallback_tag = f"{{{self._MC_NS}}}Fallback"
+
+        def visit(parent: ET.Element) -> None:
+            for child in list(parent):
+                if child.tag != alternate_tag:
+                    visit(child)
+                    continue
+
+                choice = next(
+                    (item for item in list(child) if item.tag == choice_tag),
+                    None,
+                )
+                fallback = next(
+                    (item for item in list(child) if item.tag == fallback_tag),
+                    None,
+                )
+                selected = choice if choice is not None else fallback
+                insert_at = list(parent).index(child)
+                parent.remove(child)
+                if selected is None:
+                    continue
+                for selected_child in list(selected):
+                    parent.insert(insert_at, selected_child)
+                    visit(selected_child)
+                    insert_at += 1
+
+        visit(root)
 
     def _build_pdf_questionnaire(self, text: str) -> Questionnaire:
         full_text = self._normalize_pdf_text(text)
@@ -422,11 +464,12 @@ class QuestionnaireImportService:
             allergy_row_index, allergy_row = self._find_row(major_problem_table, "药物过敏")
             if medication_row and not self._is_no_selected(" ".join(medication_row)):
                 next_boundary = allergy_row_index if allergy_row_index is not None else len(major_problem_table)
-                for row in major_problem_table[(medication_row_index or 0) + 1 : next_boundary]:
-                    joined = " ".join(row)
-                    if any(keyword in joined for keyword in ("西药", "中药", "名称", "剂量", "频率", "如有")):
-                        continue
-                    medications.extend(self._split_terms(joined))
+                medication_rows = major_problem_table[
+                    (medication_row_index or 0) + 1 : next_boundary
+                ]
+                medications.extend(
+                    self._extract_docx_medications(medication_rows)
+                )
             if allergy_row and self._is_yes_selected(" ".join(allergy_row)):
                 detail_index = (allergy_row_index or 0) + 1
                 if detail_index < len(major_problem_table):
@@ -591,33 +634,23 @@ class QuestionnaireImportService:
             if female_notes:
                 additional_notes.append("；".join(female_notes))
 
-        symptom_tables = self._find_tables(tables, "级别序号症状描述从来没有")
         bowel_markers: list[str] = []
-        if symptom_tables:
-            current_section = ""
-            for symptom_table in symptom_tables:
-                for row in symptom_table[2:]:
-                    if len(row) < 2:
-                        continue
-                    first_cell = row[0]
-                    symptom_name = row[1] if len(row) > 1 else ""
-                    for raw_section in self._MSQ_SECTION_MAP:
-                        if raw_section in first_cell:
-                            current_section = raw_section
-                            break
-
-                    score = self._extract_msq_score(row[2:7] if len(row) >= 7 else row[2:])
-                    if not symptom_name or score is None:
-                        continue
-                    if score > 0:
-                        symptoms.append(symptom_name)
-                        if symptom_name in {"便秘", "腹泻"}:
-                            bowel_markers.append(symptom_name)
-                        if any(keyword in symptom_name for keyword in ("忧郁", "焦虑", "烦躁", "紧张", "情绪", "暴躁")):
-                            emotional_state.append(symptom_name)
-                    if current_section and score > 0:
-                        for mapped_section in self._MSQ_SECTION_MAP[current_section]:
-                            msq_system_scores[mapped_section] = max(msq_system_scores.get(mapped_section, 0), score)
+        for row, current_section, status, score in self._msq_symptom_rows(tables):
+            symptom_name = row[1] if len(row) > 1 else ""
+            if status != "valid" or not symptom_name or score is None:
+                continue
+            if score > 0:
+                symptoms.append(symptom_name)
+                if symptom_name in {"便秘", "腹泻"}:
+                    bowel_markers.append(symptom_name)
+                if any(keyword in symptom_name for keyword in ("忧郁", "焦虑", "烦躁", "紧张", "情绪", "暴躁")):
+                    emotional_state.append(symptom_name)
+            if current_section and score > 0:
+                for mapped_section in self._MSQ_SECTION_MAP[current_section]:
+                    msq_system_scores[mapped_section] = max(
+                        msq_system_scores.get(mapped_section, 0),
+                        score,
+                    )
 
         goal_table = self._find_table(tables, "您希望以何种方式来促进健康呢")
         if goal_table:
@@ -874,45 +907,22 @@ class QuestionnaireImportService:
                     "MSQ 运动习惯选项存在冲突，已留空，请人工确认。",
                 )
 
-        symptom_tables = self._find_tables(tables, "级别序号症状描述从来没有")
         ambiguous_rows: list[str] = []
         ambiguous_systems: set[str] = set()
-        ambiguous_count = 0
-        current_section = ""
-        for table in symptom_tables:
-            table_ambiguities: list[str] = []
-            for row in table[2:]:
-                first_cell = row[0] if row else ""
-                for raw_section in self._MSQ_SECTION_MAP:
-                    if raw_section in first_cell:
-                        current_section = raw_section
-                        break
-                marker_cells = row[2:7] if len(row) >= 7 else row[2:]
-                checked_count = sum(
-                    self._contains_checked_marker(cell) for cell in marker_cells
-                )
-                if (marker_cells and checked_count > 1) or (
-                    len(row) < 7 and any(marker in " ".join(row) for marker in self._ALL_MARKERS)
-                ):
-                    table_ambiguities.append(" | ".join(row))
-                    ambiguous_count += 1
-                    ambiguous_systems.update(
-                        self._MSQ_SECTION_MAP.get(current_section, [])
-                    )
-            if table_ambiguities:
-                ambiguous_rows.extend(
-                    [
-                        *(" | ".join(row) for row in table[:2]),
-                        *table_ambiguities,
-                    ]
-                )
+        for row, current_section, status, _ in self._msq_symptom_rows(tables):
+            if status != "ambiguous":
+                continue
+            ambiguous_rows.append(" | ".join(row))
+            ambiguous_systems.update(
+                self._MSQ_SECTION_MAP.get(current_section, [])
+            )
         if ambiguous_rows:
             evidence = "\n".join(ambiguous_rows[:12])
             self._mark_partial(
                 result,
                 "symptoms",
                 evidence,
-                f"MSQ 有 {ambiguous_count} 条症状评分存在多选或列错位，"
+                f"MSQ 有 {len(ambiguous_rows)} 条症状评分存在多选或列错位，"
                 "已忽略这些条目，其余已确认症状保留。",
             )
             retained_scores = {
@@ -1272,11 +1282,19 @@ class QuestionnaireImportService:
         return "\n".join(" | ".join(row) for row in table[:16])[:3000]
 
     def _has_only_placeholder_terms(self, values: list[str]) -> bool:
+        placeholders = {
+            "如有",
+            "如有请具体说明",
+            "如有请说明",
+            "请具体说明",
+            "请说明",
+            "名称",
+            "剂量",
+            "频率",
+            "名称剂量频率",
+        }
         return bool(values) and all(
-            any(
-                placeholder in value
-                for placeholder in ("如有", "请具体说明", "请说明", "名称", "剂量", "频率")
-            )
+            re.sub(r"[\s_:：,，;；。()（）]+", "", value) in placeholders
             for value in values
         )
 
@@ -1525,6 +1543,78 @@ class QuestionnaireImportService:
                 return section
         return ""
 
+    def _has_msq_symptom_header(self, text: str) -> bool:
+        compact = re.sub(r"\s+", "", text or "")
+        return (
+            all(token in compact for token in ("级别", "序号", "症状描述"))
+            and re.search(r"从(?:来)?没有(?:过)?", compact) is not None
+            and "01234" in compact
+        )
+
+    def _find_msq_symptom_tables(
+        self,
+        tables: list[list[list[str]]],
+    ) -> list[list[list[str]]]:
+        results: list[list[list[str]]] = []
+        seen: set[tuple[tuple[str, ...], ...]] = set()
+        for table in tables:
+            header = "".join(cell for row in table[:2] for cell in row)
+            if not self._has_msq_symptom_header(header):
+                continue
+            signature = tuple(
+                tuple(self._clean_text(cell) for cell in row)
+                for row in table
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            results.append(table)
+        return results
+
+    def _parse_msq_symptom_row(self, row: list[str]) -> tuple[str, int | None]:
+        if len(row) < 2:
+            return "not_score_row", None
+        marker_cells = row[2:7] if len(row) >= 7 else row[2:]
+        markers = [
+            marker
+            for cell in marker_cells
+            for marker in cell
+            if marker in self._ALL_MARKERS
+        ]
+        if not markers:
+            return "not_score_row", None
+        if len(markers) != 5:
+            return "ambiguous", None
+        selected = [
+            index
+            for index, marker in enumerate(markers)
+            if marker in self._CHECKED_MARKERS
+        ]
+        if not selected:
+            return "blank", None
+        if len(selected) == 1:
+            return "valid", selected[0]
+        return "ambiguous", None
+
+    def _msq_symptom_rows(
+        self,
+        tables: list[list[list[str]]],
+    ) -> list[tuple[list[str], str, str, int | None]]:
+        results: list[tuple[list[str], str, str, int | None]] = []
+        for table in self._find_msq_symptom_tables(tables):
+            current_section = ""
+            for row in table[2:]:
+                if len(row) < 2:
+                    continue
+                first_cell = row[0]
+                for raw_section in self._MSQ_SECTION_MAP:
+                    if raw_section in first_cell:
+                        current_section = raw_section
+                        break
+                status, score = self._parse_msq_symptom_row(row)
+                results.append((row, current_section, status, score))
+        return results
+
     def _find_table(self, tables: list[list[list[str]]], keyword: str) -> list[list[str]]:
         for table in tables:
             joined = " ".join(cell for row in table[:6] for cell in row)
@@ -1629,6 +1719,74 @@ class QuestionnaireImportService:
             return []
         parts = re.split(r"[、,，;；/\n]+", cleaned)
         return self._dedupe(parts)
+
+    def _extract_docx_medications(self, rows: list[list[str]]) -> list[str]:
+        """Extract filled medication values without treating Word labels as data."""
+        medications: list[str] = []
+        placeholder_values = {
+            "",
+            "西药",
+            "中药",
+            "名称",
+            "剂量",
+            "频率",
+            "名称剂量频率",
+        }
+
+        for row in rows:
+            cells = [self._clean_text(cell) for cell in row]
+            cells = [cell for cell in cells if cell]
+            if not cells:
+                continue
+
+            compact_row = "".join(cells).replace(" ", "")
+            if compact_row in {"西药中药", "中药西药"}:
+                continue
+
+            parsed_compact = False
+            for cell in cells:
+                compact = re.sub(r"[\s_]+", "", cell)
+                if not all(label in compact for label in ("名称", "剂量", "频率")):
+                    continue
+
+                name_label = compact.find("名称")
+                dose_label = compact.find("剂量", name_label + 2)
+                frequency_label = compact.find("频率", dose_label + 2)
+                if not (0 <= name_label < dose_label < frequency_label):
+                    continue
+
+                prefix = compact[:name_label]
+                between_name_and_dose = compact[name_label + 2 : dose_label]
+                dose = compact[dose_label + 2 : frequency_label]
+                frequency = compact[frequency_label + 2 :]
+                name = prefix or between_name_and_dose
+                if name and name not in placeholder_values:
+                    details = "；".join(
+                        detail
+                        for detail in (
+                            f"剂量：{dose}" if dose else "",
+                            f"频率：{frequency}" if frequency else "",
+                        )
+                        if detail
+                    )
+                    medications.append(
+                        f"{name}（{details}）" if details else name
+                    )
+                parsed_compact = True
+                break
+
+            if parsed_compact:
+                continue
+
+            values = [
+                cell
+                for cell in cells
+                if re.sub(r"[\s_]+", "", cell) not in placeholder_values
+                and not cell.startswith("如有")
+            ]
+            medications.extend(self._split_terms("；".join(values)))
+
+        return self._dedupe(medications)
 
     def _compose_named_frequency(self, name: str, frequency: str) -> str:
         normalized_name = self._clean_text(name)

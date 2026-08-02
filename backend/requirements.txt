@@ -6,6 +6,7 @@ python-dotenv==1.2.1
 httpx==0.28.1
 reportlab==4.4.1
 pypdf==5.4.0
+pdfplumber==0.11.9
 pypdfium2==4.30.0
 Pillow==11.2.1
 numpy==2.4.6

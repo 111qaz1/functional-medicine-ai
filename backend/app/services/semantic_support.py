@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import uuid
 from pathlib import Path
@@ -26,6 +27,24 @@ from app.services.evidence_policy import (
 
 class SemanticSupportService:
     """Validate model-proposed support needs without exposing products to the model."""
+
+    _TRUSTED_QUESTIONNAIRE_CLINICAL_FIELDS = frozenset(
+        {
+            "symptoms",
+            "known_conditions",
+            "emotional_state",
+            "chief_concerns",
+            "chemical_sensitivity",
+        }
+    )
+    _QUESTIONNAIRE_FIELD_GOAL_ALLOWLIST = {
+        "chemical_sensitivity": frozenset({"antioxidant"}),
+    }
+    _MSQ_SCORE_GOAL_SECTIONS = {
+        "sleep_stress": frozenset({"情绪", "能量/活动"}),
+        "neuro_cognitive": frozenset({"思维", "头部"}),
+        "energy_mitochondria": frozenset({"能量/活动"}),
+    }
 
     _FOLLOW_UP_ONLY_PATTERNS = (
         "结节",
@@ -54,6 +73,17 @@ class SemanticSupportService:
             for item in payload.get("products", [])
             if isinstance(item, dict) and item.get("sku_id")
         }
+        self.system_coverage_rules = sorted(
+            (
+                item
+                for item in payload.get("system_coverage_rules", [])
+                if isinstance(item, dict)
+                and item.get("rule_id")
+                and item.get("system_id") in SYSTEM_NAMES
+                and item.get("goal_code") in self.goals
+            ),
+            key=lambda item: (int(item.get("priority") or 999), str(item.get("rule_id"))),
+        )
 
     @property
     def goal_codes(self) -> tuple[str, ...]:
@@ -67,6 +97,15 @@ class SemanticSupportService:
                 "definition": str(item.get("definition") or ""),
                 "system_id": str(item.get("system_id") or ""),
                 "eligible_directions": list(item.get("eligible_directions") or []),
+                "objective_evidence_markers": list(
+                    item.get("objective_evidence_markers") or []
+                ),
+                "objective_evidence_terms": list(
+                    item.get("objective_evidence_terms") or []
+                ),
+                "safety_context_markers": list(
+                    item.get("safety_context_markers") or []
+                ),
             }
             for code, item in self.goals.items()
         ]
@@ -103,6 +142,7 @@ class SemanticSupportService:
             evidence_classes: list[ClinicalEvidenceClass] = []
             referenced_findings: list[AbnormalFinding] = []
             has_doctor_summary = False
+            has_trusted_questionnaire_evidence = False
             for evidence in candidate.evidence_refs:
                 ref = evidence.ref.strip()
                 if ref.startswith("finding:"):
@@ -143,22 +183,89 @@ class SemanticSupportService:
                     strengths.append(local_strength)
                     continue
                 if ref.startswith("questionnaire:"):
-                    field = ref.split(":", 1)[1]
-                    value = getattr(questionnaire, field, None) if questionnaire else None
+                    field_path = ref.split(":", 1)[1].strip()
+                    if not field_path:
+                        notes.append("问卷证据字段名为空，已拒绝该引用。")
+                        continue
+                    field = field_path
+                    msq_section: str | None = None
+                    if field_path.startswith("msq_system_scores."):
+                        path_parts = field_path.split(".")
+                        if len(path_parts) != 2 or not path_parts[1].strip():
+                            notes.append("MSQ 系统评分证据路径不合法，已拒绝该引用。")
+                            continue
+                        field = "msq_system_scores"
+                        msq_section = path_parts[1].strip()
+                        scores = questionnaire.msq_system_scores if questionnaire else {}
+                        value = scores.get(msq_section)
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, int)
+                            or not 0 <= value <= 4
+                            or value == 0
+                        ):
+                            notes.append(
+                                f"MSQ 系统评分引用无有效正分值：{msq_section}。"
+                            )
+                            continue
+                        allowed_sections = self._MSQ_SCORE_GOAL_SECTIONS.get(
+                            goal_code or "",
+                            frozenset(),
+                        )
+                        if msq_section not in allowed_sections:
+                            notes.append(
+                                f"MSQ 系统评分与支持目标不匹配：{msq_section}。"
+                            )
+                            continue
+                        canonical_ref = (
+                            f"questionnaire:msq_system_scores.{msq_section}"
+                        )
+                        has_trusted_questionnaire_evidence = True
+                        distinct_sources.add(canonical_ref)
+                        notes.append(
+                            f"MSQ 系统评分已按患者自述证据准入：{msq_section}。"
+                        )
+                    else:
+                        if "." in field_path:
+                            notes.append("问卷证据路径不在允许范围内，已拒绝该引用。")
+                            continue
+                        if field_path == "msq_system_scores":
+                            notes.append("MSQ 系统评分必须引用具体系统键，已拒绝整表引用。")
+                            continue
+                        value = (
+                            getattr(questionnaire, field, None)
+                            if questionnaire
+                            else None
+                        )
+                        canonical_ref = f"questionnaire:{field}"
                     if not value:
                         notes.append(f"问卷证据字段为空：{field}。")
                         continue
-                    distinct_sources.add(f"questionnaire:{field}")
-                    is_patient_reported_condition = bool(
-                        field == "known_conditions"
-                        and any(
-                            str(finding.abnormal_flag or "").lower()
-                            == "patient_reported"
-                            for finding in findings.values()
-                        )
+                    is_trusted_clinical_field = (
+                        msq_section is not None
+                        or field in self._TRUSTED_QUESTIONNAIRE_CLINICAL_FIELDS
                     )
+                    allowed_goals = self._QUESTIONNAIRE_FIELD_GOAL_ALLOWLIST.get(field)
+                    if allowed_goals is not None and goal_code not in allowed_goals:
+                        is_trusted_clinical_field = False
+                        notes.append(
+                            f"问卷字段{field}不能单独支持当前目标，已按背景证据处理。"
+                        )
+                    if is_trusted_clinical_field and msq_section is None:
+                        has_trusted_questionnaire_evidence = True
+                        distinct_sources.add(canonical_ref)
+                        notes.append(
+                            f"问卷临床字段已按患者自述证据准入：{field}。"
+                        )
+                    if not is_trusted_clinical_field:
+                        notes.append(
+                            f"问卷背景字段仅保留为上下文，不计入产品准入：{field}。"
+                        )
+                    is_patient_reported_condition = field == "known_conditions"
+                    is_exposure_context = field == "chemical_sensitivity"
                     contextual = evidence.model_copy(
                         update={
+                            "ref": canonical_ref,
                             "evidence_strength": (
                                 SemanticEvidenceStrength.explicit_conclusion
                                 if is_patient_reported_condition
@@ -171,7 +278,11 @@ class SemanticSupportService:
                     evidence_classes.append(
                         ClinicalEvidenceClass.clinical_confirmed
                         if is_patient_reported_condition
-                        else ClinicalEvidenceClass.symptom
+                        else (
+                            ClinicalEvidenceClass.exposure
+                            if is_exposure_context
+                            else ClinicalEvidenceClass.symptom
+                        )
                     )
                     continue
                 if ref.startswith("clinical_summary:"):
@@ -248,7 +359,9 @@ class SemanticSupportService:
                 eligible = False
                 notes.append("证据仅为遗传易感或疾病风险修饰信息，只进入报告叙述，不单独触发产品。")
             if strongest == SemanticEvidenceStrength.contextual and not (
-                has_doctor_summary or len(distinct_sources) >= 2
+                has_doctor_summary
+                or has_trusted_questionnaire_evidence
+                or len(distinct_sources) >= 2
             ):
                 eligible = False
                 notes.append("单一模糊情境证据不足，需要医生总结明确记录或至少两个独立来源。")
@@ -271,6 +384,41 @@ class SemanticSupportService:
                     + "。"
                 )
 
+            objective_marker_rules = (
+                list(goal.get("objective_evidence_markers") or []) if goal else []
+            )
+            objective_text_terms = (
+                list(goal.get("objective_evidence_terms") or []) if goal else []
+            )
+            safety_marker_rules = (
+                list(goal.get("safety_context_markers") or []) if goal else []
+            )
+            if objective_marker_rules or objective_text_terms:
+                positive_evidence = self._matching_goal_evidence(
+                    referenced_findings,
+                    marker_rules=objective_marker_rules,
+                    text_terms=objective_text_terms,
+                )
+                safety_context = self._matching_goal_evidence(
+                    referenced_findings,
+                    marker_rules=safety_marker_rules,
+                )
+                if not positive_evidence:
+                    eligible = False
+                    goal_name = str(goal.get("name") or goal_code)
+                    if safety_context:
+                        notes.append(
+                            f"当前引用仅命中{goal_name}的安全背景证据，不能单独触发产品。"
+                        )
+                    else:
+                        notes.append(
+                            f"当前引用未命中{goal_name}目录配置的正向证据，仅保留病例叙述。"
+                        )
+                else:
+                    notes.append(
+                        "支持目标已通过目录配置的客观正向证据校验。"
+                    )
+
             eligible_directions = {
                 str(value) for value in (goal.get("eligible_directions") or [])
             } if goal else set()
@@ -282,8 +430,11 @@ class SemanticSupportService:
                     notes.append("支持方向与当前产品能力不一致，仅保留病例叙述。")
 
             system_id = candidate.system_id if candidate.system_id in SYSTEM_NAMES else ""
-            if not system_id and goal:
-                system_id = str(goal.get("system_id") or "")
+            catalog_system_id = str(goal.get("system_id") or "") if goal else ""
+            if catalog_system_id in SYSTEM_NAMES:
+                if system_id and system_id != catalog_system_id:
+                    notes.append("模型身体系统与支持目标目录不一致，已采用目录系统。")
+                system_id = catalog_system_id
             if system_id not in SYSTEM_NAMES:
                 eligible = False
                 notes.append("身体系统代码无效。")
@@ -317,6 +468,321 @@ class SemanticSupportService:
             )
         self._append_underweight_support_need(validated, findings)
         return validated
+
+    def ensure_system_coverage(
+        self,
+        *,
+        analysis: CaseAnalysis,
+    ) -> list[SemanticSupportNeed]:
+        """Add only catalog-approved support needs for locally validated systems."""
+
+        needs = list(analysis.support_needs or [])
+        covered_systems = {
+            need.system_id
+            for need in needs
+            if need.eligibility_status == SupportEligibilityStatus.eligible
+            and need.support_goal_code
+            and self._goal_has_primary_product(
+                need.support_goal_code,
+                need.support_direction,
+            )
+        }
+        findings = {
+            item.id: item
+            for item in (analysis.reviewed_abnormal_findings or analysis.abnormal_findings)
+        }
+        questionnaire = analysis.questionnaire
+
+        for structured in analysis.final_structured_system_findings:
+            system_id = structured.system_id
+            if system_id in covered_systems:
+                continue
+            rules = [
+                rule
+                for rule in self.system_coverage_rules
+                if str(rule.get("system_id")) == system_id
+            ]
+            for rule in rules:
+                goal_code = str(rule.get("goal_code") or "")
+                goal = self.goals.get(goal_code)
+                direction_value = str(rule.get("support_direction") or "unknown")
+                try:
+                    direction = SupportDirection(direction_value)
+                except ValueError:
+                    direction = SupportDirection.unknown
+                if not goal or not self._goal_has_primary_product(goal_code, direction):
+                    continue
+                evidence_refs, evidence_class, matched_findings = self._coverage_rule_evidence(
+                    rule=rule,
+                    finding_ids=structured.finding_ids,
+                    findings=findings,
+                    questionnaire=questionnaire,
+                )
+                if not evidence_refs:
+                    continue
+                strength = self._coverage_evidence_strength(evidence_class)
+                if strength.value not in set(goal.get("allowed_evidence_types") or []):
+                    continue
+                if evidence_class in {
+                    ClinicalEvidenceClass.genetic_risk,
+                    ClinicalEvidenceClass.follow_up_only,
+                }:
+                    continue
+                if not self._coverage_goal_evidence_allowed(goal, matched_findings):
+                    continue
+                eligible_directions = {
+                    str(value) for value in (goal.get("eligible_directions") or [])
+                }
+                if eligible_directions and direction.value not in eligible_directions:
+                    continue
+                signature = "|".join(
+                    [system_id, goal_code, *(sorted(ref.ref for ref in evidence_refs))]
+                )
+                rule_id = str(rule.get("rule_id"))
+                confidence = {
+                    ClinicalEvidenceClass.lab_abnormal: 0.88,
+                    ClinicalEvidenceClass.clinical_confirmed: 0.82,
+                    ClinicalEvidenceClass.symptom: 0.72,
+                    ClinicalEvidenceClass.exposure: 0.62,
+                }.get(evidence_class, 0.6)
+                needs.append(
+                    SemanticSupportNeed(
+                        id="support_cov_"
+                        + hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12],
+                        support_need_text=(
+                            f"{SYSTEM_NAMES[system_id]}："
+                            f"{str(goal.get('name') or goal_code)}"
+                        ),
+                        support_goal_code=goal_code,
+                        support_direction=direction,
+                        system_id=system_id,
+                        evidence_refs=evidence_refs,
+                        evidence_strength=strength,
+                        evidence_class=evidence_class,
+                        corroboration_count=len({ref.ref for ref in evidence_refs}),
+                        rationale=(
+                            "该支持目标由本地版本化系统覆盖规则补全，"
+                            "仅使用医生保留的异常或已验证问卷事实。"
+                        ),
+                        model_confidence=confidence,
+                        eligibility_status=SupportEligibilityStatus.eligible,
+                        validation_notes=[
+                            f"local_system_coverage:{rule_id}",
+                            "本地受控覆盖补全；模型未选择产品。",
+                        ],
+                    )
+                )
+                covered_systems.add(system_id)
+                break
+        return needs
+
+    def _goal_has_primary_product(
+        self,
+        goal_code: str,
+        direction: SupportDirection,
+    ) -> bool:
+        for item in self.product_capabilities.values():
+            if not item.get("enabled", True) or goal_code not in set(
+                item.get("primary_goal_codes") or []
+            ):
+                continue
+            requirements = item.get("goal_direction_requirements") or {}
+            allowed = {
+                str(value) for value in requirements.get(goal_code, [])
+            }
+            if not allowed or direction.value in allowed:
+                return True
+        return False
+
+    def _coverage_rule_evidence(
+        self,
+        *,
+        rule: dict[str, Any],
+        finding_ids: list[str],
+        findings: dict[str, AbnormalFinding],
+        questionnaire: Any,
+    ) -> tuple[
+        list[SemanticEvidenceReference],
+        ClinicalEvidenceClass,
+        list[AbnormalFinding],
+    ]:
+        terms = {
+            re.sub(r"\s+", "", str(value or "")).lower()
+            for value in (rule.get("finding_terms") or [])
+            if str(value or "").strip()
+        }
+        matched_findings: list[AbnormalFinding] = []
+        refs: list[SemanticEvidenceReference] = []
+        classes: list[ClinicalEvidenceClass] = []
+        for finding_id in finding_ids:
+            finding = findings.get(str(finding_id))
+            if not finding:
+                continue
+            text = re.sub(
+                r"\s+",
+                "",
+                " ".join(
+                    filter(
+                        None,
+                        (
+                            finding.name,
+                            finding.result_text,
+                            finding.report_explanation,
+                            finding.source_text,
+                        ),
+                    )
+                ),
+            ).lower()
+            if terms and not any(term in text for term in terms):
+                continue
+            evidence_class = classify_finding_evidence(finding)
+            if evidence_class in {
+                ClinicalEvidenceClass.genetic_risk,
+                ClinicalEvidenceClass.follow_up_only,
+            }:
+                continue
+            strength = self._coverage_evidence_strength(evidence_class)
+            refs.append(
+                SemanticEvidenceReference(
+                    ref=f"finding:{finding.id}",
+                    evidence_strength=strength,
+                )
+            )
+            matched_findings.append(finding)
+            classes.append(evidence_class)
+
+        for field in rule.get("questionnaire_fields") or []:
+            if not questionnaire:
+                continue
+            value = getattr(questionnaire, str(field), None)
+            values = value if isinstance(value, list) else [value]
+            normalized_values = [
+                re.sub(r"\s+", "", str(item or "")).lower()
+                for item in values
+                if str(item or "").strip()
+            ]
+            if not normalized_values:
+                continue
+            if terms and not any(
+                term in item for term in terms for item in normalized_values
+            ):
+                continue
+            field_name = str(field)
+            evidence_class = (
+                ClinicalEvidenceClass.clinical_confirmed
+                if field_name == "known_conditions"
+                else (
+                    ClinicalEvidenceClass.exposure
+                    if field_name == "chemical_sensitivity"
+                    else ClinicalEvidenceClass.symptom
+                )
+            )
+            refs.append(
+                SemanticEvidenceReference(
+                    ref=f"questionnaire:{field_name}",
+                    evidence_strength=self._coverage_evidence_strength(evidence_class),
+                )
+            )
+            classes.append(evidence_class)
+
+        scores = questionnaire.msq_system_scores if questionnaire else {}
+        for section in rule.get("msq_sections") or []:
+            value = scores.get(str(section)) if isinstance(scores, dict) else None
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                continue
+            refs.append(
+                SemanticEvidenceReference(
+                    ref=f"questionnaire:msq_system_scores.{section}",
+                    evidence_strength=SemanticEvidenceStrength.contextual,
+                )
+            )
+            classes.append(ClinicalEvidenceClass.symptom)
+
+        unique_refs = {ref.ref: ref for ref in refs}
+        return (
+            list(unique_refs.values()),
+            strongest_evidence_class(classes),
+            matched_findings,
+        )
+
+    @staticmethod
+    def _coverage_evidence_strength(
+        evidence_class: ClinicalEvidenceClass,
+    ) -> SemanticEvidenceStrength:
+        if evidence_class == ClinicalEvidenceClass.lab_abnormal:
+            return SemanticEvidenceStrength.direct
+        if evidence_class == ClinicalEvidenceClass.clinical_confirmed:
+            return SemanticEvidenceStrength.explicit_conclusion
+        return SemanticEvidenceStrength.contextual
+
+    def _coverage_goal_evidence_allowed(
+        self,
+        goal: dict[str, Any],
+        matched_findings: list[AbnormalFinding],
+    ) -> bool:
+        marker_rules = list(goal.get("objective_evidence_markers") or [])
+        text_terms = list(goal.get("objective_evidence_terms") or [])
+        if not marker_rules and not text_terms:
+            return True
+        return bool(
+            self._matching_goal_evidence(
+                matched_findings,
+                marker_rules=marker_rules,
+                text_terms=text_terms,
+            )
+        )
+
+    @staticmethod
+    def _matching_goal_evidence(
+        findings: list[AbnormalFinding],
+        *,
+        marker_rules: list[str],
+        text_terms: list[str] | None = None,
+    ) -> list[AbnormalFinding]:
+        normalized_marker_rules = {
+            str(rule or "").strip().lower()
+            for rule in marker_rules
+            if str(rule or "").strip()
+        }
+        normalized_terms = {
+            re.sub(r"\s+", "", str(term or "")).lower()
+            for term in (text_terms or [])
+            if str(term or "").strip()
+        }
+        matched: list[AbnormalFinding] = []
+        for finding in findings:
+            flag = str(finding.abnormal_flag or "unknown").strip().lower()
+            codes = {
+                str(code or "").strip().lower()
+                for code in (
+                    finding.marker_code,
+                    finding.finding_code,
+                    finding.marker_code_candidate,
+                    finding.finding_code_candidate,
+                )
+                if str(code or "").strip()
+            }
+            marker_keys = {*codes, *(f"{code}:{flag}" for code in codes)}
+            text = re.sub(
+                r"\s+",
+                "",
+                " ".join(
+                    filter(
+                        None,
+                        (
+                            finding.name,
+                            finding.result_text,
+                            finding.report_explanation,
+                            finding.support_need_text,
+                        ),
+                    )
+                ),
+            ).lower()
+            if normalized_marker_rules.intersection(marker_keys) or any(
+                term in text for term in normalized_terms
+            ):
+                matched.append(finding)
+        return matched
 
     def _append_underweight_support_need(
         self,

@@ -1,10 +1,11 @@
 import {
   AssistantCaseChatResponse,
   AssistantChatHistoryMessage,
-  AnalysisMode,
   AuthMeResponse,
   AuthResponse,
   CaseDetailResponse,
+  CaseAnalysis,
+  AbnormalFinding,
   CaseSummary,
   ClinicalSummaryImageImportResult,
   ClinicianRule,
@@ -14,8 +15,10 @@ import {
   Questionnaire,
   RecommendationDraft,
   ReviewDecision,
+  ReviewAndGenerateResponse,
   RuleScope,
-  WorkspaceScope
+  WorkspaceScope,
+  DoctorAccount
 } from "./types";
 
 function getApiBaseUrl(): string {
@@ -91,6 +94,13 @@ export async function logoutDoctor() {
   });
 }
 
+export async function changeAdminPassword(currentPassword: string, newPassword: string) {
+  return apiFetch<{ updated: boolean; doctor: DoctorAccount }>("/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+}
+
 export async function fetchCases(workspace: WorkspaceScope = "public"): Promise<CaseSummary[]> {
   const payload = await apiFetch<{ cases: CaseSummary[] }>(`/cases?workspace=${workspace}`);
   return payload.cases;
@@ -99,12 +109,11 @@ export async function fetchCases(workspace: WorkspaceScope = "public"): Promise<
 export async function createCase(
   customer_name: string,
   consultant_id?: string,
-  analysis_mode: AnalysisMode = "llm_primary",
   workspace_scope: WorkspaceScope = "public"
 ) {
   return apiFetch<CaseDetailResponse>("/cases", {
     method: "POST",
-    body: JSON.stringify({ customer_name, consultant_id, analysis_mode, workspace_scope })
+    body: JSON.stringify({ customer_name, consultant_id, workspace_scope })
   });
 }
 
@@ -118,13 +127,82 @@ export async function fetchCase(caseId: string) {
   return apiFetch<CaseDetailResponse>(`/cases/${caseId}`);
 }
 
-export async function uploadCaseFile(caseId: string, file: File) {
+export async function uploadCaseFile(
+  caseId: string,
+  file: File,
+  onProgress?: (percent: number) => void
+) {
   const formData = new FormData();
   formData.append("file", file);
-  return apiFetch<CaseDetailResponse>(`/cases/${caseId}/files`, {
-    method: "POST",
-    body: formData
+  return xhrJson<CaseDetailResponse>(`${getApiBaseUrl()}/cases/${caseId}/files`, formData, onProgress);
+}
+
+function xhrJson<T>(url: string, body: FormData, onProgress?: (percent: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.withCredentials = true;
+    request.responseType = "json";
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onerror = () => reject(new Error("网络连接失败，请检查后端服务状态。"));
+    request.onload = () => {
+      const payload = request.response ?? {};
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(100);
+        resolve(payload as T);
+        return;
+      }
+      const detail = payload?.detail;
+      reject(new Error(typeof detail === "string" ? detail : `请求失败（${request.status}）`));
+    };
+    request.send(body);
   });
+}
+
+export async function deleteCaseFile(caseId: string, fileId: string) {
+  return apiFetch<CaseDetailResponse>(`/cases/${caseId}/files/${fileId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function startCaseAnalysis(caseId: string, thirdPartyProcessingConfirmed: boolean) {
+  return apiFetch<CaseAnalysis>(`/cases/${caseId}/analyses`, {
+    method: "POST",
+    body: JSON.stringify({ third_party_processing_confirmed: thirdPartyProcessingConfirmed })
+  });
+}
+
+export async function fetchLatestCaseAnalysis(caseId: string) {
+  return apiFetch<CaseAnalysis>(`/cases/${caseId}/analyses/latest`);
+}
+
+export async function reviewAndGenerate(
+  caseId: string,
+  analysisId: string,
+  reviewerId: string,
+  expectedRevision: number,
+  abnormalFindings: AbnormalFinding[]
+) {
+  return apiFetch<ReviewAndGenerateResponse>(
+    `/cases/${caseId}/analyses/${analysisId}:review-and-generate`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reviewer_id: reviewerId,
+        expected_revision: expectedRevision,
+        abnormal_findings: abnormalFindings
+      })
+    }
+  );
+}
+
+export async function retryDraftGeneration(caseId: string, analysisId: string) {
+  return apiFetch<CaseAnalysis>(
+    `/cases/${caseId}/analyses/${analysisId}:retry-draft-generation`,
+    { method: "POST" }
+  );
 }
 
 export async function reparseCaseFile(caseId: string, fileId: string) {
@@ -146,6 +224,46 @@ export async function uploadQuestionnaireFile(caseId: string, file: File) {
   return apiFetch<CaseDetailResponse>(`/cases/${caseId}/questionnaire-file`, {
     method: "POST",
     body: formData
+  });
+}
+
+export function downloadPdfReport(
+  draftId: string,
+  onProgress?: (percent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("GET", getPdfReportUrl(draftId));
+    request.withCredentials = true;
+    request.responseType = "blob";
+    request.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onerror = () => reject(new Error("报告下载失败，请稍后重试。"));
+    request.onload = () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error("报告生成或下载失败，请确认报告已审核发布。"));
+        return;
+      }
+      const disposition = request.getResponseHeader("Content-Disposition") ?? "";
+      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+      const plainName = disposition.match(/filename=([^;]+)/i)?.[1]?.trim();
+      const filename = encodedName
+        ? decodeURIComponent(encodedName)
+        : quotedName || plainName || `functional-medicine-report-${draftId}.pdf`;
+      const url = URL.createObjectURL(request.response);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      onProgress?.(100);
+      resolve();
+    };
+    request.send();
   });
 }
 

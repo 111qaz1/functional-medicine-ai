@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { fetchLlmConfig, updateLlmConfig } from "../lib/api";
+import { changeAdminPassword, fetchLlmConfig, updateLlmConfig } from "../lib/api";
 import { LLMConfig } from "../lib/types";
 import { SectionCard } from "./section-card";
 
@@ -26,6 +26,9 @@ export function LlmConfigManager() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -87,6 +90,22 @@ export function LlmConfigManager() {
       setNotice(null);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handlePasswordChange() {
+    try {
+      setPasswordSaving(true);
+      await changeAdminPassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setNotice("管理员密码已更新，请使用新密码登录。旧会话仍会保持到期或退出登录。 ");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "管理员密码更新失败");
+      setNotice(null);
+    } finally {
+      setPasswordSaving(false);
     }
   }
 
@@ -218,6 +237,17 @@ export function LlmConfigManager() {
 
           <button type="button" className="primary-button" disabled={saving} onClick={() => void handleSave()}>
             {saving ? "正在保存并重载..." : "保存大模型配置"}
+          </button>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="管理员安全设置" subtitle="Administrator password">
+        <div className="stack">
+          <p className="muted">管理员可在这里设置新的登录密码。密码至少 6 位，保存前需要验证当前密码。</p>
+          <label className="field"><span>当前密码</span><input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+          <label className="field"><span>新密码</span><input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={6} /></label>
+          <button type="button" className="secondary-button" disabled={passwordSaving || currentPassword.length < 1 || newPassword.length < 6} onClick={() => void handlePasswordChange()}>
+            {passwordSaving ? "正在更新密码..." : "更新管理员密码"}
           </button>
         </div>
       </SectionCard>

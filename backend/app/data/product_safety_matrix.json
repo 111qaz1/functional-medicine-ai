@@ -1,11 +1,607 @@
 {
-  "version": "product-safety-matrix-v1-2026-06-26",
-  "source_note": "Derived from customer-provided product contraindication summary. Original DOCX is not stored in Git.",
+  "version": "product-safety-matrix-v5-client-v3-2026-07-29",
+  "source_note": "融合既有产品禁忌与甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第四、五节的一次性结构化规则，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关提示。",
   "severity_policy": {
     "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
     "caution": "慎用/注意/需咨询医生/需监测；不阻断推荐，但必须进入医生审核和客户可见安全提示。",
     "interaction_warning": "涉及药物、手术或监测的相互作用提示；不默认阻断，除非 exclusion_rules 命中。"
   },
+  "rules": [
+    {
+      "rule_id": "case_bmi_low_excludes_weight_support",
+      "sku_ids": ["sku_weight_support"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["marker:bmi:low", "finding:underweight"],
+      "message": "BMI偏低或体重过轻，减重相关产品不适用于当前首月方案。",
+      "source_ref": "病例级产品选择冲突规则",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "glucose_medication_requires_review",
+      "sku_ids": ["sku_blood_sugar_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:降糖药", "med:胰岛素"],
+      "message": "正在使用降糖药或胰岛素，需结合血糖监测由医生确认后使用。",
+      "source_ref": "product_safety_matrix.interaction_warnings",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "thyroid_medication_requires_review",
+      "sku_ids": ["sku_thyroid_support", "sku_magnesium_glycinate", "sku_plant_multi_mineral"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:甲状腺素", "med:左甲状腺素"],
+      "message": "正在使用甲状腺相关药物，产品适用性和服用间隔需由医生确认。",
+      "source_ref": "product_safety_matrix.interaction_warnings",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "liver_condition_requires_review",
+      "sku_ids": ["sku_liver_detox_support", "sku_amino_acid_detox", "sku_bile_flow_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肝功能不全", "condition:肝病"],
+      "message": "已知肝功能异常或肝病，用于肝胆支持的产品必须由医生人工确认。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "renal_condition_requires_review",
+      "sku_ids": ["sku_amino_acid_detox", "sku_liver_detox_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肾功能不全", "condition:肾病"],
+      "message": "已知肾功能异常或肾病，相关产品必须由医生人工确认。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "weight_support_metabolic_warning",
+      "sku_ids": ["sku_weight_support"],
+      "action": "warn",
+      "all_conditions": ["marker:fasting_glucose:high"],
+      "any_conditions": [],
+      "message": "空腹血糖偏高时，减重产品只能作为代谢管理的补充，不能替代饮食、活动和血糖随访。",
+      "source_ref": "product_safety_matrix.cautions",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "digestive_enzymes_component_allergy_excludes",
+      "sku_ids": ["sku_digestive_enzymes"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["allergy:消化酶", "allergy:蛋白酶", "allergy:真菌发酵产物", "allergy:酵母发酵产物"],
+      "message": "已记录消化酶、蛋白酶或相关发酵来源成分过敏，综合消化酶不适用于当前方案。",
+      "source_ref": "营养素剂量说明.xlsx#单粒泡罩（中文）!B179:J189",
+      "enabled": true,
+      "version": "3.0.0"
+    },
+    {
+      "rule_id": "probiotic_complex_component_allergy_excludes",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["allergy:益生菌", "allergy:乳酸菌", "allergy:乳杆菌", "allergy:酵母", "allergy:布拉酵母"],
+      "message": "已记录益生菌、乳酸菌、酵母或布拉酵母过敏，复合益生菌不适用于当前方案。",
+      "source_ref": "营养素剂量说明.xlsx#单粒泡罩（中文）!B190:J196",
+      "enabled": true,
+      "version": "3.0.0"
+    },
+    {
+      "rule_id": "client_h1_biliary_bile_flow_excludes",
+      "sku_ids": ["sku_bile_flow_support"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:胆结石", "condition:胆道梗阻", "condition:胆囊炎急性期", "condition:胆绞痛", "condition:胆总管扩张"],
+      "message": "存在胆结石、胆道梗阻或胆囊炎急性期，利胆产品可能诱发胆绞痛或结石嵌顿，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H1",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h1_acute_biliary_choleretic_excludes",
+      "sku_ids": ["sku_super_anti_inflammatory", "sku_liver_detox_support"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:胆囊炎急性期", "condition:胆道梗阻", "condition:胆绞痛", "condition:胆总管扩张"],
+      "message": "急性胆道风险期不宜叠加利胆成分，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H1",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h2_active_gastric_acid_excludes",
+      "sku_ids": ["sku_stomach_acid_support"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:胃食管反流", "condition:反流", "condition:活动性胃炎", "condition:胃溃疡", "condition:Barrett食管", "symptom:胃痛", "symptom:胃灼热", "symptom:反酸"],
+      "message": "存在反流、活动性胃炎、溃疡或明显胃痛，直接补酸可能加重黏膜损伤，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H2",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h3_enteric_pathogen_antimicrobial_excludes",
+      "sku_ids": ["sku_herbal_antimicrobial"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:志贺氏菌检出", "condition:沙门氏菌检出", "condition:艰难梭菌检出", "condition:致病性大肠杆菌检出"],
+      "message": "检出重要肠道致病菌时应优先规范就医，不建议自行使用草本抗菌产品替代医疗处置。",
+      "source_ref": "甲方禁忌矩阵V2#四-H3",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h5_serotonergic_drug_sleep_support_excludes",
+      "sku_ids": ["sku_sleep_support"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["med:SSRI", "med:SNRI", "med:MAOI", "med:曲唑酮", "med:氟西汀", "med:舍曲林", "med:帕罗西汀", "med:文拉法辛", "med:度洛西汀"],
+      "message": "当前使用影响血清素的抗抑郁药，含5-HTP产品可能增加血清素综合征风险，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H5",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h6_hormone_sensitive_products_excludes",
+      "sku_ids": ["sku_dhea", "sku_female_hormone_balance"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:激素敏感性疾病", "condition:乳腺癌", "condition:子宫内膜癌", "condition:子宫内膜异位症", "condition:卵巢癌", "condition:前列腺癌", "condition:子宫肌瘤", "condition:多囊卵巢", "condition:PCOS", "condition:高雄激素血症"],
+      "message": "存在激素敏感疾病或高雄激素相关问题，激素前体或激素调节产品可能加重风险，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H6",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h7_pregnancy_high_risk_products_excludes",
+      "sku_ids": ["sku_dhea", "sku_herbal_antimicrobial", "sku_trans_resveratrol", "sku_female_hormone_balance", "sku_ashwagandha_stress_balance"],
+      "action": "exclude",
+      "all_conditions": ["pregnancy:true"],
+      "any_conditions": [],
+      "message": "孕期或哺乳期缺乏足够安全性依据，当前方案主动排除高风险草本或激素类产品。",
+      "source_ref": "甲方禁忌矩阵V2#四-H7",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h8_infant_adult_formula_excludes",
+      "sku_ids": ["*"],
+      "action": "exclude",
+      "all_conditions": ["age:lt:3"],
+      "any_conditions": [],
+      "message": "3岁以下婴幼儿不适用当前成人产品剂量体系，全部成人配方主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H8",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h9_warfarin_vitamin_k_excludes",
+      "sku_ids": ["sku_vitamin_d3_k"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["med:华法林", "med:warfarin"],
+      "message": "华法林与维生素K直接拮抗，可能造成INR失控，当前方案主动排除含维生素K产品。",
+      "source_ref": "甲方禁忌矩阵V2#四-H9",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h10_transplant_immunostimulant_excludes",
+      "sku_ids": ["sku_herbal_antimicrobial"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:器官移植", "condition:造血干细胞移植", "med:免疫抑制剂", "med:环孢素", "med:他克莫司", "med:吗替麦考酚酯", "med:甲氨蝶呤"],
+      "message": "移植或强免疫抑制治疗期间，免疫激活成分可能干扰治疗，当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H10",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h11_active_hyperthyroid_iodine_excludes",
+      "sku_ids": ["sku_thyroid_support", "sku_plant_multi_mineral"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:甲亢活动期", "condition:甲亢", "condition:Graves病", "condition:甲状腺毒症"],
+      "message": "甲亢活动期增加碘负荷可能加重甲状腺毒症，当前方案主动排除含碘产品。",
+      "source_ref": "甲方禁忌矩阵V2#四-H11",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_h12_competitive_athlete_dhea_excludes",
+      "sku_ids": ["sku_dhea"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["condition:竞技运动员", "condition:受药检运动员", "goal:竞技备赛"],
+      "message": "DHEA属于运动禁用物质，存在药检要求时当前方案主动排除。",
+      "source_ref": "甲方禁忌矩阵V2#四-H12",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p1_antithrombotic_products_requires_review",
+      "sku_ids": ["sku_super_anti_inflammatory", "sku_trans_resveratrol", "sku_fish_oil_rtg", "sku_selenium_vitamin_e", "sku_coq10", "sku_herbal_antimicrobial"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:华法林", "med:DOAC", "med:利伐沙班", "med:达比加群", "med:阿哌沙班", "med:阿司匹林", "med:氯吡格雷", "med:替格瑞洛", "condition:血栓史", "condition:高凝状态", "condition:凝血异常", "condition:血小板减少", "condition:出血性疾病"],
+      "message": "存在抗凝、抗血小板治疗或出血风险，相关产品可能叠加出血风险，需由医生确认剂量并监测。",
+      "source_ref": "甲方禁忌矩阵V2#四-P1",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p2_perioperative_products_requires_review",
+      "sku_ids": ["sku_super_anti_inflammatory", "sku_trans_resveratrol", "sku_fish_oil_rtg", "sku_selenium_vitamin_e", "sku_coq10", "sku_herbal_antimicrobial"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:围手术期", "condition:计划手术", "condition:术前两周", "condition:术后两周"],
+      "message": "处于围手术期，可能影响凝血的产品需由医生确认，通常应在术前停用并结合术后恢复决定重启时间。",
+      "source_ref": "甲方禁忌矩阵V2#四-P2",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p3_narrow_therapeutic_index_piperine_requires_review",
+      "sku_ids": ["sku_super_anti_inflammatory", "sku_trans_resveratrol"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:窄治疗窗药物", "med:茶碱", "med:环孢素", "med:地高辛", "med:苯妥英", "med:华法林"],
+      "message": "黑胡椒碱可能影响窄治疗窗药物浓度，需由医生或药师确认后使用。",
+      "source_ref": "甲方禁忌矩阵V2#四-P3",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p4_digoxin_hawthorn_requires_review",
+      "sku_ids": ["sku_cardiac_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:地高辛", "condition:心力衰竭", "condition:心衰"],
+      "message": "山楂可能增强强心苷作用，地高辛用药或心力衰竭患者需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P4",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p5_potassium_retention_cardiac_support_requires_review",
+      "sku_ids": ["sku_cardiac_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["med:ACEI", "med:ARB", "med:普利", "med:沙坦", "med:保钾利尿剂", "med:螺内酯", "med:阿米洛利", "condition:慢性肾病", "marker:egfr:low"],
+      "message": "当前存在保钾用药或肾功能下降，含钾产品需结合血钾和肾功能由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P5",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p6_stone_high_vitamin_c_requires_review",
+      "sku_ids": ["sku_liposomal_vitamin_c_500", "sku_immune_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肾结石", "condition:草酸结石", "condition:高草酸", "marker:urine_oxalate:high"],
+      "message": "存在肾结石或高草酸风险，高剂量维生素C可能增加草酸负荷，需由医生复核总量。",
+      "source_ref": "甲方禁忌矩阵V2#四-P6",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p7_renal_magnesium_amino_requires_review",
+      "sku_ids": ["sku_magnesium_glycinate", "sku_mitochondrial_support", "sku_cardiac_support", "sku_amino_acid_detox"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:慢性肾病", "condition:肾功能不全", "condition:透析", "marker:egfr:low"],
+      "message": "肾功能下降或透析期间，镁、钾及氨基酸负荷需结合肾功能和电解质由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P7",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p8_acute_liver_injury_products_requires_review",
+      "sku_ids": ["sku_liver_detox_support", "sku_amino_acid_detox", "sku_hcy_methylation", "sku_female_hormone_balance"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:急性肝损伤", "condition:急性肝炎", "condition:肝硬化", "marker:alt:high", "marker:ast:high"],
+      "message": "存在明显肝损伤或肝硬化，高负荷草本和氨基酸产品需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P8",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p9_diabetes_products_requires_review",
+      "sku_ids": ["sku_blood_sugar_complex", "sku_weight_support", "sku_mitochondrial_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:1型糖尿病", "condition:2型糖尿病", "med:胰岛素", "med:磺脲", "med:格列美脲", "med:降糖药"],
+      "message": "当前存在糖尿病或降糖用药，相关产品可能叠加降糖作用，需制定血糖监测方案后使用。",
+      "source_ref": "甲方禁忌矩阵V2#四-P9",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p10_uncontrolled_bp_stimulant_requires_review",
+      "sku_ids": ["sku_weight_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:高血压未控制", "condition:高血压3级", "condition:高血压2级", "condition:心律失常"],
+      "message": "血压未控制或存在心律失常，刺激类成分可能引起血压和心率波动，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P10",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p11_insomnia_stimulant_requires_review",
+      "sku_ids": ["sku_weight_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:严重失眠", "condition:焦虑", "condition:咖啡因敏感", "symptom:失眠", "symptom:心悸", "symptom:焦虑"],
+      "message": "存在明显失眠、焦虑或咖啡因敏感，绿茶等刺激成分可能加重症状，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P11",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p12_epilepsy_sleep_b6_requires_review",
+      "sku_ids": ["sku_sleep_support", "sku_b_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:癫痫", "med:抗癫痫药", "med:苯妥英", "med:丙戊酸", "med:卡马西平", "med:苯巴比妥"],
+      "message": "癫痫或抗癫痫用药期间，褪黑素、5-HTP和高剂量B6可能影响发作阈值或药物浓度，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P12",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p13_parkinson_b6_requires_review",
+      "sku_ids": ["sku_b_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:帕金森病", "condition:帕金森", "med:左旋多巴"],
+      "message": "帕金森病或左旋多巴用药时，高剂量B6可能影响药效，需结合是否使用卡比多巴由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P13",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p14_active_autoimmune_immunostimulant_requires_review",
+      "sku_ids": ["sku_herbal_antimicrobial", "sku_immune_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:自身免疫病活动期", "condition:系统性红斑狼疮", "condition:类风湿", "condition:强直性脊柱炎", "condition:银屑病", "condition:干燥综合征"],
+      "message": "自身免疫病活动期使用免疫激活成分可能影响病情，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P14",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p15_immunodeficiency_probiotic_requires_review",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:免疫缺陷", "condition:中心静脉导管", "condition:粒细胞缺乏", "condition:化疗后粒缺"],
+      "message": "免疫缺陷、粒细胞缺乏或留置中心静脉导管时，活菌制剂存在罕见感染风险，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P15",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p16_oncology_antioxidant_requires_review",
+      "sku_ids": ["sku_liposomal_vitamin_c_500", "sku_amino_acid_detox", "sku_trans_resveratrol", "sku_selenium_vitamin_e"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:肿瘤放疗中", "condition:肿瘤化疗中", "condition:靶向治疗中", "condition:免疫治疗中", "condition:肿瘤治疗中"],
+      "message": "肿瘤治疗期间高剂量抗氧化产品可能影响治疗策略，必须由肿瘤科医生确认。",
+      "source_ref": "甲方禁忌矩阵V2#四-P16",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p17_gout_niacin_requires_review",
+      "sku_ids": ["sku_blood_sugar_complex", "sku_plant_multi_mineral", "sku_b_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:高尿酸", "condition:痛风", "marker:uric_acid:high"],
+      "message": "高尿酸或痛风患者需复核烟酸总量，避免加重尿酸升高。",
+      "source_ref": "甲方禁忌矩阵V2#四-P17",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p18_g6pd_vitamin_c_requires_review",
+      "sku_ids": ["sku_liposomal_vitamin_c_500"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:G6PD缺乏", "condition:葡萄糖-6-磷酸脱氢酶缺乏", "condition:蚕豆病"],
+      "message": "G6PD缺乏时高剂量维生素C存在罕见溶血风险，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P18",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p19_hashimoto_iodine_requires_review",
+      "sku_ids": ["sku_thyroid_support", "sku_plant_multi_mineral"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:桥本", "condition:甲状腺癌术后", "condition:碘131治疗后", "marker:thyroid_peroxidase_antibody:high", "marker:thyroglobulin_antibody:high"],
+      "message": "桥本或甲状腺治疗后需控制碘总量并结合甲功复查，含碘产品需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P19",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p19_hashimoto_ashwagandha_requires_review",
+      "sku_ids": ["sku_ashwagandha_stress_balance", "sku_neuro_cognitive"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:桥本", "condition:甲状腺癌术后", "condition:碘131治疗后", "marker:thyroid_peroxidase_antibody:high", "marker:thyroglobulin_antibody:high"],
+      "message": "南非醉茄可能影响甲状腺激素水平，桥本或甲状腺治疗后需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P19",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p20_low_cortisol_ashwagandha_requires_review",
+      "sku_ids": ["sku_ashwagandha_stress_balance", "sku_neuro_cognitive"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:低皮质醇", "condition:皮质醇节律低平", "condition:艾迪生病", "marker:cortisol:low"],
+      "message": "存在低皮质醇或皮质醇节律低平，南非醉茄可能进一步降低皮质醇，需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P20",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p21_comt_methyl_donor_requires_review",
+      "sku_ids": ["sku_hcy_methylation", "sku_b_complex"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:COMT慢代谢", "condition:COMT Met/Met"],
+      "message": "COMT慢代谢者对高甲基供体的耐受存在个体差异，建议从低剂量起步并观察焦虑、激越和失眠。",
+      "source_ref": "甲方禁忌矩阵V2#四-P21",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_p22_active_ibd_gastrointestinal_irritant_requires_review",
+      "sku_ids": ["sku_herbal_antimicrobial", "sku_stomach_acid_support"],
+      "action": "requires_review",
+      "all_conditions": [],
+      "any_conditions": ["condition:炎症性肠病活动期", "condition:克罗恩病活动期", "condition:溃疡性结肠炎活动期", "condition:粪钙卫蛋白升高"],
+      "message": "炎症性肠病活动期应避免增加胃肠刺激，相关产品需由医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#四-P22",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m1_levothyroxine_mineral_spacing_warn",
+      "sku_ids": ["sku_magnesium_glycinate", "sku_cardiac_support", "sku_plant_multi_mineral", "sku_polaprezinc", "sku_zinc_complex", "sku_immune_support", "sku_liver_detox_support", "sku_female_hormone_balance"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["med:左甲状腺素", "med:甲状腺素", "med:优甲乐", "med:雷替斯"],
+      "message": "含钙、镁、锌或铁的产品应与左甲状腺素间隔至少4小时。",
+      "source_ref": "甲方禁忌矩阵V2#四-M1",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m2_antibiotic_mineral_spacing_warn",
+      "sku_ids": ["sku_magnesium_glycinate", "sku_cardiac_support", "sku_plant_multi_mineral", "sku_polaprezinc", "sku_zinc_complex", "sku_immune_support", "sku_liver_detox_support", "sku_female_hormone_balance"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["med:喹诺酮", "med:四环素", "med:左氧氟沙星", "med:环丙沙星", "med:多西环素", "med:米诺环素"],
+      "message": "含钙、镁或锌的产品会影响部分抗生素吸收，应与喹诺酮或四环素类药物间隔2至4小时。",
+      "source_ref": "甲方禁忌矩阵V2#四-M2",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m3_prescription_iron_zinc_spacing_warn",
+      "sku_ids": ["sku_polaprezinc", "sku_zinc_complex", "sku_immune_support"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["med:处方铁剂", "med:硫酸亚铁", "med:富马酸亚铁", "med:琥珀酸亚铁"],
+      "message": "锌产品应与处方铁剂间隔至少2小时；长期较高总锌摄入需监测铜状态。",
+      "source_ref": "甲方禁忌矩阵V2#四-M3",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m11_sibo_probiotic_staged_warn",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["condition:SIBO", "condition:小肠细菌过度生长"],
+      "message": "SIBO需按症状和治疗阶段决定益生菌使用时机；若补充后腹胀加重，应暂停并由医生调整阶段方案。",
+      "source_ref": "甲方禁忌矩阵V2#四-M11",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m12_histamine_probiotic_warn",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["condition:组胺不耐受", "condition:肥大细胞激活", "condition:MCAS"],
+      "message": "组胺不耐受或肥大细胞激活者应核对菌株，从低剂量开始并观察潮红、荨麻疹、心悸和胃肠反应。",
+      "source_ref": "甲方禁忌矩阵V2#四-M12",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_m14_older_polypharmacy_warn",
+      "sku_ids": ["*"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["age:gte:65", "med_count:gte:5"],
+      "message": "老年或多重用药患者建议首月控制产品数量、从低剂量起步，并在2周左右复查耐受性和相互作用。",
+      "source_ref": "甲方禁忌矩阵V2#四-M14",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_recall_gut_dysbiosis_evidence_warn",
+      "sku_ids": ["sku_probiotic_complex"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["finding:gut_dysbiosis", "condition:肠道菌群失衡", "condition:菌群紊乱", "condition:菌群多样性低", "condition:有益菌低"],
+      "message": "菌群多样性低不能单独决定菌株和剂量；需结合SIBO、组胺不耐受、免疫状态及补充后的症状变化调整。",
+      "source_ref": "甲方禁忌矩阵V2#七-菌群召回补充警告",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_recall_cardiovascular_fish_oil_warn",
+      "sku_ids": ["sku_fish_oil_rtg"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["condition:冠心病", "condition:心肌梗死", "condition:心梗史", "condition:支架术后"],
+      "message": "鱼油不能替代冠心病、心梗或支架术后的规范治疗；如同时使用抗凝或抗血小板药，应由医生确认剂量并监测出血风险。",
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-冠心病",
+      "enabled": true,
+      "version": "5.0.0"
+    },
+    {
+      "rule_id": "client_recall_statin_coq10_evidence_warn",
+      "sku_ids": ["sku_coq10"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["med:他汀", "med:阿托伐他汀", "med:瑞舒伐他汀", "med:辛伐他汀"],
+      "message": "仅有他汀用药不构成辅酶Q10常规召回；如拟用于他汀相关肌肉症状，应先排除其他病因，记录试用依据并复查症状，且不得替代调脂治疗。",
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-他汀相关肌肉症状",
+      "enabled": true,
+      "version": "5.0.0"
+    },
+    {
+      "rule_id": "client_recall_hashimoto_selenium_evidence_warn",
+      "sku_ids": ["sku_selenium_vitamin_e"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["marker:thyroid_peroxidase_antibody:high", "marker:thyroglobulin_antibody:high", "condition:桥本"],
+      "message": "硒补充不能替代甲状腺治疗，实际获益存在个体差异；需核算总硒摄入并结合甲功和抗体趋势复查。",
+      "source_ref": "甲方禁忌矩阵V2#七-桥本召回补充警告",
+      "enabled": true,
+      "version": "4.0.0"
+    },
+    {
+      "rule_id": "client_recall_heavy_metal_auxiliary_warn",
+      "sku_ids": ["sku_amino_acid_detox"],
+      "action": "warn",
+      "all_conditions": [],
+      "any_conditions": ["condition:重金属暴露", "condition:重金属超标", "condition:汞超标", "condition:铅超标", "condition:镉超标", "condition:砷超标"],
+      "message": "该产品只能作为营养辅助，不能替代暴露源排查、确证检测或医疗螯合治疗；肝肾功能异常时还需医生复核。",
+      "source_ref": "甲方禁忌矩阵V2#七-重金属召回补充警告",
+      "enabled": true,
+      "version": "4.0.0"
+    }
+  ],
   "products": [
     {
       "sku_id": "sku_super_anti_inflammatory",
@@ -89,20 +685,6 @@
     },
     {
       "sku_id": "sku_liposomal_vitamin_c_500",
-      "source_sequence": "5",
-      "source_product_name": "脂质体维生素C",
-      "contraindications": [],
-      "cautions": [
-        "肾结石病史者高剂量慎用。",
-        "血色病/铁过载患者慎用。",
-        "G6PD缺乏症患者高剂量慎用。",
-        "一般人群常规剂量安全，高剂量可能引起胃肠不适或腹泻。"
-      ],
-      "interaction_warnings": [],
-      "exclusion_rules": []
-    },
-    {
-      "sku_id": "sku_liposomal_vitamin_c_300",
       "source_sequence": "5",
       "source_product_name": "脂质体维生素C",
       "contraindications": [],
@@ -225,8 +807,7 @@
         "服用免疫抑制剂者需咨询医生。"
       ],
       "exclusion_rules": [
-        "allergy:鱼",
-        "condition:出血性疾病"
+        "allergy:鱼"
       ]
     },
     {
@@ -247,7 +828,7 @@
       "exclusion_rules": [
         "condition:高钙血症",
         "condition:肉芽肿性疾病",
-        "med:抗凝",
+        "med:华法林",
         "condition:甲状旁腺功能亢进"
       ]
     },
@@ -476,10 +1057,34 @@
         "pregnancy",
         "allergy:菊科",
         "allergy:唇形科",
-        "condition:出血性疾病",
-        "med:抗凝",
         "med:免疫抑制剂"
       ]
+    },
+    {
+      "sku_id": "sku_digestive_enzymes",
+      "source_sequence": "25",
+      "source_product_name": "综合消化酶",
+      "contraindications": [
+        "对消化酶、蛋白酶或相关发酵来源成分明确过敏者禁用。"
+      ],
+      "cautions": [
+        "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
+    },
+    {
+      "sku_id": "sku_probiotic_complex",
+      "source_sequence": "26",
+      "source_product_name": "复合益生菌",
+      "contraindications": [
+        "对益生菌、乳酸菌、酵母或布拉酵母明确过敏者禁用。"
+      ],
+      "cautions": [
+        "出现皮疹、呼吸不适或明显胃肠道反应时停止使用并由医生复核。"
+      ],
+      "interaction_warnings": [],
+      "exclusion_rules": []
     },
     {
       "sku_id": "sku_liver_detox_support",
@@ -514,9 +1119,7 @@
         "服用抗抑郁药者慎用。",
         "服用抗凝药者注意。"
       ],
-      "exclusion_rules": [
-        "med:左旋多巴"
-      ]
+      "exclusion_rules": []
     },
     {
       "sku_id": "sku_trans_resveratrol",
@@ -577,16 +1180,5 @@
       "exclusion_rules": []
     }
   ],
-  "skipped_products": [
-    {
-      "sequence": "25",
-      "product_name": "复合消化营养素",
-      "reason": "not_in_active_catalog"
-    },
-    {
-      "sequence": "26",
-      "product_name": "复合益生菌",
-      "reason": "not_in_active_catalog"
-    }
-  ]
+  "skipped_products": []
 }

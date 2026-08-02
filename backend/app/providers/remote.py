@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+from app.core.llm_compat import chat_generation_options
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, LLMProvider
 
 
@@ -116,7 +117,11 @@ class OpenAICompatibleCaseAssistant:
         messages.append({"role": "user", "content": payload["user_message"]})
         return {
             "model": self.model,
-            "temperature": self.temperature,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
             "messages": messages,
         }
 
@@ -262,15 +267,13 @@ class OpenAICompatibleGroundedComposer:
 
         try:
             payload = self._build_request_payload(draft_input)
-            raw_response = self._call_remote_model(payload, draft_input.analysis_mode)
+            raw_response = self._call_remote_model(payload)
             parsed = self._parse_response(raw_response)
             return self._sanitize_response(parsed, draft_input)
         except (httpx.HTTPError, ValidationError, ValueError, KeyError, json.JSONDecodeError):
             return self.fallback.compose(draft_input)
 
     def _should_use_local_only(self, draft_input: DraftCompositionInput) -> bool:
-        if draft_input.red_flags:
-            return True
         if any("人工解析校对" in item for item in draft_input.missing_info):
             return True
         if not draft_input.candidate_products:
@@ -279,8 +282,7 @@ class OpenAICompatibleGroundedComposer:
 
     def _build_request_payload(self, draft_input: DraftCompositionInput) -> dict[str, Any]:
         candidate_products = []
-        candidate_limit = 12 if draft_input.analysis_mode == "llm_primary" else 6
-        for product in draft_input.candidate_products[:candidate_limit]:
+        for product in draft_input.candidate_products[:12]:
             candidate_products.append(
                 {
                     "sku_id": product.sku_id,
@@ -296,8 +298,7 @@ class OpenAICompatibleGroundedComposer:
             )
 
         knowledge_hits = []
-        knowledge_limit = 10 if draft_input.analysis_mode == "llm_primary" else 6
-        for hit in draft_input.knowledge_hits[:knowledge_limit]:
+        for hit in draft_input.knowledge_hits[:10]:
             knowledge_hits.append(
                 {
                     "statement_id": hit.statement.statement_id,
@@ -314,7 +315,6 @@ class OpenAICompatibleGroundedComposer:
 
         return {
             "customer_name": draft_input.customer_name,
-            "analysis_mode": draft_input.analysis_mode,
             "case_summary": draft_input.case_summary,
             "key_lab_highlights": draft_input.key_lab_highlights,
             "reviewed_report_text": draft_input.reviewed_report_text,
@@ -327,7 +327,7 @@ class OpenAICompatibleGroundedComposer:
             "output_language": "zh-CN",
         }
 
-    def _call_remote_model(self, grounded_payload: dict[str, Any], analysis_mode: str) -> str:
+    def _call_remote_model(self, grounded_payload: dict[str, Any]) -> str:
         client = self.http_client or httpx.Client(timeout=self.timeout_seconds)
         close_client = self.http_client is None
         try:
@@ -336,7 +336,7 @@ class OpenAICompatibleGroundedComposer:
                     response = client.post(
                         f"{self.base_url}/responses",
                         headers=self._headers(),
-                        json=self._build_responses_payload(grounded_payload, analysis_mode),
+                        json=self._build_responses_payload(grounded_payload),
                         timeout=self.timeout_seconds,
                     )
                     response.raise_for_status()
@@ -348,7 +348,7 @@ class OpenAICompatibleGroundedComposer:
             response = client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
-                json=self._build_chat_payload(grounded_payload, analysis_mode),
+                json=self._build_chat_payload(grounded_payload),
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
@@ -357,15 +357,19 @@ class OpenAICompatibleGroundedComposer:
             if close_client:
                 client.close()
 
-    def _build_chat_payload(self, grounded_payload: dict[str, Any], analysis_mode: str) -> dict[str, Any]:
+    def _build_chat_payload(self, grounded_payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
-            "temperature": self.temperature,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
             "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
-                    "content": self._system_prompt(analysis_mode),
+                    "content": self._system_prompt(),
                 },
                 {
                     "role": "user",
@@ -374,11 +378,11 @@ class OpenAICompatibleGroundedComposer:
             ],
         }
 
-    def _build_responses_payload(self, grounded_payload: dict[str, Any], analysis_mode: str) -> dict[str, Any]:
+    def _build_responses_payload(self, grounded_payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
             "temperature": self.temperature,
-            "instructions": self._system_prompt(analysis_mode),
+            "instructions": self._system_prompt(),
             "input": [
                 {
                     "role": "user",
@@ -392,7 +396,7 @@ class OpenAICompatibleGroundedComposer:
             ],
         }
 
-    def _system_prompt(self, analysis_mode: str) -> str:
+    def _system_prompt(self) -> str:
         base_prompt = (
             "You are assisting an internal clinical reviewer. "
             "Use only the structured facts, candidate products, and reviewed evidence provided. "
@@ -410,21 +414,19 @@ class OpenAICompatibleGroundedComposer:
             "When you do recommend products, abstain_reason must be null or an empty string; "
             "do not put positive recommendation rationale in abstain_reason."
         )
-        if analysis_mode == "llm_primary":
-            return (
-                base_prompt
-                + " When analysis_mode is llm_primary, you are the primary synthesis engine. "
-                + "Use reviewed_report_text, structured_case_context, case_summary, and key_lab_highlights "
-                + "to infer the most relevant support priorities. "
-                + "Treat reviewed local knowledge as auxiliary supporting context rather than the sole trigger. "
-                + "Keep recommendations conservative when data is incomplete, but do not abstain solely because "
-                + "knowledge_hits are sparse if the case evidence itself is strong. "
-                + "If helpful, you may populate section_overrides for these exact Chinese section keys only: "
-                + "总体健康画像, 系统功能深度分析, 生活方式干预重点, 功能医学检测建议, 随访计划. "
-                + "Each section_overrides value must be an array of short Simplified Chinese bullet lines. "
-                + "Do not introduce unverified diagnoses; use cautious language such as '提示', '倾向', '建议结合复核'."
-            )
-        return base_prompt
+        return (
+            base_prompt
+            + " You are the primary synthesis engine. "
+            + "Use reviewed_report_text, structured_case_context, case_summary, and key_lab_highlights "
+            + "to infer the most relevant support priorities. "
+            + "Treat reviewed local knowledge as auxiliary supporting context rather than the sole trigger. "
+            + "Keep recommendations conservative when data is incomplete, but do not abstain solely because "
+            + "knowledge_hits are sparse if the case evidence itself is strong. "
+            + "If helpful, you may populate section_overrides for these exact Chinese section keys only: "
+            + "总体健康画像, 系统功能深度分析, 生活方式干预重点, 功能医学检测建议, 随访计划. "
+            + "Each section_overrides value must be an array of short Simplified Chinese bullet lines. "
+            + "Do not introduce unverified diagnoses; use cautious language such as '提示', '倾向', '建议结合复核'."
+        )
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         if isinstance(payload.get("output_text"), str) and payload["output_text"].strip():
@@ -627,18 +629,17 @@ class OpenAICompatibleGroundedComposer:
         abstain_reason = payload.abstain_reason.strip()[:280] if payload.abstain_reason else None
         if abstain_reason and self._looks_like_non_abstain_reason(abstain_reason):
             abstain_reason = None
-        if abstain_reason:
-            if draft_input.analysis_mode == "llm_primary":
-                return DraftCompositionResult(
-                    selected_sku_ids=[],
-                    product_reason_overrides=product_reason_overrides,
-                    rationale=rationale,
-                    lifestyle_actions=lifestyle_actions,
-                    section_overrides=section_overrides,
-                    confidence=confidence,
-                    abstain_reason=abstain_reason,
-                )
-            return self.fallback.compose(draft_input)
+        if abstain_reason and not draft_input.candidate_products:
+            return DraftCompositionResult(
+                selected_sku_ids=[],
+                product_reason_overrides=product_reason_overrides,
+                rationale=rationale,
+                lifestyle_actions=lifestyle_actions,
+                section_overrides=section_overrides,
+                confidence=confidence,
+                abstain_reason=abstain_reason,
+            )
+        abstain_reason = None
 
         return DraftCompositionResult(
             selected_sku_ids=selected_sku_ids,
@@ -696,7 +697,12 @@ class OpenAICompatibleGroundedComposer:
 class OpenAICompatibleRagReportFusion:
     """Optional remote helper for naturalizing already-filtered RAG snippets into report sections."""
 
-    allowed_sections = ("总体健康画像", "关键指标", "生活方式干预重点", "复查与跟进建议")
+    allowed_sections = (
+        "核心结论与健康画像",
+        "异常指标汇总",
+        "生活方式干预处方",
+        "后续检查建议",
+    )
 
     def __init__(
         self,
@@ -777,9 +783,12 @@ class OpenAICompatibleRagReportFusion:
     def _build_chat_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "model": self.model,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled"},
-            "max_completion_tokens": self.max_output_tokens,
+            **chat_generation_options(
+                model=self.model,
+                temperature=self.temperature,
+                thinking_type="disabled",
+            ),
+            "max_tokens": self.max_output_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
@@ -806,20 +815,24 @@ class OpenAICompatibleRagReportFusion:
         return (
             "你是功能医学项目的内部医学编辑，只负责把已经通过本地安全过滤的 RAG 参考内容，"
             "自然融入客户可见报告的指定区块。必须严格遵守："
-            "1. 只能改写 target_sections 中这四个区块：总体健康画像、关键指标、生活方式干预重点、复查与跟进建议。"
+            "1. 只能处理 target_sections 中实际提供的区块：核心结论与健康画像、异常指标汇总、生活方式干预处方、后续检查建议。"
             "2. 不得改动或新增产品、营养素方案、剂量、禁忌、风险提示、医生规则或人工审核要求。"
             "3. 不得新增目录外产品、药物、处方、治疗承诺、诊断结论。"
             "4. 不得输出教材来源、文件名、页码、chunk id、RAG 字样、功能医学知识库（仅供参考）等内部标记。"
-            "5. 关键指标区块必须保持原有条目数量和顺序，每条仍以原指标名称开头。"
+            "5. 异常指标汇总由本地规则锁定系统归类、指标、结果、单位、状态、数量和顺序；"
+            "该区块只能返回 index 与 explanation，不得返回或改写完整条目。"
             "6. 语言要面向患者，简体中文，表达自然、克制、可执行；不要把片段生硬整句粘贴。"
             "7. 证据不足时保持原句或只做轻微润色，不强行加入教材结论。"
             "8. 为降低延迟，只返回真正需要改写的条目补丁，最多 8 个补丁；没有必要改写的区块返回空数组。"
-            "9. text 必须是单行正文，不得包含换行、项目符号、编号、Markdown 标题、表格或额外缩进。"
+            "9. text 和 explanation 必须是单行正文，不得包含换行、项目符号、编号、Markdown 标题、表格或额外缩进。"
             "10. 使用简体中文报告标点：中文逗号、顿号、冒号、分号、句号和中文括号；每条以自然完整的中文句子结束。"
+            "11. explanation 只解释目标行已有异常的健康管理意义，不得增加其他系统归类、检查结果或患者事实。"
             "只返回 JSON，不要 Markdown。index 使用从 0 开始的条目下标。JSON 格式必须为："
-            "{\"section_patches\":{\"总体健康画像\":[{\"index\":0,\"text\":\"...\"}],"
-            "\"关键指标\":[{\"index\":1,\"text\":\"...\"}],\"生活方式干预重点\":[],\"复查与跟进建议\":[]},"
-            "\"used_rag_refs\":{\"总体健康画像\":[\"health_1\"],\"关键指标\":[\"indicator_1\"]}}。"
+            "{\"section_patches\":{\"核心结论与健康画像\":[{\"index\":0,\"text\":\"...\"}],"
+            "\"异常指标汇总\":[{\"index\":1,\"explanation\":\"...\"}],"
+            "\"生活方式干预处方\":[],\"后续检查建议\":[]},"
+            "\"used_rag_refs\":{\"核心结论与健康画像\":[\"health_1\"],"
+            "\"异常指标汇总\":[\"indicator_1\"]}}。"
         )
 
     def _compact_rag_items(self, items: list[dict[str, str]]) -> list[dict[str, str]]:

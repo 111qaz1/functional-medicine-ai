@@ -48,8 +48,33 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertEqual(by_sequence["21"]["product_name"], "支持胆汁分泌")
         self.assertNotIn("谷胱甘肽", by_sequence["21"]["product_name"])
         self.assertEqual(by_sequence["31"]["product_name"], "肝脏氨基酸解毒支持")
-        self.assertNotIn("26", by_sequence)
-        self.assertFalse(any(profile["product_name"] == "复合益生菌" for profile in products.values()))
+        self.assertEqual(by_sequence["25"]["product_name"], "综合消化酶")
+        self.assertEqual(by_sequence["26"]["product_name"], "复合益生菌")
+        self.assertIn("11种消化酶", by_sequence["25"]["description"])
+        self.assertIn("7种菌株", by_sequence["26"]["description"])
+
+    def test_digestive_products_are_not_filtered_from_pdf_rows(self) -> None:
+        rows = self.exporter._nutrition_table_rows(
+            [
+                SimpleNamespace(
+                    sku_id="sku_digestive_enzymes",
+                    display_name="综合消化酶",
+                    dosage="每日 1 粒，随主餐使用。",
+                    reason="结合消化酶支持需求使用。",
+                    warnings=[],
+                ),
+                SimpleNamespace(
+                    sku_id="sku_probiotic_complex",
+                    display_name="复合益生菌",
+                    dosage="每日 1 粒，早餐后使用。",
+                    reason="结合菌群恢复需求使用。",
+                    warnings=[],
+                ),
+            ]
+        )
+
+        self.assertEqual([row["sequence"] for row in rows], ["25", "26"])
+        self.assertEqual([row["product_name"] for row in rows], ["综合消化酶", "复合益生菌"])
 
     def test_customer_catalog_uses_full_product_description(self) -> None:
         self.exporter.product_report_catalog = {
@@ -83,31 +108,11 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertIn("第三句包含适用人群和长期支持说明，也要完整保留", rows[0]["effect"])
         self.assertNotIn("结合本次情况进行个性化支持", rows[0]["effect"])
 
-    def test_nutrition_basis_items_polish_internal_matching_evidence(self) -> None:
-        rows = [
-            {
-                "product_name": "肝脏氨基酸解毒支持",
-                "reason": (
-                    "关联度约 95%：结合 解毒支持、恢复支持，"
-                    "命中产品标签命中：肝脏/解毒系统、产品标签命中：抗氧化轴，"
-                    "作为当前阶段的候选推荐。"
-                ),
-            }
-        ]
-
-        items = self.exporter._nutrition_basis_items(rows)
-
-        self.assertEqual(len(items), 1)
-        self.assertIn("肝胆代谢", items[0])
-        self.assertIn("氧化压力", items[0])
-        self.assertNotIn("关联度", items[0])
-        self.assertNotIn("命中产品标签", items[0])
-
-    def test_unmapped_sku_uses_confirmed_fallback_sequence(self) -> None:
+    def test_canonical_vitamin_c_sku_uses_confirmed_report_profile(self) -> None:
         rows = self.exporter._nutrition_table_rows(
             [
                 SimpleNamespace(
-                    sku_id="sku_liposomal_vitamin_c_300",
+                    sku_id="sku_liposomal_vitamin_c_500",
                     display_name="脂质体维生素C",
                     dosage="每日 1 粒，餐后使用。",
                     reason="用于基础抗氧化支持。",
@@ -116,8 +121,9 @@ class PdfReportExporterTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(rows[0]["sequence"], "待确认")
+        self.assertEqual(rows[0]["sequence"], "5")
         self.assertEqual(rows[0]["product_name"], "脂质体维生素C")
+        self.assertIn("425mg", rows[0]["effect"])
 
     def test_warning_text_does_not_stack_sentence_and_semicolon_marks(self) -> None:
         formatted = self.exporter._format_warning_text(
@@ -176,8 +182,7 @@ class PdfReportExporterTests(unittest.TestCase):
         paragraph_text = [item.getPlainText() for item in flowables if hasattr(item, "getPlainText")]
 
         self.assertIn("总医嘱说明", paragraph_text)
-        self.assertIn("推荐搭配说明", paragraph_text)
-        self.assertLess(paragraph_text.index("总医嘱说明"), paragraph_text.index("推荐搭配说明"))
+        self.assertNotIn("推荐搭配说明", paragraph_text)
 
     def test_export_generates_pdf_with_structured_nutrition_table(self) -> None:
         pdf_path = self.exporter.export(
@@ -206,6 +211,7 @@ class PdfReportExporterTests(unittest.TestCase):
         )
 
         self.assertTrue(pdf_path.exists())
+        self.assertEqual(pdf_path.name, "测试客户.pdf")
         self.assertGreater(pdf_path.stat().st_size, 1_000)
         reader = PdfReader(str(pdf_path))
         self.assertGreaterEqual(len(reader.pages), 1)

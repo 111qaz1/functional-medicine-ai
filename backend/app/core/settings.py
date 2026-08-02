@@ -36,11 +36,19 @@ class AppSettings:
     llm_model: str | None = None
     llm_api_style: str = "auto"
     llm_timeout_seconds: float = 45.0
+    llm_thinking_timeout_seconds: float = 600.0
     llm_temperature: float = 0.1
+    llm_retry_attempts: int = 2
+    llm_retry_base_delay_seconds: float = 1.0
+    llm_retry_max_delay_seconds: float = 10.0
     llm_draft_composer_enabled: bool = False
     rag_enabled: bool = True
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
+    max_upload_bytes: int = 50 * 1024 * 1024
+    max_pdf_pages: int = 200
+    analysis_worker_count: int = 1
+    case_document_worker_count: int = 2
 
 
 @dataclass(frozen=True)
@@ -92,7 +100,19 @@ def load_settings() -> AppSettings:
     llm_model = os.getenv("LLM_MODEL") or None
     llm_api_style = os.getenv("LLM_API_STYLE", "auto").strip().lower() or "auto"
     llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+    llm_thinking_timeout_seconds = float(
+        os.getenv("LLM_THINKING_TIMEOUT_SECONDS", str(max(llm_timeout_seconds, 600.0)))
+    )
     llm_temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+    llm_retry_attempts = max(0, min(int(os.getenv("FM_LLM_RETRY_ATTEMPTS", "2")), 5))
+    llm_retry_base_delay_seconds = max(
+        0.0,
+        float(os.getenv("FM_LLM_RETRY_BASE_DELAY_SECONDS", "1")),
+    )
+    llm_retry_max_delay_seconds = max(
+        llm_retry_base_delay_seconds,
+        float(os.getenv("FM_LLM_RETRY_MAX_DELAY_SECONDS", "10")),
+    )
     llm_draft_composer_enabled = os.getenv("FM_LLM_DRAFT_COMPOSER_ENABLED", "0").strip().lower() in {
         "1",
         "true",
@@ -107,6 +127,13 @@ def load_settings() -> AppSettings:
         "no",
         "off",
     }
+    max_upload_bytes = int(float(os.getenv("FM_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
+    max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "200"))
+    analysis_worker_count = max(1, int(os.getenv("FM_ANALYSIS_WORKERS", "1")))
+    case_document_worker_count = max(
+        1,
+        min(int(os.getenv("FM_CASE_DOCUMENT_WORKERS", "2")), 4),
+    )
 
     return AppSettings(
         project_root=project_root,
@@ -122,11 +149,19 @@ def load_settings() -> AppSettings:
         llm_model=llm_model,
         llm_api_style=llm_api_style,
         llm_timeout_seconds=llm_timeout_seconds,
+        llm_thinking_timeout_seconds=llm_thinking_timeout_seconds,
         llm_temperature=llm_temperature,
+        llm_retry_attempts=llm_retry_attempts,
+        llm_retry_base_delay_seconds=llm_retry_base_delay_seconds,
+        llm_retry_max_delay_seconds=llm_retry_max_delay_seconds,
         llm_draft_composer_enabled=llm_draft_composer_enabled,
         rag_enabled=rag_enabled,
         rag_index_dir=rag_index_dir,
         rag_llm_fusion_enabled=rag_llm_fusion_enabled,
+        max_upload_bytes=max_upload_bytes,
+        max_pdf_pages=max_pdf_pages,
+        analysis_worker_count=analysis_worker_count,
+        case_document_worker_count=case_document_worker_count,
     )
 
 

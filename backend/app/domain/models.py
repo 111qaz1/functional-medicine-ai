@@ -31,11 +31,6 @@ class DraftStatus(str, Enum):
     abstained = "abstained"
 
 
-class AnalysisMode(str, Enum):
-    local_grounded = "local_grounded"
-    llm_primary = "llm_primary"
-
-
 class WorkspaceScope(str, Enum):
     public = "public"
     doctor = "doctor"
@@ -72,6 +67,82 @@ class FileParseStatus(str, Enum):
     failed = "failed"
 
 
+class FileIntakeStatus(str, Enum):
+    uploaded = "uploaded"
+    suspected_irrelevant = "suspected_irrelevant"
+    invalid = "invalid"
+
+
+class AnalysisStatus(str, Enum):
+    queued = "queued"
+    preparing = "preparing"
+    analyzing_documents = "analyzing_documents"
+    synthesizing = "synthesizing"
+    validating = "validating"
+    ready_for_review = "ready_for_review"
+    reviewed = "reviewed"
+    stale = "stale"
+    failed = "failed"
+
+
+class FinalGenerationStatus(str, Enum):
+    idle = "idle"
+    queued = "queued"
+    final_synthesizing = "final_synthesizing"
+    validating_support_needs = "validating_support_needs"
+    mapping_products = "mapping_products"
+    checking_safety = "checking_safety"
+    generating_draft = "generating_draft"
+    ready = "ready"
+    failed = "failed"
+
+
+class SemanticEvidenceStrength(str, Enum):
+    direct = "direct"
+    explicit_conclusion = "explicit_conclusion"
+    contextual = "contextual"
+
+
+class ClinicalEvidenceClass(str, Enum):
+    clinical_confirmed = "clinical_confirmed"
+    lab_abnormal = "lab_abnormal"
+    symptom = "symptom"
+    exposure = "exposure"
+    genetic_risk = "genetic_risk"
+    follow_up_only = "follow_up_only"
+
+
+class SupportEligibilityStatus(str, Enum):
+    eligible = "eligible"
+    narrative_only = "narrative_only"
+    rejected = "rejected"
+
+
+class SupportDirection(str, Enum):
+    increase = "increase"
+    decrease = "decrease"
+    maintain = "maintain"
+    balance = "balance"
+    restore = "restore"
+    unknown = "unknown"
+
+
+class EvidenceStatus(str, Enum):
+    verified_text = "verified_text"
+    needs_review = "needs_review"
+    visual_model_only = "visual_model_only"
+
+
+class FindingStandardizationStatus(str, Enum):
+    unprocessed = "unprocessed"
+    proposed = "proposed"
+    validated = "validated"
+    support_mapped = "support_mapped"
+    system_mapped = "system_mapped"
+    unmapped = "unmapped"
+    rejected = "rejected"
+
+
 class ReviewStatus(str, Enum):
     reviewed = "reviewed"
     reference_only = "reference_only"
@@ -81,6 +152,12 @@ class ReviewStatus(str, Enum):
 class ClinicianRuleAction(str, Enum):
     boost = "boost"
     avoid = "avoid"
+
+
+class SafetyRuleAction(str, Enum):
+    exclude = "exclude"
+    requires_review = "requires_review"
+    warn = "warn"
 
 
 class ExtractStatus(str, Enum):
@@ -125,6 +202,146 @@ class CaseIndicator(StrictModel):
     status: IndicatorStatus = IndicatorStatus.info
     category: str = "case_text"
     source_span: SourceSpan
+
+
+class ConfirmedClinicalFinding(StrictModel):
+    finding_id: str
+    finding_code: str | None = None
+    finding_name: str
+    system_ids: list[str] = Field(default_factory=list)
+    support_goals: list[str] = Field(default_factory=list)
+    support_direction: SupportDirection = SupportDirection.unknown
+    mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_class: ClinicalEvidenceClass = ClinicalEvidenceClass.clinical_confirmed
+    standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.validated
+    abnormal_flag: str = "positive"
+    confidence: float = 0.0
+    source_span: SourceSpan
+
+
+class PageText(StrictModel):
+    page: int
+    text: str
+
+
+class AbnormalFinding(StrictModel):
+    id: str
+    name: str
+    result_text: str | None = None
+    raw_value: str | None = None
+    unit: str | None = None
+    reference_range: str | None = None
+    abnormal_flag: str = "unknown"
+    interpretation: str | None = None
+    report_explanation: str | None = None
+    neutral_interpretation: str | None = None
+    support_need_text: str | None = None
+    source_file_id: str
+    source_file_name: str
+    source_page: int
+    source_text: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_status: EvidenceStatus = EvidenceStatus.needs_review
+    evidence_notes: list[str] = Field(default_factory=list)
+    marker_code_candidate: str | None = None
+    finding_code_candidate: str | None = None
+    system_id_candidates: list[str] = Field(default_factory=list)
+    support_goal_candidates: list[str] = Field(default_factory=list)
+    mapping_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    marker_code: str | None = None
+    finding_code: str | None = None
+    system_ids: list[str] = Field(default_factory=list)
+    support_goals: list[str] = Field(default_factory=list)
+    standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.unprocessed
+    standardization_notes: list[str] = Field(default_factory=list)
+
+
+class ChronicFoodSensitivityResult(StrictModel):
+    source_file_id: str
+    source_file_name: str
+    source_page: int = 1
+    mild_foods: list[str] = Field(default_factory=list)
+    moderate_foods: list[str] = Field(default_factory=list)
+    high_foods: list[str] = Field(default_factory=list)
+    interpretations: list[str] = Field(default_factory=list)
+    valid: bool = False
+    warning: str | None = None
+
+
+class DocumentAnalysisResult(StrictModel):
+    file_id: str
+    file_name: str
+    report_type: str = "unknown_medical"
+    medical_content: bool = True
+    summary: str | None = None
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    system_findings: list[str] = Field(default_factory=list)
+    questionnaire: dict[str, Any] | None = None
+    food_sensitivity: ChronicFoodSensitivityResult | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SemanticEvidenceReference(StrictModel):
+    ref: str
+    evidence_strength: SemanticEvidenceStrength
+
+
+class SemanticSupportNeed(StrictModel):
+    id: str
+    support_need_text: str
+    support_goal_code: str | None = None
+    support_direction: SupportDirection = SupportDirection.unknown
+    system_id: str
+    evidence_refs: list[SemanticEvidenceReference] = Field(default_factory=list)
+    evidence_strength: SemanticEvidenceStrength = SemanticEvidenceStrength.contextual
+    evidence_class: ClinicalEvidenceClass = ClinicalEvidenceClass.symptom
+    corroboration_count: int = Field(default=0, ge=0)
+    rationale: str
+    model_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    eligibility_status: SupportEligibilityStatus = SupportEligibilityStatus.narrative_only
+    validation_notes: list[str] = Field(default_factory=list)
+
+
+class CaseAnalysis(StrictModel):
+    id: str
+    case_id: str
+    version: int = 1
+    status: AnalysisStatus = AnalysisStatus.queued
+    snapshot_hash: str
+    file_ids: list[str] = Field(default_factory=list)
+    model_version: str
+    prompt_version: str = "case-analysis-v1"
+    standardization_version: str = "legacy"
+    progress_current: int = 0
+    progress_total: int = 0
+    current_file_name: str | None = None
+    document_results: list[DocumentAnalysisResult] = Field(default_factory=list)
+    case_summary: str | None = None
+    reviewed_case_summary: str | None = None
+    system_findings: list[str] = Field(default_factory=list)
+    reviewed_system_findings: list[str] = Field(default_factory=list)
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    reviewed_abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    questionnaire: Questionnaire | None = None
+    food_sensitivity: ChronicFoodSensitivityResult | None = None
+    ignored_files: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    revision: int = 1
+    draft_id: str | None = None
+    final_generation_status: FinalGenerationStatus = FinalGenerationStatus.idle
+    final_generation_progress: int = Field(default=0, ge=0, le=100)
+    final_generation_error: str | None = None
+    final_generation_revision: int = 0
+    support_goal_version: str = "legacy"
+    support_needs: list[SemanticSupportNeed] = Field(default_factory=list)
+    final_structured_system_findings: list["StructuredSystemFinding"] = Field(default_factory=list)
+    final_synthesis_completed_revision: int | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ConsentRecord(StrictModel):
@@ -182,6 +399,13 @@ class UploadedFile(StrictModel):
     parse_status: FileParseStatus = FileParseStatus.pending
     needs_manual_review: bool = True
     missing_fields: list[str] = Field(default_factory=list)
+    content_sha256: str | None = None
+    intake_status: FileIntakeStatus = FileIntakeStatus.uploaded
+    page_count: int = 0
+    page_texts: list[PageText] = Field(default_factory=list)
+    is_scanned: bool = False
+    precheck_warning: str | None = None
+    validation_error: str | None = None
 
 
 class CaseRecord(StrictModel):
@@ -190,7 +414,6 @@ class CaseRecord(StrictModel):
     consultant_id: str | None = None
     workspace_scope: WorkspaceScope = WorkspaceScope.public
     owner_doctor_id: str | None = None
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
     status: CaseStatus = CaseStatus.intake
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -201,6 +424,7 @@ class CaseRecord(StrictModel):
     questionnaire: Questionnaire | None = None
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[CaseIndicator] = Field(default_factory=list)
+    confirmed_clinical_findings: list[ConfirmedClinicalFinding] = Field(default_factory=list)
     draft_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     parsing_review_completed: bool = False
@@ -208,6 +432,10 @@ class CaseRecord(StrictModel):
     parsing_reviewed_by: str | None = None
     parsing_missing_fields: list[str] = Field(default_factory=list)
     parsing_review_notes: str | None = None
+    latest_analysis_id: str | None = None
+    # Read-only compatibility with records written by the abandoned PR #13.
+    specialty_reports: list[dict[str, Any]] = Field(default_factory=list)
+    parsing_revision: int = 0
 
 
 class KnowledgeStatement(StrictModel):
@@ -284,14 +512,100 @@ class ClinicianRule(StrictModel):
     notes: str | None = None
 
 
+class DosageRegimen(StrictModel):
+    unit: str = "粒"
+    single_dose_min: float | None = None
+    single_dose_max: float | None = None
+    daily_frequency_min: float | None = None
+    daily_frequency_max: float | None = None
+    weekly_frequency_min: float | None = None
+    weekly_frequency_max: float | None = None
+    timing: list[str] = Field(default_factory=list)
+    interval_hours_min: float | None = None
+    interval_hours_max: float | None = None
+    daily_max: float | None = None
+    duration: str | None = None
+    maintenance: str | None = None
+
+
+class DosageOptionSummary(StrictModel):
+    option_id: str
+    label: str
+    display_text: str
+    requires_review: bool = False
+    regimen: DosageRegimen = Field(default_factory=DosageRegimen)
+
+
 class DraftRecommendationItem(StrictModel):
     sku_id: str
     display_name: str
     dosage: str
+    dosage_option_id: str | None = None
+    dosage_option_label: str | None = None
+    dosage_match_reasons: list[str] = Field(default_factory=list)
+    dosage_options: list[DosageOptionSummary] = Field(default_factory=list)
+    dosage_regimen: DosageRegimen | None = None
     reason: str
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    primary_system_id: str | None = None
+    matched_finding_ids: list[str] = Field(default_factory=list)
+    matched_support_need_ids: list[str] = Field(default_factory=list)
+    system_priority_rank: int | None = None
+    safety_decisions: list["SafetyDecision"] = Field(default_factory=list)
+
+
+class SafetyDecision(StrictModel):
+    rule_id: str
+    sku_id: str | None = None
+    action: SafetyRuleAction
+    message: str
+    source_ref: str | None = None
+
+
+class StructuredSystemFinding(StrictModel):
+    system_id: str
+    system_name: str
+    priority_level: str
+    priority_score: float
+    summary: str
+    finding_ids: list[str] = Field(default_factory=list)
+
+
+class LifestyleAction(StrictModel):
+    action_id: str
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    category: str
+    text: str
+    anchor_refs: list[str] = Field(default_factory=list)
+    quantity: str | None = None
+    safety_level: Literal["standard", "review", "referral"] = "standard"
+    clinician_review_required: bool = False
+
+
+class LifestyleSection(StrictModel):
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    title: str
+    actions: list[LifestyleAction] = Field(default_factory=list)
+
+
+class LifestyleProtocolSelection(StrictModel):
+    protocol_id: str
+    title: str
+    admission: Literal["direct", "review", "referral"]
+    reason: str
+    anchor_refs: list[str] = Field(default_factory=list)
+
+
+class LifestylePlan(StrictModel):
+    status: Literal["ready", "partial", "needs_review", "blocked"] = "partial"
+    rule_version: str = "lifestyle-v2"
+    selected_protocols: list[LifestyleProtocolSelection] = Field(default_factory=list)
+    sections: list[LifestyleSection] = Field(default_factory=list)
+    monitoring: list[str] = Field(default_factory=list)
+    missing_info: list[str] = Field(default_factory=list)
+    clinician_review_required: bool = False
 
 
 class RecommendationDraft(StrictModel):
@@ -302,20 +616,33 @@ class RecommendationDraft(StrictModel):
     key_lab_highlights: list[str] = Field(default_factory=list)
     recommended_skus: list[DraftRecommendationItem] = Field(default_factory=list)
     lifestyle_actions: list[str] = Field(default_factory=list)
+    lifestyle_plan: LifestylePlan | None = None
     rationale: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     contraindications: list[str] = Field(default_factory=list)
+    safety_decisions: list[SafetyDecision] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     abstain_reason: str | None = None
     manual_review_required: bool = True
     red_flags: list[str] = Field(default_factory=list)
+    structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     report_sections: dict[str, Any] = Field(default_factory=dict)
+    internal_audit: dict[str, Any] = Field(default_factory=dict)
     model_version: str
     prompt_version: str
     rule_version: str
     generated_at: datetime = Field(default_factory=utc_now)
+    source_analysis_id: str | None = None
+    source_analysis_revision: int | None = None
+    source_snapshot_hash: str | None = None
+    support_goal_version: str = "legacy"
+    # Read-only compatibility with drafts written by the abandoned PR #13.
+    updated_at: datetime | None = None
+    revision: int = 1
+    last_edited_by: str | None = None
+    last_edit_reason: str | None = None
 
 
 class ReviewDecision(StrictModel):

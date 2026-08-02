@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -96,7 +98,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
 
         private_case = self.client_a.post(
             "/cases",
-            json={"customer_name": "A的客户", "workspace_scope": "doctor", "analysis_mode": "llm_primary"},
+            json={"customer_name": "A的客户", "workspace_scope": "doctor"},
         )
         self.assertEqual(private_case.status_code, 200, private_case.text)
         case_id = private_case.json()["case"]["id"]
@@ -104,7 +106,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
 
         public_case = self.public_client.post(
             "/cases",
-            json={"customer_name": "公共客户", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "公共客户", "workspace_scope": "public"},
         )
         self.assertEqual(public_case.status_code, 200, public_case.text)
 
@@ -115,6 +117,32 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         public_list = self.public_client.get("/cases", params={"workspace": "public"})
         self.assertEqual(public_list.status_code, 200, public_list.text)
         self.assertEqual(public_list.json()["cases"][0]["customer_name"], "公共客户")
+
+    def test_removed_analysis_mode_is_ignored_and_legacy_records_still_load(self) -> None:
+        response = self.public_client.post(
+            "/cases",
+            json={
+                "customer_name": "统一分析流程病例",
+                "workspace_scope": "public",
+                "analysis_mode": "local_grounded",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        case_payload = response.json()["case"]
+        self.assertNotIn("analysis_mode", case_payload)
+
+        case_id = case_payload["id"]
+        legacy_payload = dict(case_payload)
+        legacy_payload["analysis_mode"] = "local_grounded"
+        with sqlite3.connect(self.container.repository.database_path) as connection:
+            connection.execute(
+                "UPDATE cases SET payload = ? WHERE id = ?",
+                (json.dumps(legacy_payload, ensure_ascii=False), case_id),
+            )
+
+        loaded = self.container.repository.get_case(case_id)
+        self.assertIsNotNone(loaded)
+        self.assertFalse(hasattr(loaded, "analysis_mode"))
 
     def test_rule_scope_controls_matching_for_future_reports(self) -> None:
         doctor_a = self.container.auth_service.register(username="doctor-a", password="secret123")
@@ -220,7 +248,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
     def test_anonymous_user_cannot_create_rule_from_public_workspace(self) -> None:
         case = self.public_client.post(
             "/cases",
-            json={"customer_name": "公共匿名病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "公共匿名病例", "workspace_scope": "public"},
         )
         self.assertEqual(case.status_code, 200, case.text)
 
@@ -236,10 +264,101 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(self.container.repository.list_clinician_rules(), [])
 
+    def test_admin_configuration_and_rule_mutations_are_protected(self) -> None:
+        self._register(self.client_a, "admin-user")
+        self._register(self.client_b, "doctor-user")
+
+        self.assertEqual(self.public_client.get("/system/llm-config").status_code, 401)
+        self.assertEqual(self.client_b.get("/system/llm-config").status_code, 403)
+        self.assertEqual(self.client_b.delete("/assistant/rules/not-found").status_code, 403)
+        self.assertEqual(self.client_a.get("/system/llm-config").status_code, 200)
+
+        changed = self.client_a.post(
+            "/auth/password",
+            json={"current_password": "secret123", "new_password": "new-secret-456"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.client_a.post("/auth/logout")
+        self.assertEqual(
+            self.client_a.post("/auth/login", json={"username": "admin-user", "password": "secret123"}).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client_a.post("/auth/login", json={"username": "admin-user", "password": "new-secret-456"}).status_code,
+            200,
+        )
+
+    def test_upload_response_reports_preparse_success(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "上传反馈病例", "workspace_scope": "public"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+
+        uploaded = self.public_client.post(
+            f"/cases/{case_id}/files",
+            files={"file": ("lab.txt", "患者检验报告\n维生素D 18 ng/mL 参考范围 30-100", "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        operation = uploaded.json()["operation"]
+        self.assertTrue(operation["success"])
+        self.assertEqual(operation["stage"], "upload_preflight")
+        self.assertTrue(operation["parsing_succeeded"])
+        self.assertEqual(operation["progress_percent"], 100)
+
+    def test_upload_accepts_long_unicode_filename_without_using_it_on_disk(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "长文件名上传病例", "workspace_scope": "public"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+        original_name = f"{'病例总结' * 80}.txt"
+
+        uploaded = self.public_client.post(
+            f"/cases/{case_id}/files",
+            files={"file": (original_name, "合成临床总结", "text/plain")},
+        )
+
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        file_payload = uploaded.json()["case"]["files"][0]
+        self.assertEqual(file_payload["filename"], original_name)
+        self.assertEqual(file_payload["raw_extracted_text"], "合成临床总结")
+        stored_path = Path(file_payload["storage_uri"])
+        self.assertTrue(stored_path.exists())
+        self.assertRegex(stored_path.name, r"^[0-9a-f]{32}\.txt$")
+        self.assertNotIn("病例总结", stored_path.name)
+
+    def test_upload_storage_failure_returns_safe_json_without_case_file(self) -> None:
+        created = self.public_client.post(
+            "/cases",
+            json={"customer_name": "存储失败病例", "workspace_scope": "public"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case"]["id"]
+
+        with patch.object(
+            self.container.recommendation_service.object_store,
+            "save",
+            side_effect=OSError("sensitive server path"),
+        ):
+            uploaded = self.public_client.post(
+                f"/cases/{case_id}/files",
+                files={"file": ("summary.txt", "合成临床总结", "text/plain")},
+            )
+
+        self.assertEqual(uploaded.status_code, 500, uploaded.text)
+        self.assertEqual(
+            uploaded.json(),
+            {"detail": "文件保存失败，请检查服务器存储空间或目录权限。"},
+        )
+        self.assertEqual(self.container.case_service.get_case(case_id).files, [])
+
     def test_parsing_review_manual_indicator_is_persisted_and_displayed(self) -> None:
         created = self.public_client.post(
             "/cases",
-            json={"customer_name": "人工补录病例", "workspace_scope": "public", "analysis_mode": "llm_primary"},
+            json={"customer_name": "人工补录病例", "workspace_scope": "public"},
         )
         self.assertEqual(created.status_code, 200, created.text)
         case_id = created.json()["case"]["id"]

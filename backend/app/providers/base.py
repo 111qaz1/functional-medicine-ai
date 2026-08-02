@@ -23,7 +23,6 @@ class KnowledgeHit(BaseModel):
 
 class DraftCompositionInput(BaseModel):
     customer_name: str
-    analysis_mode: str = "llm_primary"
     case_summary: list[str] = Field(default_factory=list)
     key_lab_highlights: list[str] = Field(default_factory=list)
     candidate_products: list[ProductRule]

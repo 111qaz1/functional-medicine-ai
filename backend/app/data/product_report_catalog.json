@@ -1,10 +1,7 @@
 {
-  "version": "2026-06-05-customer-report-products",
-  "source_note": "Derived from local customer report product introduction sheet. Original workbook is not stored in Git.",
-  "ignored_products": [
-    "综合消化酶",
-    "复合益生菌"
-  ],
+  "version": "2026-07-22-customer-report-products-v4",
+  "source_note": "Names, English names and patient-facing descriptions were checked against the local customer product introduction workbook; functional targets were cross-checked against the local nutrient function workbook without importing dosage fields. Original workbooks are not stored in Git.",
+  "ignored_products": [],
   "products": {
     "sku_super_anti_inflammatory": {
       "sequence": "1",
@@ -36,9 +33,9 @@
     },
     "sku_liposomal_vitamin_c_500": {
       "sequence": "5",
-      "product_name": "脂质体维生素C500",
+      "product_name": "脂质体维生素C",
       "english_name": "Liposomal Vitamin C",
-      "description": "脂质体维生素C500（Liposomal Vitamin C）支持免疫强化与抗氧化抗衰。该配方提供425mg高活性脂质体包裹维生素C及柑橘生物类黄酮复合物，旨在提升细胞内维C浓度并增强自由基清除能力与胶原合成效率，突破传统VC吸收局限，适合免疫力低下与皮肤抗衰人群日常补充。",
+      "description": "脂质体维生素C（Liposomal Vitamin C）支持免疫强化与抗氧化抗衰。该配方提供425mg高活性脂质体包裹维生素C及柑橘生物类黄酮复合物，旨在提升细胞内维C浓度并增强自由基清除能力与胶原合成效率，突破传统VC吸收局限，适合免疫力低下与皮肤抗衰人群日常补充。",
       "sku_id": "sku_liposomal_vitamin_c_500"
     },
     "sku_mitochondrial_support": {
@@ -173,6 +170,20 @@
       "english_name": "Olibanum oil Complex",
       "description": "草本杀菌胶囊（Olibanum oil Complex）支持肠道菌群平衡与广谱抗菌。该配方提供包埋型牛至油、茶树油、大蒜提取物与紫锥菊、黄芪等免疫草本，旨在抑制有害病原体并修复肠道黏膜与激活免疫应答，兼顾抗氧化抗炎与黏膜收敛，适合肠道菌群失衡与换季易感人群。",
       "sku_id": "sku_herbal_antimicrobial"
+    },
+    "sku_digestive_enzymes": {
+      "sequence": "25",
+      "product_name": "综合消化酶",
+      "english_name": "Digestive Enzymes",
+      "description": "综合消化酶（Digestive Enzymes）支持全食物分解与减轻餐后消化负担。该配方提供11种消化酶，覆盖碳水化合物、蛋白质、脂肪、膳食纤维、乳糖、果胶与蔗糖等食物成分的分解，用于有明确消化酶或营养吸收支持需求时的个体化方案。",
+      "sku_id": "sku_digestive_enzymes"
+    },
+    "sku_probiotic_complex": {
+      "sequence": "26",
+      "product_name": "复合益生菌",
+      "english_name": "Probiotic Complex",
+      "description": "复合益生菌（Probiotic Complex）支持肠道菌群平衡、恢复与黏膜屏障维护。该配方包含布拉酵母及6种乳酸菌、乳杆菌或链球菌，共7种菌株，适用于存在明确菌群失衡、益生菌减少或抗生素后肠道调理需求的个体化方案。",
+      "sku_id": "sku_probiotic_complex"
     },
     "sku_liver_detox_support": {
       "sequence": "27",

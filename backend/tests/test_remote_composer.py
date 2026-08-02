@@ -35,7 +35,6 @@ class RemoteComposerSanitizationTests(unittest.TestCase):
         )
         self.input = DraftCompositionInput(
             customer_name="杨25",
-            analysis_mode="llm_primary",
             case_summary=["25-羟维生素D偏低"],
             key_lab_highlights=["25-羟维生素D: 22.75 ng/mL（需关注）"],
             candidate_products=[self.product],
@@ -65,7 +64,7 @@ class RemoteComposerSanitizationTests(unittest.TestCase):
         self.assertIsNone(result.abstain_reason)
         self.assertEqual(result.selected_sku_ids, ["sku_vitamin_d3_k"])
 
-    def test_keeps_true_blocking_abstain_reason(self) -> None:
+    def test_ignores_model_abstention_when_safe_candidates_exist(self) -> None:
         payload = _RemoteCompositionPayload(
             selected_sku_ids=["sku_vitamin_d3_k"],
             rationale=["需要先人工复核。"],
@@ -75,8 +74,8 @@ class RemoteComposerSanitizationTests(unittest.TestCase):
 
         result = self.composer._sanitize_response(payload, self.input)
 
-        self.assertEqual(result.abstain_reason, "证据不足，等待人工复核后再推荐")
-        self.assertEqual(result.selected_sku_ids, [])
+        self.assertIsNone(result.abstain_reason)
+        self.assertEqual(result.selected_sku_ids, ["sku_vitamin_d3_k"])
 
 
 if __name__ == "__main__":

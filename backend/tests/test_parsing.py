@@ -73,7 +73,7 @@ class ParsingServiceTests(unittest.TestCase):
             SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="白细胞 WBC 5.50 10 9/L 3.5-9.5"),
             SourceSpan(file_name="report.pdf", page=1, line_number=2, snippet="载脂蛋白E 1.82 g/L ↑ 0.20-1.20"),
             SourceSpan(file_name="report.pdf", page=1, line_number=3, snippet="报告日期 2026-06-25"),
-            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="体重 66.6 kg 0-120"),
+            SourceSpan(file_name="report.pdf", page=1, line_number=4, snippet="体重 67.1 kg 0-120"),
             SourceSpan(file_name="report.pdf", page=1, line_number=5, snippet="血小板 PLT 123.45 0-999"),
         ]
 
@@ -89,7 +89,7 @@ class ParsingServiceTests(unittest.TestCase):
     def test_normalizes_body_metrics_and_cbc_differentials(self) -> None:
         # Use obvious fixture values/ranges so tests cover formats without resembling a real patient record.
         samples = [
-            ("体重 66.6 kg 0-120", "body_weight", "kg"),
+            ("体重 67.1 kg 0-120", "body_weight", "kg"),
             ("Weight 72.5 kg 0-120", "body_weight", "kg"),
             ("身高 123.45 cm 0-999", "body_height", "cm"),
             ("Height 1.23 m 0-9", "body_height", "cm"),

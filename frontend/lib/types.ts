@@ -7,7 +7,6 @@ export type CaseStatus =
   | "under_review"
   | "approved";
 
-export type AnalysisMode = "local_grounded" | "llm_primary";
 export type WorkspaceScope = "public" | "doctor";
 export type RuleScope = "public" | "private";
 export type DoctorRole = "admin" | "doctor";
@@ -66,6 +65,136 @@ export interface UploadedFile {
   parse_status: FileParseStatus;
   needs_manual_review: boolean;
   missing_fields: string[];
+  content_sha256?: string | null;
+  intake_status: "uploaded" | "suspected_irrelevant" | "invalid";
+  page_count: number;
+  page_texts: Array<{ page: number; text: string }>;
+  is_scanned: boolean;
+  precheck_warning?: string | null;
+  validation_error?: string | null;
+}
+
+export type AnalysisStatus =
+  | "queued"
+  | "preparing"
+  | "analyzing_documents"
+  | "synthesizing"
+  | "validating"
+  | "ready_for_review"
+  | "reviewed"
+  | "stale"
+  | "failed";
+
+export interface AbnormalFinding {
+  id: string;
+  name: string;
+  result_text?: string | null;
+  raw_value?: string | null;
+  unit?: string | null;
+  reference_range?: string | null;
+  abnormal_flag: string;
+  interpretation?: string | null;
+  report_explanation?: string | null;
+  neutral_interpretation?: string | null;
+  support_need_text?: string | null;
+  source_file_id: string;
+  source_file_name: string;
+  source_page: number;
+  source_text: string;
+  confidence: number;
+  evidence_status: "verified_text" | "needs_review" | "visual_model_only";
+  evidence_notes: string[];
+  marker_code_candidate?: string | null;
+  finding_code_candidate?: string | null;
+  system_id_candidates?: string[];
+  support_goal_candidates?: string[];
+  mapping_confidence?: number;
+  marker_code?: string | null;
+  finding_code?: string | null;
+  system_ids?: string[];
+  support_goals?: string[];
+  standardization_status?: "unprocessed" | "proposed" | "validated" | "support_mapped" | "system_mapped" | "unmapped" | "rejected";
+  standardization_notes?: string[];
+}
+
+export type FinalGenerationStatus =
+  | "idle"
+  | "queued"
+  | "final_synthesizing"
+  | "validating_support_needs"
+  | "mapping_products"
+  | "checking_safety"
+  | "generating_draft"
+  | "ready"
+  | "failed";
+
+export interface SemanticSupportNeed {
+  id: string;
+  support_need_text: string;
+  support_goal_code?: string | null;
+  support_direction: "increase" | "decrease" | "maintain" | "balance" | "restore" | "unknown";
+  system_id: string;
+  evidence_refs: Array<{
+    ref: string;
+    evidence_strength: "direct" | "explicit_conclusion" | "contextual";
+  }>;
+  evidence_strength: "direct" | "explicit_conclusion" | "contextual";
+  corroboration_count: number;
+  rationale: string;
+  model_confidence: number;
+  eligibility_status: "eligible" | "narrative_only" | "rejected";
+  validation_notes: string[];
+}
+
+export interface ChronicFoodSensitivityResult {
+  source_file_id: string;
+  source_file_name: string;
+  source_page: number;
+  mild_foods: string[];
+  moderate_foods: string[];
+  high_foods: string[];
+  interpretations: string[];
+  valid: boolean;
+  warning?: string | null;
+}
+
+export interface CaseAnalysis {
+  id: string;
+  case_id: string;
+  version: number;
+  status: AnalysisStatus;
+  snapshot_hash: string;
+  file_ids: string[];
+  model_version: string;
+  prompt_version: string;
+  progress_current: number;
+  progress_total: number;
+  current_file_name?: string | null;
+  case_summary?: string | null;
+  reviewed_case_summary?: string | null;
+  system_findings: string[];
+  reviewed_system_findings: string[];
+  abnormal_findings: AbnormalFinding[];
+  reviewed_abnormal_findings: AbnormalFinding[];
+  questionnaire?: Questionnaire | null;
+  food_sensitivity?: ChronicFoodSensitivityResult | null;
+  ignored_files: string[];
+  warnings: string[];
+  error_code?: string | null;
+  error_message?: string | null;
+  reviewed_by?: string | null;
+  revision: number;
+  draft_id?: string | null;
+  final_generation_status: FinalGenerationStatus;
+  final_generation_progress: number;
+  final_generation_error?: string | null;
+  final_generation_revision: number;
+  support_goal_version: string;
+  support_needs: SemanticSupportNeed[];
+  final_structured_system_findings: StructuredSystemFinding[];
+  final_synthesis_completed_revision?: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Questionnaire {
@@ -104,7 +233,6 @@ export interface CaseRecord {
   consultant_id?: string | null;
   workspace_scope: WorkspaceScope;
   owner_doctor_id?: string | null;
-  analysis_mode: AnalysisMode;
   status: CaseStatus;
   created_at: string;
   updated_at: string;
@@ -114,6 +242,18 @@ export interface CaseRecord {
   questionnaire?: Questionnaire | null;
   extracted_lab_items: ExtractedLabItem[];
   manual_indicators: CaseIndicator[];
+  confirmed_clinical_findings?: Array<{
+    finding_id: string;
+    finding_code?: string | null;
+    finding_name: string;
+    system_ids?: string[];
+    support_goals?: string[];
+    mapping_confidence?: number;
+    standardization_status?: "validated" | "support_mapped" | "system_mapped";
+    abnormal_flag: string;
+    confidence: number;
+    source_span: SourceSpan;
+  }>;
   draft_ids: string[];
   flags: string[];
   parsing_review_completed: boolean;
@@ -121,16 +261,66 @@ export interface CaseRecord {
   parsing_reviewed_by?: string | null;
   parsing_missing_fields: string[];
   parsing_review_notes?: string | null;
+  latest_analysis_id?: string | null;
+}
+
+export interface DosageRegimen {
+  unit: string;
+  single_dose_min?: number | null;
+  single_dose_max?: number | null;
+  daily_frequency_min?: number | null;
+  daily_frequency_max?: number | null;
+  weekly_frequency_min?: number | null;
+  weekly_frequency_max?: number | null;
+  timing: string[];
+  interval_hours_min?: number | null;
+  interval_hours_max?: number | null;
+  daily_max?: number | null;
+  duration?: string | null;
+  maintenance?: string | null;
+}
+
+export interface DosageOption {
+  option_id: string;
+  label: string;
+  display_text: string;
+  requires_review: boolean;
+  regimen: DosageRegimen;
 }
 
 export interface DraftRecommendationItem {
   sku_id: string;
   display_name: string;
   dosage: string;
+  dosage_option_id?: string | null;
+  dosage_option_label?: string | null;
+  dosage_match_reasons?: string[];
+  dosage_options?: DosageOption[];
+  dosage_regimen?: DosageRegimen | null;
   reason: string;
   evidence_ids: string[];
   evidence_details: string[];
   warnings: string[];
+  primary_system_id?: string | null;
+  matched_finding_ids?: string[];
+  matched_support_need_ids?: string[];
+  system_priority_rank?: number | null;
+  safety_decisions?: Array<{
+    rule_id: string;
+    sku_id?: string | null;
+    action: "exclude" | "requires_review" | "warn";
+    message: string;
+    source_ref?: string | null;
+  }>;
+}
+
+export interface StructuredSystemFinding {
+  system_id: string;
+  system_name: string;
+  priority_level: "最高优先级" | "优先级高" | "中度关注" | string;
+  priority_score: number;
+  summary: string;
+  finding_ids: string[];
 }
 
 export interface RecommendationDraft {
@@ -141,20 +331,69 @@ export interface RecommendationDraft {
   key_lab_highlights: string[];
   recommended_skus: DraftRecommendationItem[];
   lifestyle_actions: string[];
+  lifestyle_plan?: {
+    status: "ready" | "partial" | "needs_review" | "blocked";
+    rule_version: string;
+    selected_protocols: Array<{
+      protocol_id: string;
+      title: string;
+      admission: "direct" | "review" | "referral";
+      reason: string;
+      anchor_refs: string[];
+    }>;
+    sections: Array<{
+      domain: "diet" | "movement" | "sleep" | "stress";
+      title: string;
+      actions: Array<{
+        action_id: string;
+        domain: "diet" | "movement" | "sleep" | "stress";
+        category: string;
+        text: string;
+        anchor_refs: string[];
+        quantity?: string | null;
+        safety_level: "standard" | "review" | "referral";
+        clinician_review_required: boolean;
+      }>;
+    }>;
+    monitoring: string[];
+    missing_info: string[];
+    clinician_review_required: boolean;
+  } | null;
   rationale: string[];
   evidence_ids: string[];
   evidence_details: string[];
   contraindications: string[];
+  safety_decisions?: Array<{
+    rule_id: string;
+    sku_id?: string | null;
+    action: "exclude" | "requires_review" | "warn";
+    message: string;
+    source_ref?: string | null;
+  }>;
   missing_info: string[];
   confidence: number;
   abstain_reason?: string | null;
   manual_review_required: boolean;
   red_flags: string[];
+  structured_system_findings?: StructuredSystemFinding[];
   report_sections: Record<string, string[] | string>;
+  internal_audit?: Record<string, unknown>;
   model_version: string;
   prompt_version: string;
   rule_version: string;
   generated_at: string;
+  source_analysis_id?: string | null;
+  source_analysis_revision?: number | null;
+  source_snapshot_hash?: string | null;
+  support_goal_version?: string;
+}
+
+export interface ReviewAndGenerateResponse {
+  analysis: CaseAnalysis;
+  review_saved: boolean;
+  draft_generated: boolean;
+  draft?: RecommendationDraft | null;
+  generation_error?: string | null;
 }
 
 export interface ReviewDecision {
@@ -182,7 +421,6 @@ export interface AuditLog {
 export interface CaseSummary {
   id: string;
   customer_name: string;
-  analysis_mode: AnalysisMode;
   status: CaseStatus;
   consultant_id?: string | null;
   workspace_scope: WorkspaceScope;
@@ -201,6 +439,17 @@ export interface CaseDetailResponse {
   review_decision?: ReviewDecision | null;
   audit_logs: AuditLog[];
   matched_clinician_rules: ClinicianRule[];
+  operation?: ProcessingOperation | null;
+}
+
+export interface ProcessingOperation {
+  success: boolean;
+  stage: string;
+  status: "pending" | "succeeded" | "failed";
+  progress_percent: number;
+  parsing_succeeded?: boolean | null;
+  message: string;
+  filename?: string | null;
 }
 
 export interface ClinicalSummaryImageImportResult {

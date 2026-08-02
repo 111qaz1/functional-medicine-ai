@@ -104,7 +104,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"customer_name\": \"Postman外部接口测试\",\n  \"consultant_id\": \"{{doctor_name}}\",\n  \"notes\": \"Postman collection smoke test\",\n  \"analysis_mode\": \"llm_primary\"\n}"
+          "raw": "{\n  \"customer_name\": \"Postman外部接口测试\",\n  \"consultant_id\": \"{{doctor_name}}\",\n  \"notes\": \"Postman collection smoke test\"\n}"
         },
         "url": {
           "raw": "{{base_url}}/api/v1/cases",

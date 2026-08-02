@@ -1,0 +1,243 @@
+{
+  "version": "client-recall-matrix-v3-2026-07-29",
+  "source_note": "一次性结构化自甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第六、七节，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关规则。运行时只使用结构化规则，不读取原始 Markdown。",
+  "rules": [
+    {
+      "rule_id": "rcl_gut_dysbiosis_probiotic",
+      "sku_ids": ["sku_probiotic_complex"],
+      "all_conditions": [],
+      "any_conditions": [
+        "finding:gut_dysbiosis",
+        "condition:肠道菌群失衡",
+        "condition:菌群紊乱",
+        "condition:菌群多样性低",
+        "condition:有益菌低"
+      ],
+      "message": "菌群紊乱、有益菌低或菌群多样性低时召回复合益生菌。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-菌群紊乱",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_digestive_insufficiency_enzymes",
+      "sku_ids": ["sku_digestive_enzymes"],
+      "all_conditions": [],
+      "any_conditions": [
+        "symptom:消化不良",
+        "symptom:脂肪泻",
+        "symptom:术后消化差",
+        "condition:胰腺外分泌不足",
+        "condition:胰弹性蛋白酶低",
+        "condition:吸收不良",
+        "support_goal:digestive_enzyme"
+      ],
+      "message": "消化不良、胰酶不足或术后消化能力下降时召回综合消化酶。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-消化不良",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_coronary_cardiovascular_fish_oil",
+      "sku_ids": ["sku_fish_oil_rtg"],
+      "all_conditions": [],
+      "any_conditions": [
+        "condition:冠心病",
+        "condition:心肌梗死",
+        "condition:心梗史",
+        "condition:支架术后"
+      ],
+      "message": "冠心病、心梗史或支架术后召回鱼油，并继续执行抗凝和抗血小板安全复核。",
+      "guidance": null,
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-冠心病",
+      "enabled": true,
+      "version": "3.0.0"
+    },
+    {
+      "rule_id": "guidance_statin_muscle_symptoms_coq10_trial",
+      "sku_ids": [],
+      "all_conditions": ["med:他汀"],
+      "any_conditions": [
+        "condition:他汀相关肌肉症状",
+        "symptom:肌痛",
+        "symptom:肌肉疼痛",
+        "symptom:肌肉酸痛",
+        "symptom:肌肉无力",
+        "symptom:肌无力"
+      ],
+      "message": "他汀相关肌肉症状不自动召回辅酶Q10。",
+      "guidance": "使用他汀期间出现肌肉症状时，应先由医生排除运动损伤、甲状腺异常、维生素D不足及其他可能病因；排除其他病因后，辅酶Q10可作为有记录和症状复查的试用性考虑，不属于常规或强制推荐。",
+      "source_ref": "功能医学营养干预AI训练标准V1.0#八-正向召回规则-他汀相关肌肉症状",
+      "enabled": true,
+      "version": "3.0.0"
+    },
+    {
+      "rule_id": "rcl_metformin_b12",
+      "sku_ids": ["sku_b_complex"],
+      "all_conditions": [],
+      "any_conditions": ["med:二甲双胍", "med:metformin"],
+      "message": "长期使用二甲双胍时召回含维生素B12的B族产品，并建议监测B12状态。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-二甲双胍",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_long_term_ppi_b12_magnesium",
+      "sku_ids": ["sku_b_complex", "sku_magnesium_glycinate"],
+      "all_conditions": [],
+      "any_conditions": [
+        "med:质子泵抑制剂",
+        "med:PPI",
+        "med:奥美拉唑",
+        "med:埃索美拉唑",
+        "med:兰索拉唑",
+        "med:泮托拉唑",
+        "med:雷贝拉唑"
+      ],
+      "message": "长期使用质子泵抑制剂时召回B12和镁支持方向。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-长期PPI",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_potassium_wasting_diuretic_magnesium",
+      "sku_ids": ["sku_magnesium_glycinate"],
+      "all_conditions": [],
+      "any_conditions": [
+        "med:排钾利尿剂",
+        "med:呋塞米",
+        "med:氢氯噻嗪",
+        "med:吲达帕胺"
+      ],
+      "message": "排钾利尿剂用药时召回甘氨酸镁，并结合电解质结果复核。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-排钾利尿剂",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_steroid_or_osteoporosis_d3k",
+      "sku_ids": ["sku_vitamin_d3_k"],
+      "all_conditions": [],
+      "any_conditions": [
+        "condition:骨质疏松",
+        "finding:osteoporosis",
+        "med:糖皮质激素",
+        "med:泼尼松",
+        "med:甲泼尼龙"
+      ],
+      "message": "长期糖皮质激素使用或骨质疏松时召回维生素D3+K支持方向。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-糖皮质激素或骨质疏松",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_hashimoto_antibody_selenium",
+      "sku_ids": ["sku_selenium_vitamin_e"],
+      "all_conditions": [],
+      "any_conditions": [
+        "marker:thyroid_peroxidase_antibody:high",
+        "marker:thyroglobulin_antibody:high",
+        "condition:桥本",
+        "condition:TPOAb高",
+        "condition:TGAb高"
+      ],
+      "message": "桥本相关甲状腺抗体升高时召回富硒维生素E。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-桥本抗体",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_severe_low_ferritin_referral",
+      "sku_ids": [],
+      "all_conditions": [],
+      "any_conditions": ["marker:ferritin:low", "condition:重度缺铁"],
+      "message": "铁蛋白明显偏低时不得静默跳过。",
+      "guidance": "铁蛋白明显偏低时，产品库内没有处方铁剂；应优先就医查明缺铁原因，并由医生决定是否使用铁剂。",
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-铁蛋白低",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_high_homocysteine_methylation",
+      "sku_ids": ["sku_hcy_methylation", "sku_b_complex"],
+      "all_conditions": [],
+      "any_conditions": [
+        "marker:homocysteine:high",
+        "condition:同型半胱氨酸高",
+        "support_goal:methylation"
+      ],
+      "message": "同型半胱氨酸升高时召回甲基化支持和B族产品。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-同型半胱氨酸",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_post_cholecystectomy_fat_digestion",
+      "sku_ids": ["sku_bile_flow_support", "sku_digestive_enzymes"],
+      "all_conditions": ["condition:胆囊切除"],
+      "any_conditions": [
+        "symptom:脂肪消化差",
+        "symptom:脂肪泻",
+        "symptom:油腻不耐受",
+        "condition:术后消化差"
+      ],
+      "message": "胆囊切除术后同时存在脂肪消化困难时召回胆汁分泌支持和综合消化酶。",
+      "guidance": null,
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-胆囊切除术后",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "rcl_heavy_metal_exposure_guidance",
+      "sku_ids": ["sku_amino_acid_detox"],
+      "all_conditions": [],
+      "any_conditions": [
+        "condition:重金属暴露",
+        "condition:重金属超标",
+        "condition:汞超标",
+        "condition:铅超标",
+        "condition:镉超标",
+        "condition:砷超标"
+      ],
+      "message": "重金属暴露线索明确时仅将氨基酸解毒支持作为辅助候选。",
+      "guidance": "重金属检测异常应先确认检测类型并排查暴露源；诊断和螯合治疗属于医疗行为，营养产品只能作为辅助。",
+      "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-重金属",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "guidance_h_pylori_referral",
+      "sku_ids": [],
+      "all_conditions": [],
+      "any_conditions": ["condition:幽门螺杆菌阳性", "condition:幽门螺杆菌感染"],
+      "message": "幽门螺杆菌阳性触发规范就医指引。",
+      "guidance": "幽门螺杆菌阳性需由医生评估并完成规范根除治疗；营养产品不能替代根除方案。",
+      "source_ref": "甲方禁忌矩阵V2#四-H4",
+      "enabled": true,
+      "version": "2.0.0"
+    },
+    {
+      "rule_id": "guidance_enteric_pathogen_referral",
+      "sku_ids": [],
+      "all_conditions": [],
+      "any_conditions": [
+        "condition:志贺氏菌检出",
+        "condition:沙门氏菌检出",
+        "condition:艰难梭菌检出",
+        "condition:致病性大肠杆菌检出"
+      ],
+      "message": "重要肠道致病菌检出触发规范就医指引。",
+      "guidance": "检出重要肠道致病菌时应优先就医并按规范处理，不建议自行使用草本抗菌产品替代医疗处置。",
+      "source_ref": "甲方禁忌矩阵V2#四-H3",
+      "enabled": true,
+      "version": "2.0.0"
+    }
+  ]
+}

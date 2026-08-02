@@ -4,16 +4,16 @@
 
 核心原则：
 - 不调用 `ima`
-- 只依赖本地资料、本地产品目录和人工校对后的病例数据
-- 上传文件后允许人工修正，不要求 OCR 一次识别完全正确
-- 云端 LLM 可选接入为“模型辅助层”；即使不接 LLM，本地规则层也能产出结构化草案
+- 上传阶段只做格式、大小、哈希、PDF 页数和文本层预检，不生成指标
+- 综合分析使用已配置的 Doubao Responses 模型；模型失败时明确失败并允许重试，不回退旧规则解析器
+- 营养素草案只基于医生确认后的异常、问卷和本地产品/禁忌/剂量规则生成
 - 所有推荐 SKU 只能来自本地 `30` 款产品目录
 
 ## 当前已实现
 
-- `backend/`：FastAPI 后端，包含病例建档、文件上传、自动抽取、人工解析校对、问卷提交、结构化推荐草案生成、审核发布和审计日志
-- `frontend/`：Next.js 本地网页工作台，支持病例列表、上传、问卷、解析校对、草案审核和发布
-- `MSQ 问卷导入`：在病例工作台的 MSQ 区域支持上传已填写的 `DOCX` 问卷，系统会自动识别其中的核心信息并带入当前病例分析流程
+- `backend/`：FastAPI 后端，包含统一资料预检、SQLite 分析任务、逐文件模型缓存、病例综合、异常校对、草案生成、审核发布和 PDF
+- `frontend/`：Next.js 工作台，支持统一上传、异步进度、只读 MSQ/专项摘要、数值及非数值异常校对、草案审核和发布
+- `MSQ`：与其他病例资料从同一上传区进入，由大模型转换为现有问卷结构；工作台只读展示
 - `frontend/app/products`：支持新增、修改、删除产品规则；保存后会直接影响后续新生成的推荐草案
 - `backend/app/data/product_catalog.json`：已替换为真实 `30` 款本地产品目录
 - `backend/app/data/knowledge_statements.json`：已替换为本地已审核知识条目
@@ -41,22 +41,16 @@ cd <项目目录>
 
 这是当前最推荐的本地打开方式，会同时拉起后端和前端，并按项目现有配置接入本地运行环境。
 
-如果部署方使用千问/通义千问模型，先在项目根目录 `.env` 中配置：
+当前综合分析使用 Doubao Responses 配置，先在项目根目录 `.env` 中确认：
 
 ```env
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=你的千问API Key
-LLM_MODEL=qwen-plus
-LLM_API_STYLE=chat
+LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+LLM_API_KEY=你的 Ark API Key
+LLM_MODEL=doubao-seed-2-0-mini-260215
+LLM_API_STYLE=responses
 ```
 
 然后启动：
-
-```bat
-scripts\start-local-qwen.cmd
-```
-
-如果部署方使用豆包模型，可使用：
 
 ```bat
 scripts\start-local-doubao.cmd
@@ -107,23 +101,14 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 ## 默认流程
 
 1. 创建病例
-2. 选择分析模式
-3. 上传 `PDF / DOCX / PPTX / TXT / PNG / JPG`
-4. 自动抽取文本和指标
-5. 在网页工作台中人工修正文本与标准化指标
-6. 可手填问卷，或在 MSQ 区域上传已填写的 `DOCX` 问卷自动识别
-7. 生成结构化推荐草案
-8. 顾问审核后发布最终报告
+2. 从统一上传区上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图
+3. 确认第三方模型处理授权，点击“确认资料并开始综合分析”
+4. 等待逐文件分析、病例级综合和证据校验完成
+5. 医生修改、删除或补充数值与非数值异常
+6. 点击“保存校对并生成营养素草案”
+7. 审核发布并下载 PDF
 
-分析模式说明：
-- `本地知识优先`：保持当前默认逻辑，以本地产品规则、已审核知识和人工校对数据为主，模型仅做有限润色；如果没有配置模型，则完全走本地流程
-- `大模型优先，本地知识辅助`：保持原有报告格式，但在草案生成阶段由大模型主导摘要、系统分析、生活方式内容和候选产品重排；本地产品目录、已审核知识、红旗规则和禁忌仍然负责边界约束
-
-## 当前工作台入口
-
-首页创建病例时，表单里新增了 `分析模式` 下拉框。先在这里选定模式，再进入病例工作台，后续草案才会按对应策略生成。
-
-如果病例已经创建完成，但模式选错了，当前建议重新创建病例后再上传资料，避免不同分析模式的草案混在同一个病例里。
+系统统一由大模型完成报告语义提取和病例综合；产品资格、产品排序、安全检查与剂量映射继续由本地版本化规则控制。
 
 ## 产品管理说明
 
@@ -152,6 +137,13 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - `LLM_API_STYLE`
 - `LLM_TIMEOUT_SECONDS`
 - `LLM_TEMPERATURE`
+- `FM_LLM_RETRY_ATTEMPTS`（默认 `2`，表示初次请求失败后最多重试两次）
+- `FM_LLM_RETRY_BASE_DELAY_SECONDS`（默认 `1`）
+- `FM_LLM_RETRY_MAX_DELAY_SECONDS`（默认 `10`）
+- `FM_MAX_UPLOAD_MB`（默认 `50`）
+- `FM_MAX_PDF_PAGES`（默认 `200`）
+- `FM_ANALYSIS_WORKERS`（默认 `1`）
+- `FM_CASE_DOCUMENT_WORKERS`（默认 `2`，限制范围 `1-4`）
 
 前端：
 - `NEXT_PUBLIC_API_BASE_URL`
@@ -198,30 +190,25 @@ npm run build
 
 - `0316测试报告1.pdf` 当前只作为报告结构参考，不做 1:1 版式复刻
 - `功能医学相关资料` 目前按“全量纳管、仅已审核知识参与自动推荐”的方式处理
-- 云端 LLM 接入为可选增强项，当前默认仍使用本地 deterministic composer
+- 病例综合分析必须配置 Doubao Responses 模型；产品、禁忌、剂量和审核发布仍由本地逻辑约束
 
-## 可选模型增强
+## 模型配置与边界
 
-当同时配置了 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 后，后端会自动切换到“远端模型辅助 + 本地规则兜底”模式。
+当同时配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 和 `LLM_API_STYLE=responses` 后，工作台可启动异步病例综合分析。
 
-千问/通义千问推荐配置：
+当前推荐配置：
 
 ```env
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=你的千问API Key
-LLM_MODEL=qwen-plus
-LLM_API_STYLE=chat
+LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+LLM_API_KEY=你的 Ark API Key
+LLM_MODEL=doubao-seed-2-0-mini-260215
+LLM_API_STYLE=responses
 ```
 
-如果目标服务使用 `responses` 风格接口，例如火山方舟 `https://ark.cn-beijing.volces.com/api/v3/responses`，可额外设置：
-- `LLM_API_STYLE=responses`
-
-如果不确定服务是 `responses` 还是 `chat/completions`，可以保持默认：
-- `LLM_API_STYLE=auto`
-
 这套模式的边界是：
-- 模型只能看到结构化的 `case_summary`、`key_lab_highlights`、本地候选产品和已审核知识命中结果
-- 模型不能直接读取原始上传文件全文，也不会直接读取未审核知识文件
+- 医生确认第三方处理授权后，病例分析模型会读取上传资料的文本层或扫描页图像；上传阶段本身不调用模型
+- 病例分析模型不得输出产品、SKU、剂量和疗程；非法 JSON、超时或模型失败会明确标记任务失败，不走旧解析规则兜底
+- 医生校对后，模型只基于确认异常做一次文本重新综合，不重新读取 PDF
+- 草案阶段只把结构化病例上下文、本地候选产品和已审核知识命中交给 composer
 - 模型只能从本地规则已经筛出的候选 SKU 中做选择，任何目录外 SKU 都会被后端丢弃
-- 一旦模型调用失败、返回空结果或返回不合规 JSON，系统会自动回退到本地 composer
-- 红旗风险、禁忌、人工解析校对未完成等硬性边界，依旧由本地规则层决定，模型不能绕过
+- 红旗风险、禁忌、剂量和人工审核等硬性边界由本地规则层决定，模型不能绕过

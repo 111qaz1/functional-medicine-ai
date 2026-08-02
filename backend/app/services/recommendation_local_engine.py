@@ -2,23 +2,59 @@
 
 import json
 import re
+import time
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.domain.models import AuditLog, ClinicianRule, ClinicianRuleAction, DraftRecommendationItem, DraftStatus, ProductRule, RecommendationDraft, SourceSpan
-from app.providers.base import DraftCompositionInput, LLMProvider, VectorStoreProvider
+from app.domain.models import (
+    AuditLog,
+    ClinicalEvidenceClass,
+    ClinicianRule,
+    ClinicianRuleAction,
+    DosageOptionSummary,
+    DosageRegimen,
+    DraftRecommendationItem,
+    DraftStatus,
+    ProductRule,
+    RecommendationDraft,
+    SafetyDecision,
+    SafetyRuleAction,
+    SourceSpan,
+    StructuredSystemFinding,
+)
+from app.providers.base import LLMProvider, VectorStoreProvider
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
+from app.services.body_systems import (
+    AXIS_SYSTEM_MAP,
+    SYSTEM_NAMES,
+    build_system_summary,
+    classify_text_to_system_ids,
+    priority_level,
+    system_ids_for_axes,
+)
 from app.services.indicator_extraction import CaseIndicatorService
+from app.services.evidence_policy import classify_confirmed_evidence
+from app.services.dosage_rules import select_dosage_option
+from app.services.lifestyle_planning import LifestylePlanningService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, RagSafetyFilter, SafeRagHit
+from app.services.report_content import (
+    ReportAbnormalItem,
+    build_plan_summary,
+    group_abnormal_items,
+)
 
 
 @dataclass
 class RecommendationContext:
     markers_by_code: dict[str, list]
+    clinical_findings: list
+    clinical_findings_by_code: dict[str, list]
+    clinical_findings_by_system: dict[str, list]
+    support_goal_findings: dict[str, list]
     goals: set[str]
     chief_concerns: set[str]
     symptoms: set[str]
@@ -28,10 +64,14 @@ class RecommendationContext:
     allergies: set[str]
     food_sensitivities: set[str]
     pregnancy: bool
+    age: int | None
     lifestyle_tags: set[str]
     msq_system_scores: dict[str, int]
     clinical_summary_text: str
     summary_nutrient_hints: list[str]
+    structured_system_findings: list[StructuredSystemFinding] = field(default_factory=list)
+    sex: str | None = None
+    unresolved_questionnaire_fields: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -59,6 +99,8 @@ class ProductTagProfile:
     goal_tags: tuple[str, ...]
     lifestyle_tags: tuple[str, ...]
     mechanism_tags: tuple[str, ...]
+    primary_system_ids: tuple[str, ...]
+    secondary_system_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -68,6 +110,34 @@ class SystemPriority:
     body: str
     score: float
     axes: tuple[str, ...]
+    priority_level: str
+    finding_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnifiedSafetyRule:
+    rule_id: str
+    sku_ids: tuple[str, ...]
+    action: SafetyRuleAction
+    all_conditions: tuple[str, ...]
+    any_conditions: tuple[str, ...]
+    message: str
+    source_ref: str | None
+    enabled: bool
+    version: str
+
+
+@dataclass(frozen=True)
+class ClientRecallRule:
+    rule_id: str
+    sku_ids: tuple[str, ...]
+    all_conditions: tuple[str, ...]
+    any_conditions: tuple[str, ...]
+    message: str
+    guidance: str | None
+    source_ref: str | None
+    enabled: bool
+    version: str
 
 
 class RecommendationService:
@@ -103,6 +173,7 @@ class RecommendationService:
         vector_store: VectorStoreProvider,
         llm_provider: LLMProvider,
         parsing_service=None,
+        standardization_service=None,
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v1",
@@ -114,13 +185,84 @@ class RecommendationService:
         self.vector_store = vector_store
         self.llm_provider = llm_provider
         self.parsing_service = parsing_service
+        self.standardization_service = standardization_service
         self.rag_retriever = rag_retriever
         self.model_version = model_version
         self.prompt_version = prompt_version
         self.rule_version = rule_version
         self.object_store = None
+        self.product_dosage_mapping = self._load_product_dosage_mapping()
         self.product_tag_profiles = self._load_product_tag_profiles()
+        (
+            self.support_goal_version,
+            self.support_goals,
+            self.product_capabilities,
+        ) = self._load_product_capabilities()
+        self.product_report_profiles = self._load_product_report_profiles()
         self.product_safety_profiles = self._load_product_safety_profiles()
+        self.unified_safety_rules = self._load_unified_safety_rules()
+        self.client_recall_rules = self._load_client_recall_rules()
+        self.client_recall_rules_by_id = {rule.rule_id: rule for rule in self.client_recall_rules}
+        self.lifestyle_planning_service = LifestylePlanningService()
+        self._validate_product_marker_codes()
+
+    def _load_product_capabilities(self) -> tuple[str, dict[str, dict], dict[str, dict]]:
+        path = Path(__file__).resolve().parents[1] / "data" / "support_goal_catalog.json"
+        if not path.exists():
+            return "legacy", {}, {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return "legacy", {}, {}
+        goals = {
+            str(item.get("code")): item
+            for item in payload.get("goals", [])
+            if isinstance(item, dict) and item.get("code")
+        }
+        products = {
+            str(item.get("sku_id")): item
+            for item in payload.get("products", [])
+            if isinstance(item, dict) and item.get("sku_id") and item.get("enabled", True)
+        }
+        return str(payload.get("version") or "legacy"), goals, products
+
+    def _validate_product_marker_codes(self) -> None:
+        if not self.standardization_service:
+            return
+        valid_codes = set(self.standardization_service.marker_codes)
+        invalid: list[str] = []
+        for product in self._list_products(enabled_only=False):
+            for rule in [*product.indications, *product.exclusions]:
+                if not rule.startswith("marker:"):
+                    continue
+                marker_code = rule.split(":", 2)[1]
+                if marker_code not in valid_codes:
+                    invalid.append(f"{product.sku_id}:{marker_code}")
+        for profile in self.product_tag_profiles.values():
+            for marker_tag in profile.marker_tags:
+                marker_code = marker_tag.split(":", 1)[0]
+                if marker_code and marker_code not in valid_codes:
+                    invalid.append(f"{profile.sku_id}:{marker_code}")
+        if invalid:
+            raise ValueError("产品规则引用了不存在的标准指标代码：" + "、".join(sorted(set(invalid))))
+
+    def _load_product_dosage_mapping(self) -> dict[str, dict]:
+        """Load the versioned Excel import once when the service starts."""
+        mapping_path = Path(__file__).resolve().parents[1] / "data" / "product_dosage_mapping.json"
+        if not mapping_path.exists():
+            return {}
+        try:
+            payload = json.loads(mapping_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        entries = payload.get("products", payload) if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return {}
+        return {
+            str(item.get("sku_id")): item
+            for item in entries
+            if isinstance(item, dict) and item.get("sku_id")
+        }
 
     def _load_product_tag_profiles(self) -> dict[str, ProductTagProfile]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_tag_matrix.json"
@@ -137,25 +279,58 @@ class RecommendationService:
             return tuple(str(item).strip() for item in value if str(item).strip())
 
         profiles: dict[str, ProductTagProfile] = {}
+        configured_axis_map = payload.get("axis_system_map") if isinstance(payload.get("axis_system_map"), dict) else {}
+
+        def mapped_systems(axes: tuple[str, ...]) -> tuple[str, ...]:
+            result: list[str] = []
+            for axis in axes:
+                configured = configured_axis_map.get(axis)
+                if isinstance(configured, list):
+                    result.extend(str(item).strip() for item in configured if str(item).strip() in SYSTEM_NAMES)
+                else:
+                    result.extend(AXIS_SYSTEM_MAP.get(axis, ()))
+            return tuple(dict.fromkeys(result))
+
         for item in payload.get("products", []):
             sku_id = str(item.get("sku_id") or "").strip()
             if not sku_id:
                 continue
+            primary_axes = as_tuple(item.get("primary_axes"))
+            secondary_axes = as_tuple(item.get("secondary_axes"))
             profiles[sku_id] = ProductTagProfile(
                 sku_id=sku_id,
                 sequence=str(item.get("sequence") or "").strip(),
                 product_name=str(item.get("product_name") or "").strip(),
                 precision_level=str(item.get("precision_level") or "adjunct").strip(),
-                primary_axes=as_tuple(item.get("primary_axes")),
-                secondary_axes=as_tuple(item.get("secondary_axes")),
+                primary_axes=primary_axes,
+                secondary_axes=secondary_axes,
                 marker_tags=as_tuple(item.get("marker_tags")),
                 symptom_tags=as_tuple(item.get("symptom_tags")),
                 condition_tags=as_tuple(item.get("condition_tags")),
                 goal_tags=as_tuple(item.get("goal_tags")),
                 lifestyle_tags=as_tuple(item.get("lifestyle_tags")),
                 mechanism_tags=as_tuple(item.get("mechanism_tags")),
+                primary_system_ids=mapped_systems(primary_axes),
+                secondary_system_ids=mapped_systems(secondary_axes),
             )
         return profiles
+
+    def _load_product_report_profiles(self) -> dict[str, dict[str, str]]:
+        catalog_path = Path(__file__).resolve().parents[1] / "data" / "product_report_catalog.json"
+        if not catalog_path.exists():
+            return {}
+        try:
+            payload = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        products = payload.get("products")
+        if not isinstance(products, dict):
+            return {}
+        return {
+            str(sku_id): {str(key): str(value or "").strip() for key, value in profile.items()}
+            for sku_id, profile in products.items()
+            if isinstance(profile, dict)
+        }
 
     def _load_product_safety_profiles(self) -> dict[str, dict[str, tuple[str, ...]]]:
         matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_safety_matrix.json"
@@ -184,6 +359,130 @@ class RecommendationService:
             }
         return profiles
 
+    def _load_unified_safety_rules(self) -> tuple[UnifiedSafetyRule, ...]:
+        matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_safety_matrix.json"
+        if not matrix_path.exists():
+            return ()
+        try:
+            payload = json.loads(matrix_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return ()
+
+        rules: list[UnifiedSafetyRule] = []
+        for item in payload.get("rules", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                action = SafetyRuleAction(str(item.get("action") or "warn"))
+            except ValueError:
+                continue
+
+            def tuple_value(key: str) -> tuple[str, ...]:
+                value = item.get(key)
+                if not isinstance(value, list):
+                    return ()
+                return tuple(str(entry).strip() for entry in value if str(entry).strip())
+
+            rule_id = str(item.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            rules.append(
+                UnifiedSafetyRule(
+                    rule_id=rule_id,
+                    sku_ids=tuple_value("sku_ids"),
+                    action=action,
+                    all_conditions=tuple_value("all_conditions"),
+                    any_conditions=tuple_value("any_conditions"),
+                    message=str(item.get("message") or "").strip(),
+                    source_ref=str(item.get("source_ref") or "").strip() or None,
+                    enabled=bool(item.get("enabled", True)),
+                    version=str(item.get("version") or payload.get("version") or "").strip(),
+                )
+            )
+        return tuple(rules)
+
+    def _load_client_recall_rules(self) -> tuple[ClientRecallRule, ...]:
+        matrix_path = Path(__file__).resolve().parents[1] / "data" / "product_recall_matrix.json"
+        if not matrix_path.exists():
+            return ()
+        try:
+            payload = json.loads(matrix_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return ()
+
+        def tuple_value(item: dict, key: str) -> tuple[str, ...]:
+            value = item.get(key)
+            if not isinstance(value, list):
+                return ()
+            return tuple(str(entry).strip() for entry in value if str(entry).strip())
+
+        rules: list[ClientRecallRule] = []
+        for item in payload.get("rules", []):
+            if not isinstance(item, dict):
+                continue
+            rule_id = str(item.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            rules.append(
+                ClientRecallRule(
+                    rule_id=rule_id,
+                    sku_ids=tuple_value(item, "sku_ids"),
+                    all_conditions=tuple_value(item, "all_conditions"),
+                    any_conditions=tuple_value(item, "any_conditions"),
+                    message=str(item.get("message") or "").strip(),
+                    guidance=str(item.get("guidance") or "").strip() or None,
+                    source_ref=str(item.get("source_ref") or "").strip() or None,
+                    enabled=bool(item.get("enabled", True)),
+                    version=str(item.get("version") or payload.get("version") or "").strip(),
+                )
+            )
+        return tuple(rules)
+
+    def _rule_matches_context(
+        self,
+        *,
+        all_conditions: tuple[str, ...],
+        any_conditions: tuple[str, ...],
+        context: RecommendationContext,
+    ) -> bool:
+        if all_conditions and not all(self._matches_rule(condition, context) for condition in all_conditions):
+            return False
+        if any_conditions and not any(self._matches_rule(condition, context) for condition in any_conditions):
+            return False
+        return bool(all_conditions or any_conditions)
+
+    def _matched_client_recall_rules(
+        self,
+        product: ProductRule,
+        context: RecommendationContext,
+    ) -> list[ClientRecallRule]:
+        return [
+            rule
+            for rule in self.client_recall_rules
+            if rule.enabled
+            and product.sku_id in rule.sku_ids
+            and self._rule_matches_context(
+                all_conditions=rule.all_conditions,
+                any_conditions=rule.any_conditions,
+                context=context,
+            )
+        ]
+
+    def _client_recall_guidance(self, context: RecommendationContext) -> list[str]:
+        return list(
+            dict.fromkeys(
+                rule.guidance
+                for rule in self.client_recall_rules
+                if rule.enabled
+                and rule.guidance
+                and self._rule_matches_context(
+                    all_conditions=rule.all_conditions,
+                    any_conditions=rule.any_conditions,
+                    context=context,
+                )
+            )
+        )
+
     def _list_products(self, *, enabled_only: bool = True) -> list[ProductRule]:
         return [
             self._apply_product_safety_profile(product)
@@ -207,10 +506,195 @@ class RecommendationService:
             }
         )
 
+    def _canonical_product_name(self, product: ProductRule) -> str:
+        profile = self.product_report_profiles.get(product.sku_id, {})
+        return profile.get("product_name") or product.display_name
+
+    def _evaluate_product_safety(
+        self,
+        product: ProductRule,
+        context: RecommendationContext,
+    ) -> list[SafetyDecision]:
+        decisions: list[SafetyDecision] = []
+        for rule in product.exclusions:
+            if not self._matches_rule(rule, context):
+                continue
+            rule_slug = re.sub(r"[^a-z0-9]+", "_", rule.lower()).strip("_") or "condition"
+            decisions.append(
+                SafetyDecision(
+                    rule_id=f"legacy_exclude_{product.sku_id}_{rule_slug}",
+                    sku_id=product.sku_id,
+                    action=SafetyRuleAction.exclude,
+                    message=f"病例已命中产品禁忌条件：{rule}",
+                    source_ref="product_catalog.exclusions",
+                )
+            )
+
+        for rule in self.unified_safety_rules:
+            if not rule.enabled or (product.sku_id not in rule.sku_ids and "*" not in rule.sku_ids):
+                continue
+            if not self._rule_matches_context(
+                all_conditions=rule.all_conditions,
+                any_conditions=rule.any_conditions,
+                context=context,
+            ):
+                continue
+            decisions.append(
+                SafetyDecision(
+                    rule_id=rule.rule_id,
+                    sku_id=product.sku_id,
+                    action=rule.action,
+                    message=rule.message,
+                    source_ref=rule.source_ref,
+                )
+            )
+
+        precedence = {
+            SafetyRuleAction.exclude: 0,
+            SafetyRuleAction.requires_review: 1,
+            SafetyRuleAction.warn: 2,
+        }
+        unique: dict[tuple[str, SafetyRuleAction], SafetyDecision] = {}
+        for decision in decisions:
+            unique[(decision.rule_id, decision.action)] = decision
+        return sorted(unique.values(), key=lambda item: (precedence[item.action], item.rule_id))
+
+    def evaluate_safety_rules(
+        self,
+        context: RecommendationContext,
+        products: list[ProductRule] | None = None,
+    ) -> tuple[dict[str, list[SafetyDecision]], float]:
+        started = time.perf_counter()
+        evaluated = {
+            product.sku_id: self._evaluate_product_safety(product, context)
+            for product in (products if products is not None else self._list_products(enabled_only=True))
+        }
+        return evaluated, time.perf_counter() - started
+
+    def _primary_system_for_product(
+        self,
+        product: ProductRule,
+        priority_findings: list[SystemPriority] | None,
+    ) -> str | None:
+        profile = self.product_tag_profiles.get(product.sku_id)
+        if not profile:
+            return None
+        ordered_system_ids = [finding.system_id for finding in priority_findings or []]
+        for candidates in (profile.primary_system_ids, profile.secondary_system_ids):
+            for system_id in ordered_system_ids:
+                if system_id in candidates:
+                    return system_id
+        return next(iter(profile.primary_system_ids or profile.secondary_system_ids), None)
+
+    def _system_priority_rank_for_product(
+        self,
+        product: ProductRule,
+        priority_findings: list[SystemPriority] | None,
+    ) -> int | None:
+        system_id = self._primary_system_for_product(product, priority_findings)
+        if not system_id:
+            return None
+        for index, finding in enumerate(priority_findings or [], start=1):
+            if finding.system_id == system_id:
+                return index
+        return None
+
+    @staticmethod
+    def _matched_finding_signals(evidence_ids: list[str]) -> list[str]:
+        return [
+            evidence_id.split(":", 1)[1]
+            for evidence_id in evidence_ids
+            if evidence_id.startswith("finding:")
+        ]
+
+    def build_total_advice_items(
+        self,
+        recommended_items: list[DraftRecommendationItem],
+        *,
+        structured_system_findings: list[StructuredSystemFinding] | None = None,
+        finding_names_by_id: dict[str, str] | None = None,
+    ) -> list[str]:
+        systems = {item.system_id: item for item in structured_system_findings or []}
+        finding_names = finding_names_by_id or {}
+        products = {product.sku_id: product for product in self._list_products(enabled_only=False)}
+        advice_items: list[str] = []
+        for item in recommended_items:
+            system = systems.get(item.primary_system_id or "")
+            system_name = system.system_name if system else SYSTEM_NAMES.get(item.primary_system_id or "", "相关身体系统")
+            matched_names = [finding_names[finding_id] for finding_id in item.matched_finding_ids if finding_id in finding_names]
+            evidence = "、".join(list(dict.fromkeys(matched_names))[:2])
+            if not evidence:
+                evidence = f"已确认的{system_name}异常"
+            product = products.get(item.sku_id)
+            target = self._product_support_target(product, item.primary_system_id)
+            reason = self._fit_total_advice_reason(evidence=evidence, system_name=system_name, target=target)
+            if 50 <= self._han_count(reason) <= 80:
+                advice_items.append(f"{item.display_name}：{reason}")
+        return advice_items
+
+    def _product_support_target(self, product: ProductRule | None, system_id: str | None) -> str:
+        profile = self.product_tag_profiles.get(product.sku_id) if product else None
+        axis_labels = {
+            "gut_bile": "肝胆与脂肪消化支持",
+            "gut_microbiome": "菌群结构与肠道生态支持",
+            "gut_mucosa": "胃肠黏膜与屏障支持",
+            "gastric_acid": "胃酸分泌支持",
+            "digestive_enzyme": "消化酶与营养吸收支持",
+            "liver_detox": "肝胆代谢与抗氧化支持",
+            "immune": "免疫调节支持",
+            "inflammation": "炎症平衡支持",
+            "antioxidant": "抗氧化与恢复支持",
+            "thyroid_axis": "甲状腺营养与代谢支持",
+            "glycemic_balance": "血糖稳定与代谢支持",
+            "weight_metabolism": "体重与脂肪代谢支持",
+            "nutrition_repletion": "体重过轻与营养恢复支持",
+            "vitamin_d_repletion": "维生素D与骨骼免疫支持",
+            "cardiovascular": "心血管与循环支持",
+            "lipid_balance": "血脂代谢支持",
+            "sleep_stress": "睡眠与压力恢复支持",
+            "neuro_cognitive": "神经认知支持",
+            "energy_mitochondria": "细胞能量与疲劳恢复支持",
+            "bone_metabolism": "骨代谢支持",
+            "iron_repletion": "铁利用与营养恢复支持",
+            "female_hormone": "女性激素节律支持",
+            "hormone_axis": "内分泌节律支持",
+        }
+        for axis in (profile.primary_axes if profile else ()):
+            if axis in axis_labels:
+                return axis_labels[axis]
+        if product and product.candidate_use_cases:
+            return f"{product.candidate_use_cases[0]}相关营养支持"
+        return f"{SYSTEM_NAMES.get(system_id or '', '整体')}功能支持"
+
+    @staticmethod
+    def _han_count(value: str) -> int:
+        return len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", value or ""))
+
+    def _fit_total_advice_reason(self, *, evidence: str, system_name: str, target: str) -> str:
+        candidates = [
+            f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}，并结合症状变化、耐受情况及后续复查趋势评估实际支持效果和下一阶段调整方向。",
+            f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}，建议结合症状变化、耐受情况和后续复查趋势评估效果，再由医生决定后续调整方向。",
+            f"针对{evidence}，本阶段用于支持{system_name}的{target}，首月以稳妥执行和连续观察为主，并结合症状、耐受及复查趋势评估后续调整方向。",
+        ]
+        for candidate in candidates:
+            if 50 <= self._han_count(candidate) <= 80:
+                return candidate
+        compact_evidence = re.split(r"[、，；]", evidence)[0][:12]
+        fallback = (
+            f"针对{compact_evidence}等已确认问题，本阶段用于支持{system_name}相关功能与整体恢复，"
+            "首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
+        )
+        return fallback
+
     def generate(self, case_id: str, requested_by: str) -> RecommendationDraft:
         case = self.case_service.get_case(case_id)
+        latest_analysis = self.repository.get_latest_case_analysis(case_id)
+        support_need_by_id = {
+            need.id: need
+            for need in (latest_analysis.support_needs if latest_analysis else [])
+            if getattr(need.eligibility_status, "value", need.eligibility_status) == "eligible"
+        }
         customer_name = self._resolve_customer_name(case)
-        analysis_mode = getattr(case.analysis_mode, "value", str(case.analysis_mode))
         context = self._build_context(case)
         support_profiles = self._build_support_profiles(context)
         case_summary = self._build_case_summary(case, customer_name=customer_name)
@@ -222,66 +706,58 @@ class RecommendationService:
             report_guidance=report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
-        red_flags = self._evaluate_red_flags(context, case.questionnaire.age if case.questionnaire else None)
+        risk_notices = list(
+            dict.fromkeys(
+                [
+                    *self._evaluate_risk_notices(context, context.age),
+                    *self._client_recall_guidance(context),
+                ]
+            )
+        )
         missing_info = self._collect_missing_info(case)
-        reviewed_report_text = self._build_reviewed_report_text(case)
-        structured_case_context = self._build_structured_case_context(case, context, support_profiles, report_guidance)
-
         reviewed_knowledge = self.repository.list_knowledge(reviewed_only=True)
         knowledge_hits = []
         if reviewed_knowledge:
             retrieval_query = self._build_query(case, context, support_profiles)
-            knowledge_hits = self.vector_store.search(retrieval_query, top_k=12 if analysis_mode == "llm_primary" else 8)
+            knowledge_hits = self.vector_store.search(retrieval_query, top_k=12)
 
         knowledge_by_id = {item.statement_id: item for item in reviewed_knowledge}
         product_by_id = {item.sku_id: item for item in self._list_products(enabled_only=True)}
         matched_clinician_rules = self.list_matched_clinician_rules(case, context=context, support_profiles=support_profiles)
         clinician_rule_by_id = {item.id: item for item in matched_clinician_rules}
 
-        if analysis_mode == "llm_primary":
-            ranked_products, product_evidence_map, contraindications = self._rank_products_for_llm_primary(
-                case,
-                context,
-                knowledge_hits,
-                support_profiles,
-                matched_clinician_rules,
-                priority_findings=priority_findings,
-            )
-        else:
-            ranked_products, product_evidence_map, contraindications = self._rank_products(
-                context,
-                knowledge_hits,
-                support_profiles,
-                matched_clinician_rules,
-                priority_findings=priority_findings,
-            )
+        ranked_products, product_evidence_map, contraindications, safety_decisions_by_sku = self._rank_products(
+            case,
+            context,
+            knowledge_hits,
+            support_profiles,
+            matched_clinician_rules,
+            priority_findings=priority_findings,
+        )
         rag_hits, rag_audit = self._retrieve_safe_rag_hits(
             case,
             context=context,
             support_profiles=support_profiles,
             key_lab_highlights=key_lab_highlights,
             report_guidance=report_guidance,
-            red_flags=red_flags,
+            red_flags=[],
             contraindications=contraindications,
         )
-        composition = self.llm_provider.compose(
-            DraftCompositionInput(
-                customer_name=customer_name,
-                analysis_mode=analysis_mode,
-                case_summary=case_summary,
-                key_lab_highlights=key_lab_highlights,
-                candidate_products=ranked_products,
-                knowledge_hits=knowledge_hits,
-                product_evidence_map=product_evidence_map,
-                red_flags=red_flags,
-                contraindications=contraindications,
-                missing_info=missing_info,
-                rag_hits=[hit.to_prompt_dict() for hit in rag_hits],
-                reviewed_report_text=reviewed_report_text,
-                structured_case_context=structured_case_context,
-            )
+        # Product selection is deliberately local. The second-stage synthesis model
+        # receives support-goal definitions only and never sees product names or SKU
+        # identifiers; safety and dosage logic therefore cannot be bypassed by model
+        # output. Existing local report assembly consumes the deterministic result.
+        composition = SimpleNamespace(
+            selected_sku_ids=[product.sku_id for product in ranked_products],
+            lifestyle_actions=[],
+            product_reason_overrides={},
+            section_overrides={},
+            rationale=["产品候选由版本化能力映射、医生确认的证据及本地安全规则生成。"],
+            confidence=0.86 if ranked_products else 0.35,
+            abstain_reason=None if ranked_products else "未找到具备有效病例证据的产品候选。",
         )
-        lifestyle_actions = self._finalize_lifestyle_actions(composition.lifestyle_actions, knowledge_hits, context)
+        lifestyle_plan = self.lifestyle_planning_service.build_plan(case, context)
+        lifestyle_actions = self.lifestyle_planning_service.legacy_actions(lifestyle_plan)
 
         recommended_items: list[DraftRecommendationItem] = []
         selected_products = self._select_products_for_output(
@@ -289,9 +765,29 @@ class RecommendationService:
             composition.selected_sku_ids,
             product_evidence_map,
         )
-        if not composition.abstain_reason:
+        ranked_position = {product.sku_id: index for index, product in enumerate(ranked_products)}
+        selected_products.sort(
+            key=lambda product: (
+                self._system_priority_rank_for_product(product, priority_findings) or 999,
+                ranked_position.get(product.sku_id, len(ranked_position)),
+            )
+        )
+        effective_abstain_reason = composition.abstain_reason if not ranked_products else None
+        if not effective_abstain_reason:
             for product in selected_products:
-                evidence_ids = product_evidence_map.get(product.sku_id, [])[:4]
+                all_evidence_ids = product_evidence_map.get(product.sku_id, [])
+                evidence_ids = all_evidence_ids[:4]
+                matched_signal_ids = self._matched_finding_signals(all_evidence_ids)
+                matched_support_need_ids = [
+                    finding_id for finding_id in matched_signal_ids if finding_id in support_need_by_id
+                ]
+                matched_finding_ids = [
+                    finding_id for finding_id in matched_signal_ids if finding_id not in support_need_by_id
+                ]
+                for support_need_id in matched_support_need_ids:
+                    for evidence in support_need_by_id[support_need_id].evidence_refs:
+                        if evidence.ref.startswith("finding:"):
+                            matched_finding_ids.append(evidence.ref.split(":", 1)[1])
                 default_reason = self._build_product_reason(product, evidence_ids)
                 final_reason = self._sanitize_reason_text(
                     self._prefer_chinese_text(
@@ -299,24 +795,64 @@ class RecommendationService:
                         default_reason,
                     )
                 )
+                dosage_payload = self._resolve_dosage_payload(
+                    product,
+                    context,
+                    requires_review=any(
+                        decision.action == SafetyRuleAction.requires_review
+                        for decision in safety_decisions_by_sku.get(product.sku_id, [])
+                    ),
+                )
                 recommended_items.append(
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
-                        display_name=product.display_name,
-                        dosage=self._first_month_dosage(product),
+                        display_name=self._canonical_product_name(product),
+                        **dosage_payload,
                         reason=final_reason,
                         evidence_ids=evidence_ids,
-                        evidence_details=self._build_evidence_details(
-                            evidence_ids,
-                            product_by_id=product_by_id,
-                            knowledge_by_id=knowledge_by_id,
-                            clinician_rule_by_id=clinician_rule_by_id,
+                        evidence_details=list(
+                            dict.fromkeys(
+                                [
+                                    *self._build_evidence_details(
+                                        evidence_ids,
+                                        product_by_id=product_by_id,
+                                        knowledge_by_id=knowledge_by_id,
+                                        clinician_rule_by_id=clinician_rule_by_id,
+                                    ),
+                                    *[
+                                        f"支持需求：{support_need_by_id[need_id].support_need_text}"
+                                        for need_id in matched_support_need_ids
+                                    ],
+                                ]
+                            )
                         ),
-                        warnings=self._product_safety_warnings(product),
+                        warnings=list(
+                            dict.fromkeys(
+                                [
+                                    *[
+                                        decision.message
+                                        for decision in safety_decisions_by_sku.get(product.sku_id, [])
+                                        if decision.action != SafetyRuleAction.exclude
+                                    ],
+                                    *self._product_safety_warnings(product, context),
+                                ]
+                            )
+                        )[:6],
+                        primary_system_id=self._primary_system_for_product(product, priority_findings),
+                        matched_finding_ids=list(dict.fromkeys(matched_finding_ids)),
+                        matched_support_need_ids=matched_support_need_ids,
+                        system_priority_rank=self._system_priority_rank_for_product(product, priority_findings),
+                        safety_decisions=safety_decisions_by_sku.get(product.sku_id, []),
                     )
                 )
 
-        evidence_ids = list(dict.fromkeys([e for ids in product_evidence_map.values() for e in ids]))[:20]
+        selected_evidence = [
+            evidence_id
+            for item in recommended_items
+            for evidence_id in item.evidence_ids
+        ]
+        all_ranked_evidence = [evidence_id for ids in product_evidence_map.values() for evidence_id in ids]
+        evidence_ids = list(dict.fromkeys([*selected_evidence, *all_ranked_evidence]))[:20]
         evidence_details = self._build_evidence_details(
             evidence_ids,
             product_by_id=product_by_id,
@@ -327,7 +863,7 @@ class RecommendationService:
             case,
             context,
             key_lab_highlights,
-            red_flags,
+            risk_notices,
             report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
@@ -339,7 +875,36 @@ class RecommendationService:
             anti_aging_findings=anti_aging_findings,
         )
         first_month_protocol = self._build_first_month_protocol(recommended_items)
-        lifestyle_focus = self._build_lifestyle_prescription(case, context, lifestyle_actions)
+        structured_system_findings = [
+            StructuredSystemFinding(
+                system_id=finding.system_id,
+                system_name=SYSTEM_NAMES.get(finding.system_id, finding.title.split("（", 1)[0]),
+                priority_level=finding.priority_level,
+                priority_score=finding.score,
+                summary=finding.body,
+                finding_ids=list(finding.finding_ids),
+            )
+            for finding in priority_findings
+        ]
+        finding_names_by_id = {
+            finding.finding_id: finding.finding_name
+            for finding in context.clinical_findings
+        }
+        grouped_key_lab_highlights = self._build_grouped_key_lab_highlights(
+            case,
+            structured_system_findings,
+        )
+        total_advice = self.build_total_advice_items(
+            recommended_items,
+            structured_system_findings=structured_system_findings,
+            finding_names_by_id=finding_names_by_id,
+        )
+        plan_summary = build_plan_summary(
+            structured_system_findings,
+            recommended_items,
+            finding_names_by_id,
+        )
+        lifestyle_focus = self.lifestyle_planning_service.report_items(lifestyle_plan)
         test_recommendations = self._build_prioritized_test_recommendations(context, anti_aging_findings)
         supplement_adjustments = self._build_existing_supplement_adjustments(case)
         follow_up_plan = self._build_follow_up_plan(context)
@@ -347,56 +912,80 @@ class RecommendationService:
         report_sections = {
             "病例摘要": case_summary,
             "核心结论与健康画像": health_portrait,
-            "异常指标汇总": key_lab_highlights,
+            "异常指标汇总": grouped_key_lab_highlights,
             "原报告小结与建议": report_guidance,
             "功能医学系统失衡分析": system_analysis,
-            "风险提示": list(dict.fromkeys(red_flags + contraindications)),
+            # Product exclusions are doctor-side audit information. They remain
+            # available in draft.contraindications and safety_decisions, but are
+            # not copied into the customer-facing report body.
+            "风险提示": risk_notices,
             "首月营养素干预方案": first_month_protocol,
+            "总医嘱说明": total_advice,
             "生活方式干预处方": lifestyle_focus,
             "后续检查建议": test_recommendations,
             "现有补充剂调整建议": supplement_adjustments,
             "随访计划": follow_up_plan,
             "90天健康路线图": roadmap,
             "待确认项": missing_info,
-            "审核备注": [
-                "\u6240\u6709\u7ed3\u679c\u4ec5\u57fa\u4e8e\u672c\u5730\u5df2\u5ba1\u6838\u77e5\u8bc6\u3001\u4ea7\u54c1\u89c4\u5219\u548c\u4eba\u5de5\u786e\u8ba4\u540e\u7684\u75c5\u4f8b\u6570\u636e\u751f\u6210\u3002",
-                "\u82e5\u5b58\u5728\u9ad8\u98ce\u9669\u6307\u6807\u3001\u5b55\u54fa\u3001\u513f\u7ae5\u6216\u7528\u836f\u51b2\u7a81\uff0c\u5fc5\u987b\u4eba\u5de5\u590d\u6838\u540e\u518d\u5bf9\u5916\u53d1\u5e03\u3002",
-                "\u82e5\u542f\u7528\u4e86\u4e91\u7aef\u5927\u6a21\u578b\uff0c\u5176\u4f5c\u7528\u4ec5\u9650\u4e8e\u5728\u672c\u5730\u5019\u9009\u4ea7\u54c1\u548c\u5df2\u5ba1\u6838\u8bc1\u636e\u8303\u56f4\u5185\u505a\u91cd\u6392\u4e0e\u6da6\u8272\u3002",
-                "\u82e5\u533b\u751f\u901a\u8fc7\u667a\u6167\u52a9\u624b\u6c89\u6dc0\u4e86\u75c5\u4f8b\u89c4\u5219\uff0c\u8fd9\u4e9b\u89c4\u5219\u4f1a\u5728\u540e\u7eed\u76f8\u4f3c\u75c5\u4f8b\u4e2d\u4f5c\u4e3a\u53ef\u5ba1\u8ba1\u7684\u52a0\u6743\u4f9d\u636e\u53c2\u4e0e\u63a8\u8350\u3002",
-                "产品编号校对：当前客户产品表中 #21 为支持胆汁分泌；谷胱甘肽相关支持对应 #31 肝脏氨基酸解毒支持，不引用旧样例编号。",
-                "产品边界：当前版本不新增 #26 复合益生菌为可推荐 SKU，若后续接入需先完成产品目录和禁忌规则审核。",
-            ],
+            "方案总结": plan_summary,
         }
         if not report_guidance:
             report_sections.pop("原报告小结与建议", None)
         report_sections = self._apply_report_section_overrides(
             report_sections,
             composition.section_overrides,
-            analysis_mode=analysis_mode,
         )
         report_sections = self._apply_rag_enhancements(report_sections, rag_hits, rag_audit)
+        rag_audit_items = report_sections.pop("RAG内部审查", [])
 
         draft = RecommendationDraft(
             id=f"draft_{uuid.uuid4().hex[:12]}",
             case_id=case_id,
-            status=DraftStatus.abstained if composition.abstain_reason else DraftStatus.pending_review,
+            status=DraftStatus.abstained if effective_abstain_reason else DraftStatus.pending_review,
             case_summary=case_summary,
-            key_lab_highlights=key_lab_highlights,
+            key_lab_highlights=grouped_key_lab_highlights,
             recommended_skus=recommended_items,
             lifestyle_actions=lifestyle_actions,
+            lifestyle_plan=lifestyle_plan,
             rationale=composition.rationale,
             evidence_ids=evidence_ids,
             evidence_details=evidence_details,
             contraindications=list(dict.fromkeys(contraindications)),
+            safety_decisions=[
+                decision
+                for sku_id in sorted(safety_decisions_by_sku)
+                for decision in safety_decisions_by_sku[sku_id]
+            ],
             missing_info=missing_info,
             confidence=composition.confidence,
-            abstain_reason=composition.abstain_reason,
+            abstain_reason=effective_abstain_reason,
             manual_review_required=True,
-            red_flags=red_flags,
+            red_flags=[],
+            structured_system_findings=structured_system_findings,
             report_sections=report_sections,
+            internal_audit={
+                "rag": list(rag_audit_items) if isinstance(rag_audit_items, list) else [],
+                "finding_standardization": self._finding_standardization_audit(case),
+                "product_selection": self._product_selection_audit(
+                    context=context,
+                    recommended_items=recommended_items,
+                    product_evidence_map=product_evidence_map,
+                    safety_decisions_by_sku=safety_decisions_by_sku,
+                ),
+                "lifestyle": {
+                    "rule_version": lifestyle_plan.rule_version,
+                    "status": lifestyle_plan.status,
+                    "legacy_lifestyle_rag": "disabled_for_structured_plan",
+                    "selected_protocols": [
+                        item.model_dump(mode="json") for item in lifestyle_plan.selected_protocols
+                    ],
+                    "missing_info": list(lifestyle_plan.missing_info),
+                },
+            },
             model_version=self.model_version,
             prompt_version=self.prompt_version,
             rule_version=self.rule_version,
+            support_goal_version=self.support_goal_version,
         )
         self.repository.save_draft(draft)
         self.case_service.append_draft(case_id, draft.id)
@@ -407,7 +996,25 @@ class RecommendationService:
                 entity_id=draft.id,
                 action="draft_generated",
                 actor_id=requested_by,
-                payload=draft.model_dump(mode="json"),
+                payload={
+                    "case_id": case_id,
+                    "draft_id": draft.id,
+                    "status": draft.status.value,
+                    "recommended_sku_count": len(draft.recommended_skus),
+                    "model_version": draft.model_version,
+                    "prompt_version": draft.prompt_version,
+                    "rule_version": draft.rule_version,
+                    "safety_decisions": [
+                        {
+                            "rule_id": decision.rule_id,
+                            "sku_id": decision.sku_id,
+                            "action": decision.action.value,
+                            "message": decision.message,
+                        }
+                        for decision in draft.safety_decisions
+                    ],
+                    "rag_audit_count": len(draft.internal_audit.get("rag", [])),
+                },
             )
         )
         return draft
@@ -418,37 +1025,111 @@ class RecommendationService:
             if self._is_admin_metadata_snippet(getattr(getattr(item, "source_span", None), "snippet", "")):
                 continue
             markers_by_code.setdefault(item.marker_code, []).append(item)
-        self._augment_markers_from_case_indicators(case, markers_by_code)
+        # Do not reconstruct standard markers from arbitrary display strings. Only
+        # doctor-confirmed, exactly standardized lab items enter marker rules.
+        clinical_findings = list(getattr(case, "confirmed_clinical_findings", []) or [])
+        clinical_findings_by_code: dict[str, list] = {}
+        clinical_findings_by_system: dict[str, list] = {}
+        support_goal_findings: dict[str, list] = {}
+        for finding in clinical_findings:
+            evidence_class = classify_confirmed_evidence(finding)
+            if finding.finding_code:
+                clinical_findings_by_code.setdefault(finding.finding_code, []).append(finding)
+            for system_id in finding.system_ids:
+                if system_id in SYSTEM_NAMES:
+                    clinical_findings_by_system.setdefault(system_id, []).append(finding)
+            for support_goal in finding.support_goals:
+                if support_goal in AXIS_SYSTEM_MAP and evidence_class not in {
+                    ClinicalEvidenceClass.genetic_risk,
+                    ClinicalEvidenceClass.follow_up_only,
+                }:
+                    support_goal_findings.setdefault(support_goal, []).append(finding)
 
         questionnaire = case.questionnaire
         chief_concerns = {self._normalize(text) for text in (questionnaire.chief_concerns if questionnaire else [])}
         symptoms = {self._normalize(text) for text in (questionnaire.symptoms if questionnaire else [])}
         conditions = {self._normalize(text) for text in (questionnaire.known_conditions if questionnaire else [])}
+        conditions.update(
+            self._normalize(value)
+            for finding in clinical_findings
+            for value in (finding.finding_code, finding.finding_name)
+            if value
+        )
         family_history = {self._normalize(text) for text in (questionnaire.family_history if questionnaire else [])}
         goals = {self._normalize(text) for text in (questionnaire.goals if questionnaire else [])}
-        medications = {self._normalize(text) for text in (questionnaire.medications if questionnaire else [])}
-        allergies = {self._normalize(text) for text in (questionnaire.allergies if questionnaire else [])}
+        unresolved_questionnaire_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        medications = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.medications if questionnaire else [])
+            }
+            if "medications" not in unresolved_questionnaire_fields
+            else set()
+        )
+        allergies = (
+            {
+                self._normalize(text)
+                for text in (questionnaire.allergies if questionnaire else [])
+            }
+            if "allergies" not in unresolved_questionnaire_fields
+            else set()
+        )
+        if "symptoms" in unresolved_questionnaire_fields:
+            symptoms = set()
         food_sensitivities = {
             self._normalize(text) for text in (questionnaire.food_sensitivities if questionnaire else [])
         }
-        msq_system_scores = dict(questionnaire.msq_system_scores) if questionnaire else {}
-        clinical_summary_text = (case.clinical_summary_text or "").strip()
+        msq_system_scores = (
+            dict(questionnaire.msq_system_scores)
+            if questionnaire
+            and "msq_system_scores" not in unresolved_questionnaire_fields
+            else {}
+        )
+        summary_parts = [(case.clinical_summary_text or "").strip()]
+        latest_analysis = self.repository.get_latest_case_analysis(case.id)
+        structured_system_findings: list[StructuredSystemFinding] = []
+        if latest_analysis and getattr(latest_analysis.status, "value", latest_analysis.status) == "reviewed":
+            model_summary = (latest_analysis.reviewed_case_summary or "").strip()
+            if model_summary:
+                summary_parts.append(f"模型综合病例总结：{model_summary}")
+            if latest_analysis.reviewed_system_findings:
+                summary_parts.append("模型综合系统分析：" + "；".join(latest_analysis.reviewed_system_findings))
+            structured_system_findings = list(latest_analysis.final_structured_system_findings)
+        clinical_summary_text = "\n".join(item for item in summary_parts if item)
         normalized_clinical_summary = self._normalize(clinical_summary_text)
         summary_nutrient_hints = self._extract_summary_nutrient_hints(clinical_summary_text)
 
         lifestyle_tags: set[str] = set()
         if questionnaire:
-            if (
+            if "sleep_hours" not in unresolved_questionnaire_fields and (
                 questionnaire.sleep_hours is not None
                 and questionnaire.sleep_hours < 6
-            ) or self._normalize(questionnaire.sleep_quality or "") in {
-                "poor",
-                "\u5dee",
-            }:
+            ):
+                lifestyle_tags.add("sleep_recovery")
+            if (
+                "sleep_quality" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.sleep_quality or "")
+                in {"poor", "\u5dee"}
+            ):
                 lifestyle_tags.add("sleep_recovery")
             if questionnaire.stress_level == "high":
                 lifestyle_tags.add("stress_support")
-            if self._normalize(questionnaire.exercise_frequency or "") in {"rare", "none", "很少", "寰堝皯"}:
+            if (
+                "exercise_frequency" not in unresolved_questionnaire_fields
+                and self._normalize(questionnaire.exercise_frequency or "")
+                in {
+                    "rare",
+                    "none",
+                    "很少",
+                    "无",
+                    "无规律运动",
+                    "寰堝皯",
+                }
+            ):
                 lifestyle_tags.add("movement")
             if self._normalize(questionnaire.bowel_habits or "") in {"constipation", "便秘", "渚跨"}:
                 lifestyle_tags.add("gut_support")
@@ -511,6 +1192,10 @@ class RecommendationService:
 
         return RecommendationContext(
             markers_by_code=markers_by_code,
+            clinical_findings=clinical_findings,
+            clinical_findings_by_code=clinical_findings_by_code,
+            clinical_findings_by_system=clinical_findings_by_system,
+            support_goal_findings=support_goal_findings,
             goals=goals,
             chief_concerns=chief_concerns,
             symptoms=symptoms,
@@ -520,10 +1205,25 @@ class RecommendationService:
             allergies=allergies,
             food_sensitivities=food_sensitivities,
             pregnancy=bool(questionnaire and questionnaire.pregnant_or_lactating),
+            age=(
+                questionnaire.age
+                if questionnaire
+                and "age" not in unresolved_questionnaire_fields
+                else None
+            ),
             lifestyle_tags=lifestyle_tags,
             msq_system_scores=msq_system_scores,
             clinical_summary_text=clinical_summary_text,
             summary_nutrient_hints=summary_nutrient_hints,
+            structured_system_findings=structured_system_findings,
+            sex=(
+                self._normalize(questionnaire.sex)
+                if questionnaire
+                and questionnaire.sex
+                and "sex" not in unresolved_questionnaire_fields
+                else None
+            ),
+            unresolved_questionnaire_fields=unresolved_questionnaire_fields,
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
@@ -629,6 +1329,10 @@ class RecommendationService:
         parts = [
             case.customer_name,
             " ".join(marker_terms),
+            " ".join(
+                finding.finding_name
+                for finding in context.clinical_findings
+            ),
             " ".join(questionnaire.chief_concerns if questionnaire else []),
             " ".join(questionnaire.goals if questionnaire else []),
             " ".join(questionnaire.symptoms if questionnaire else []),
@@ -640,38 +1344,42 @@ class RecommendationService:
         ]
         return " ".join(part for part in parts if part).strip()
 
-    def _evaluate_red_flags(self, context: RecommendationContext, age: int | None) -> list[str]:
-        red_flags: list[str] = []
+    def _evaluate_risk_notices(self, context: RecommendationContext, age: int | None) -> list[str]:
+        risk_notices: list[str] = []
         if age is not None and age < 18:
-            red_flags.append("未成年案例需要人工审核后再给出建议。")
+            risk_notices.append("未成年案例需要医生重点审核营养素种类与剂量。")
         if context.pregnancy:
-            red_flags.append("孕期或哺乳期需要人工审核。")
+            risk_notices.append("孕期或哺乳期需要医生重点审核营养素种类与剂量。")
+        if "pregnant_or_lactating" in context.unresolved_questionnaire_fields:
+            risk_notices.append(
+                "妊娠或哺乳状态尚未确认，孕哺期禁用信息请见各营养素的“注意/禁忌”。"
+            )
         if any(
             term in condition
             for condition in context.conditions
             for term in ("癌", "肾衰", "肝硬化", "renal", "cancer")
         ):
-            red_flags.append("既往疾病提示高风险，需要人工审核。")
+            risk_notices.append("既往疾病提示需要医生重点审核产品适用性。")
         if any(
             term in medication
             for medication in context.medications
             for term in ("华法林", "warfarin", "胰岛素", "insulin")
         ):
-            red_flags.append("当前用药与营养素之间可能存在相互作用。")
+            risk_notices.append("当前用药与营养素之间可能存在相互作用，需要医生重点审核。")
 
         for items in context.markers_by_code.values():
             for item in items:
                 value = item.normalized_value or item.value or 0
                 if item.marker_code == "fasting_glucose" and value >= 7.0:
-                    red_flags.append("空腹血糖达到高风险阈值，需要优先人工评估。")
+                    risk_notices.append("空腹血糖达到重点关注阈值，营养素草案需结合临床情况审核。")
                 if item.marker_code == "hba1c" and value >= 6.5:
-                    red_flags.append("糖化血红蛋白达到高风险阈值，需要优先人工评估。")
+                    risk_notices.append("糖化血红蛋白达到重点关注阈值，营养素草案需结合临床情况审核。")
                 if item.marker_code == "hs_crp" and value >= 10:
-                    red_flags.append("炎症指标显著升高，需先排查急性风险。")
+                    risk_notices.append("炎症指标显著升高，营养素草案需结合急性风险审核。")
                 if item.marker_code == "alt" and value >= 120:
-                    red_flags.append("肝功能指标明显异常，需要人工审核。")
+                    risk_notices.append("肝功能指标明显异常，营养素草案需由医生重点审核。")
 
-        return list(dict.fromkeys(red_flags))
+        return list(dict.fromkeys(risk_notices))
 
     def _collect_missing_info(self, case) -> list[str]:
         missing: list[str] = []
@@ -696,6 +1404,23 @@ class RecommendationService:
                 missing.append("尚未补充 MSQ 系统负担评分。")
         else:
             missing.append("未填写问卷，当前草案仅依据已上传报告和人工校对结果生成。")
+        unresolved_messages = {
+            "age": "患者年龄需补充确认。",
+            "sex": "患者性别需补充确认。",
+            "pregnant_or_lactating": "妊娠或哺乳状态需补充确认。",
+            "medications": "当前用药信息需补充确认。",
+            "allergies": "过敏信息需补充确认。",
+        }
+        unresolved_fields = {
+            flag.split(":", 1)[1]
+            for flag in case.flags
+            if flag.startswith("msq_unresolved:") and ":" in flag
+        }
+        missing.extend(
+            unresolved_messages[field_name]
+            for field_name in sorted(unresolved_fields)
+            if field_name in unresolved_messages
+        )
         missing.extend(self._visible_parse_warnings(case.parsing_missing_fields, case=case))
         return list(dict.fromkeys(missing))
 
@@ -789,7 +1514,6 @@ class RecommendationService:
     ) -> dict:
         questionnaire = case.questionnaire
         return {
-            "analysis_mode": getattr(case.analysis_mode, "value", str(case.analysis_mode)),
             "support_profiles": [profile.title for profile in support_profiles],
             "markers": {
                 marker_code: [
@@ -1099,7 +1823,7 @@ class RecommendationService:
                 notes.append(f"医生规则建议当前阶段优先考虑 {product.display_name}")
         return round(score, 3), list(dict.fromkeys(evidence_ids)), list(dict.fromkeys(notes))
 
-    def _rank_products_for_llm_primary(
+    def _rank_products(
         self,
         case,
         context: RecommendationContext,
@@ -1110,6 +1834,7 @@ class RecommendationService:
     ):
         ranked: list[tuple[float, ProductRule, list[str]]] = []
         contraindications: list[str] = []
+        safety_decisions_by_sku: dict[str, list[SafetyDecision]] = {}
         case_query = self._normalize(
             " ".join(
                 filter(
@@ -1123,14 +1848,24 @@ class RecommendationService:
         )
 
         for product in self._list_products(enabled_only=True):
-            exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
-            if exclusion_matches:
-                contraindications.extend([f"{product.display_name} 被排除: {rule}" for rule in exclusion_matches])
+            safety_decisions = self._evaluate_product_safety(product, context)
+            safety_decisions_by_sku[product.sku_id] = safety_decisions
+            exclusions = [item for item in safety_decisions if item.action == SafetyRuleAction.exclude]
+            if exclusions:
+                contraindications.extend([f"{product.display_name} 被排除：{item.message}" for item in exclusions])
                 continue
 
             score = max(0.08, (100 - product.priority) / 160)
             evidence_ids = [f"product:{product.sku_id}"]
             supportive_evidence = 0
+            matched_recall_rules = self._matched_client_recall_rules(product, context)
+            if matched_recall_rules:
+                recall_evidence_ids = [
+                    f"signal:client_recall_{rule.rule_id}"
+                    for rule in matched_recall_rules
+                ]
+                evidence_ids.extend(recall_evidence_ids)
+                supportive_evidence += len(recall_evidence_ids)
 
             tag_score, tag_evidence_ids = self._score_product_from_tag_matrix(
                 product,
@@ -1140,12 +1875,21 @@ class RecommendationService:
             score += tag_score
             evidence_ids.extend(tag_evidence_ids)
             supportive_evidence += len(tag_evidence_ids)
+            product_system_id = self._primary_system_for_product(product, priority_findings)
+            product_system_rank = self._system_priority_rank_for_product(product, priority_findings)
+            if product_system_id and product_system_rank is not None:
+                evidence_ids.extend(
+                    [f"signal:body_system_{product_system_id}", f"signal:body_system_rank_{product_system_rank}"]
+                )
 
             for indication in product.indications:
                 if self._matches_rule(indication, context):
                     score += 0.7
                     supportive_evidence += 1
                     evidence_ids.append("signal:direct_product_rule")
+                    if indication.startswith("marker:"):
+                        marker_code = indication.split(":", 2)[1]
+                        evidence_ids.append(f"signal:direct_marker_rule_{marker_code}")
 
             signal_score, signal_evidence_ids = self._score_product_from_profiles(product, support_profiles)
             score += signal_score
@@ -1191,14 +1935,19 @@ class RecommendationService:
                     evidence_ids.append(statement.statement_id)
                     supportive_evidence += 1
 
-            if supportive_evidence == 0:
+            if supportive_evidence == 0 or not self._has_eligible_product_evidence(evidence_ids):
                 continue
 
             ranked.append((round(score, 3), product, list(dict.fromkeys(evidence_ids))))
 
         ranked.sort(key=self._ranked_product_sort_key, reverse=True)
         product_evidence_map = {product.sku_id: evidence for _, product, evidence in ranked}
-        return [product for _, product, _ in ranked[:10]], product_evidence_map, list(dict.fromkeys(contraindications))
+        return (
+            [product for _, product, _ in ranked],
+            product_evidence_map,
+            list(dict.fromkeys(contraindications)),
+            safety_decisions_by_sku,
+        )
 
     def _score_product_from_case_context(self, product: ProductRule, case_query: str) -> float:
         if not case_query:
@@ -1223,97 +1972,19 @@ class RecommendationService:
             return 0.0
         return round(min(overlap, 5) * 0.12, 3)
 
-    def _rank_products(
-        self,
-        context: RecommendationContext,
-        knowledge_hits,
-        support_profiles: list[SupportProfile],
-        matched_clinician_rules: list[ClinicianRule],
-        priority_findings: list[SystemPriority] | None = None,
-    ):
-        ranked: list[tuple[float, ProductRule, list[str]]] = []
-        contraindications: list[str] = []
-        products = self._list_products(enabled_only=True)
-
-        for product in products:
-            exclusion_matches = [rule for rule in product.exclusions if self._matches_rule(rule, context)]
-            if exclusion_matches:
-                contraindications.extend([f"{product.display_name} 被排除: {rule}" for rule in exclusion_matches])
-                continue
-
-            score = max(0.05, (100 - product.priority) / 100)
-            evidence_ids: list[str] = []
-            direct_hits = 0
-            supportive_evidence = 0
-
-            tag_score, tag_evidence_ids = self._score_product_from_tag_matrix(
-                product,
-                context,
-                priority_findings=priority_findings,
-            )
-            score += tag_score
-            evidence_ids.extend(tag_evidence_ids)
-            supportive_evidence += len(tag_evidence_ids)
-
-            for indication in product.indications:
-                if self._matches_rule(indication, context):
-                    direct_hits += 1
-                    supportive_evidence += 1
-                    score += 0.9
-                    evidence_ids.append("signal:direct_product_rule")
-
-            signal_score, signal_evidence_ids = self._score_product_from_profiles(product, support_profiles)
-            score += signal_score
-            evidence_ids.extend(signal_evidence_ids)
-            supportive_evidence += len(signal_evidence_ids)
-
-            clinical_score, clinical_evidence_ids = self._score_product_from_clinical_patterns(product, context)
-            score += clinical_score
-            evidence_ids.extend(clinical_evidence_ids)
-            supportive_evidence += len(clinical_evidence_ids)
-
-            clinician_score, clinician_evidence_ids, clinician_notes = self._score_product_from_clinician_rules(
-                product,
-                matched_clinician_rules,
-            )
-            score += clinician_score
-            evidence_ids.extend(clinician_evidence_ids)
-            supportive_evidence += len(clinician_evidence_ids)
-            contraindications.extend(clinician_notes)
-
-            nutrient_score, nutrient_evidence_ids = self._score_product_from_summary_nutrients(
-                product,
-                context.summary_nutrient_hints,
-            )
-            score += nutrient_score
-            evidence_ids.extend(nutrient_evidence_ids)
-            supportive_evidence += len(nutrient_evidence_ids)
-
-            for hit in knowledge_hits:
-                statement = hit.statement
-                if product.sku_id in statement.related_skus:
-                    score += 0.7 + hit.score
-                    evidence_ids.append(statement.statement_id)
-                    supportive_evidence += 1
-                elif self._statement_supports_product(statement, product):
-                    score += hit.score * 0.35
-                    evidence_ids.append(statement.statement_id)
-                    supportive_evidence += 1
-
-            if supportive_evidence == 0:
-                continue
-
-            ranked.append(
+    @staticmethod
+    def _has_eligible_product_evidence(evidence_ids: list[str]) -> bool:
+        return any(
+            evidence_id.startswith(
                 (
-                    round(score, 3),
-                    product,
-                    [f"product:{product.sku_id}", *list(dict.fromkeys(evidence_ids))],
+                    "signal:model_support_goal_",
+                    "signal:tag_marker_",
+                    "signal:direct_marker_rule_",
+                    "signal:client_recall_",
                 )
             )
-
-        ranked.sort(key=self._ranked_product_sort_key, reverse=True)
-        product_evidence_map = {product.sku_id: evidence for _, product, evidence in ranked}
-        return [product for _, product, _ in ranked[:10]], product_evidence_map, list(dict.fromkeys(contraindications))
+            for evidence_id in evidence_ids
+        )
 
     def _build_support_profiles(self, context: RecommendationContext) -> list[SupportProfile]:
         profiles: list[SupportProfile] = []
@@ -1665,6 +2336,35 @@ class RecommendationService:
         report_guidance: list[str] | None = None,
         anti_aging_findings: list[str] | None = None,
     ) -> list[SystemPriority]:
+        if context.structured_system_findings:
+            structured: list[SystemPriority] = []
+            for item in context.structured_system_findings:
+                goals = [
+                    goal
+                    for goal, findings in context.support_goal_findings.items()
+                    if any(item.system_id in finding.system_ids for finding in findings)
+                ]
+                sources = {
+                    (finding.source_span.file_id or finding.source_span.file_name)
+                    for goal in goals
+                    for finding in context.support_goal_findings.get(goal, [])
+                }
+                # Final synthesis priorities have already been recalculated from
+                # evidence classes. Do not re-inflate model labels or source count.
+                score = min(100.0, max(0.0, item.priority_score))
+                structured.append(
+                    SystemPriority(
+                        system_id=item.system_id,
+                        title=f"{SYSTEM_NAMES.get(item.system_id, item.system_name)}（{item.priority_level}）",
+                        body=item.summary,
+                        score=score,
+                        axes=tuple(dict.fromkeys(goals)),
+                        priority_level=item.priority_level,
+                        finding_ids=tuple(item.finding_ids),
+                    )
+                )
+            return sorted(structured, key=lambda value: value.score, reverse=True)
+
         text = self._pattern_text(context)
         guidance_text = self._normalize(" ".join(report_guidance or []))
         anti_aging_text = self._normalize(" ".join(anti_aging_findings or []))
@@ -1685,10 +2385,15 @@ class RecommendationService:
             findings.append(
                 SystemPriority(
                     system_id=system_id,
-                    title=f"{base_title}（{self._priority_label(score)}）",
-                    body=body,
+                    title=f"{SYSTEM_NAMES.get(system_id, base_title)}（{self._priority_label(score)}）",
+                    body=build_system_summary(
+                        system_id,
+                        self._system_evidence_names(context, system_id),
+                        score,
+                    ),
                     score=round(score, 2),
                     axes=axes,
+                    priority_level=self._priority_label(score),
                 )
             )
 
@@ -1714,12 +2419,14 @@ class RecommendationService:
         if "metabolic_support" in context.lifestyle_tags or "sedentary_risk" in context.lifestyle_tags:
             metabolic_score += 14
         metabolic_score += min(lipid_marker_count, 3) * 6
+        if self._matches_pattern("iron_deficiency", context):
+            metabolic_score += 58
         add_finding(
-            system_id="metabolic_endocrine",
-            base_title="代谢/内分泌系统",
+            system_id="endocrine_metabolic",
+            base_title="内分泌/代谢系统",
             body="当前证据更偏向血糖稳定、体重/腰围、糖脂代谢或内分泌节律问题；首月应优先用餐盘结构、精制碳水控制、饭后活动和睡眠节律来验证趋势，再配合相应营养支持。",
             score=metabolic_score,
-            axes=("glycemic_balance", "weight_metabolism"),
+            axes=("glycemic_balance", "weight_metabolism", "thyroid_axis", "iron_repletion", "foundational"),
         )
 
         liver_score = 0.0
@@ -1765,9 +2472,11 @@ class RecommendationService:
             thyroid_immune_score += 14
         if self._text_has_any(combined_text, "免疫", "桥本", "甲减", "甲状腺", "过敏", "反复感冒"):
             thyroid_immune_score += 12
+        if self._text_has_any(combined_text, "抗衰", "端粒", "DNA甲基化", "甲基化年龄", "氧化压力"):
+            thyroid_immune_score += 20
         add_finding(
-            system_id="thyroid_immune",
-            base_title="免疫系统/甲状腺",
+            system_id="immune_inflammation",
+            base_title="免疫/炎症系统",
             body="甲状腺功能、甲状腺抗体、维生素D或炎症线索会影响代谢、情绪和恢复；建议同步关注睡眠压力、炎症触发因素、维生素D状态、碘摄入方式以及后续甲状腺指标趋势。",
             score=thyroid_immune_score,
             axes=("thyroid_axis", "immune", "vitamin_d_repletion", "inflammation"),
@@ -1781,11 +2490,11 @@ class RecommendationService:
         if "outside_dining" in context.lifestyle_tags:
             gut_score += 10
         add_finding(
-            system_id="gut_digestive",
+            system_id="digestive_gut",
             base_title="消化系统/肠道",
             body="腹胀、排便波动、油腻不耐受、胃酸/消化或菌群线索提示消化道执行力会影响整体方案效果；建议先观察触发食物、排便规律、膳食纤维、蛋白质消化和油脂耐受。",
             score=gut_score,
-            axes=("gut_bile", "gut_microbiome", "gut_mucosa", "digestive_enzyme"),
+            axes=("gut_bile", "gut_microbiome", "gut_mucosa", "gastric_acid", "digestive_enzyme"),
         )
 
         neuro_sleep_score = 0.0
@@ -1797,52 +2506,103 @@ class RecommendationService:
             neuro_sleep_score += 18
         add_finding(
             system_id="neuro_sleep",
-            base_title="神经/认知/睡眠",
+            base_title="神经/认知/睡眠系统",
             body="睡眠不足、压力负荷、脑雾、注意力或疲劳提示恢复节律不足；建议先稳定起床时间、减少夜间刺激、管理咖啡因和工作压力，并观察晨起精力变化。",
             score=neuro_sleep_score,
             axes=("sleep_stress", "neuro_cognitive", "energy_mitochondria"),
         )
 
-        iron_score = 58 if self._matches_pattern("iron_deficiency", context) else 0
-        add_finding(
-            system_id="iron_repletion",
-            base_title="铁储备/造血支持",
-            body="铁蛋白、血清铁或血红蛋白相关线索提示铁储备和氧运输可能影响疲劳、头晕、注意力和运动耐受；是否补铁需结合完整铁代谢和医生评估。",
-            score=iron_score,
-            axes=("iron_repletion", "energy_mitochondria"),
-            threshold=28,
-        )
-
-        anti_aging_score = 38 if self._text_has_any(combined_text, "抗衰", "端粒", "DNA甲基化", "甲基化年龄", "氧化压力") else 0
-        add_finding(
-            system_id="anti_aging",
-            base_title="抗衰系统整合",
-            body="端粒、DNA甲基化或氧化压力线索不作为单独诊断，但可辅助判断内分泌、心血管、免疫和细胞修复优先级。",
-            score=anti_aging_score,
-            axes=("anti_aging", "antioxidant", "energy_mitochondria"),
-            threshold=28,
-        )
-
         female_score = 42 if self._text_has_any(combined_text, "经前", "潮热", "月经", "女性激素", "围绝经", "卵巢") else 0
         add_finding(
-            system_id="female_hormone",
-            base_title="女性激素系统",
+            system_id="reproductive_breast",
+            base_title="生殖/妇科/乳腺系统",
             body="女性周期、经前不适、潮热或卵巢相关线索提示需要关注内分泌节律；涉及激素前体或特殊阶段时需医生确认。",
             score=female_score,
             axes=("female_hormone", "hormone_axis", "sleep_stress"),
             threshold=28,
         )
 
-        return sorted(findings, key=lambda item: item.score, reverse=True)
+        add_finding(
+            system_id="respiratory",
+            base_title="呼吸系统",
+            body="",
+            score=46 if self._text_has_any(combined_text, "肺", "肺结节", "呼吸", "咳嗽", "哮喘", "弥散功能") else 0,
+            axes=(),
+            threshold=28,
+        )
+        add_finding(
+            system_id="bone_muscle",
+            base_title="骨骼/肌肉系统",
+            body="",
+            score=(38 if self._text_has_any(combined_text, "骨量", "骨质", "骨密度", "肌肉", "关节") else 0)
+            + (24 if self._has_marker(context, "vitamin_d", "low") else 0),
+            axes=("bone_metabolism", "vitamin_d_repletion", "energy_mitochondria"),
+            threshold=28,
+        )
+        add_finding(
+            system_id="urinary_renal",
+            base_title="泌尿/肾脏系统",
+            body="",
+            score=42 if self._text_has_any(combined_text, "泌尿", "肾", "肾囊肿", "尿检", "肌酐", "尿素氮") else 0,
+            axes=(),
+            threshold=28,
+        )
+        add_finding(
+            system_id="skin_mucosa",
+            base_title="皮肤/黏膜系统",
+            body="",
+            score=38 if self._text_has_any(combined_text, "皮肤", "黏膜", "湿疹", "皮炎", "皮疹", "脱发", "伤口") else 0,
+            axes=("gut_mucosa", "immune"),
+            threshold=28,
+        )
+
+        findings_by_system = {finding.system_id: finding for finding in findings}
+        for system_id, mapped_findings in context.clinical_findings_by_system.items():
+            existing = findings_by_system.get(system_id)
+            score = max(existing.score if existing else 0.0, min(58.0, 42.0 + len(mapped_findings) * 8.0))
+            findings_by_system[system_id] = SystemPriority(
+                system_id=system_id,
+                title=f"{SYSTEM_NAMES[system_id]}（{self._priority_label(score)}）",
+                body=build_system_summary(
+                    system_id,
+                    [finding.finding_name for finding in mapped_findings],
+                    score,
+                ),
+                score=round(score, 2),
+                # System-only model classification may affect report ordering, but
+                # must not create product axes. Existing evidence-backed axes remain.
+                axes=existing.axes if existing else (),
+                priority_level=self._priority_label(score),
+                finding_ids=tuple(finding.finding_id for finding in mapped_findings),
+            )
+
+        return sorted(findings_by_system.values(), key=lambda item: item.score, reverse=True)
 
     def _priority_label(self, score: float) -> str:
-        if score >= 85:
-            return "最高优先级"
-        if score >= 65:
-            return "优先级高"
-        if score >= 45:
-            return "重点跟进"
-        return "轻度关注"
+        return priority_level(score)
+
+    def _system_evidence_names(
+        self,
+        context: RecommendationContext,
+        system_id: str,
+    ) -> list[str]:
+        evidence: list[str] = []
+        flag_labels = {"high": "偏高", "low": "偏低", "unknown": "异常"}
+        for observations in context.markers_by_code.values():
+            for item in observations:
+                marker_name = getattr(item, "marker_name", "") or getattr(item, "marker_code", "")
+                if system_id not in classify_text_to_system_ids(marker_name, getattr(item, "marker_code", "")):
+                    continue
+                flag = getattr(getattr(item, "abnormal_flag", None), "value", "unknown")
+                evidence.append(f"{marker_name}{flag_labels.get(flag, '异常')}")
+        for value in [*context.conditions, *context.symptoms, *context.chief_concerns]:
+            if system_id in classify_text_to_system_ids(value):
+                evidence.append(value)
+        evidence.extend(
+            finding.finding_name
+            for finding in context.clinical_findings_by_system.get(system_id, [])
+        )
+        return list(dict.fromkeys(evidence))[:6]
 
     def _marker_hit_count(
         self,
@@ -1859,91 +2619,182 @@ class RecommendationService:
         priority_findings: list[SystemPriority] | None = None,
     ) -> tuple[float, list[str]]:
         profile = self.product_tag_profiles.get(product.sku_id)
-        if not profile:
+        capability = self.product_capabilities.get(product.sku_id)
+        if not profile or not capability:
+            return 0.0, []
+        primary_goals = tuple(capability.get("primary_goal_codes") or ())
+        secondary_goals = tuple(capability.get("secondary_goal_codes") or ())
+        primary_hits = [
+            (
+                goal,
+                self._directionally_eligible_findings(
+                    capability,
+                    goal,
+                    context.support_goal_findings[goal],
+                ),
+            )
+            for goal in primary_goals
+            if goal in context.support_goal_findings
+            and self._directionally_eligible_findings(
+                capability,
+                goal,
+                context.support_goal_findings[goal],
+            )
+        ]
+        secondary_hits = [
+            (
+                goal,
+                self._directionally_eligible_findings(
+                    capability,
+                    goal,
+                    context.support_goal_findings[goal],
+                ),
+            )
+            for goal in secondary_goals
+            if goal in context.support_goal_findings
+            and self._directionally_eligible_findings(
+                capability,
+                goal,
+                context.support_goal_findings[goal],
+            )
+        ]
+        marker_hits = self._matched_marker_tags(profile.marker_tags, context)
+        # Secondary capabilities may enrich a reason after a primary/marker match,
+        # but must never activate a product by themselves.
+        if not primary_hits and not marker_hits:
             return 0.0, []
 
-        active_axes = self._active_product_axes(context, priority_findings=priority_findings)
-        pattern_text = self._pattern_text(context)
         association = 0.0
         evidence_ids: list[str] = []
-
-        primary_hits = [(axis, active_axes[axis]) for axis in profile.primary_axes if axis in active_axes]
-        secondary_hits = [(axis, active_axes[axis]) for axis in profile.secondary_axes if axis in active_axes]
-        marker_hits = self._matched_marker_tags(profile.marker_tags, context)
-        symptom_hits = self._matched_text_tags(profile.symptom_tags, context.symptoms, pattern_text)
-        condition_hits = self._matched_text_tags(profile.condition_tags, context.conditions, pattern_text)
-        goal_hits = self._matched_text_tags(profile.goal_tags, context.goals, pattern_text)
-        lifestyle_hits = [tag for tag in profile.lifestyle_tags if tag in context.lifestyle_tags]
-        mechanism_hits = [tag for tag in profile.mechanism_tags if self._normalize(tag) in pattern_text]
-        top_primary_axis = (
-            priority_findings[0].axes[0]
-            if priority_findings and priority_findings[0].axes
-            else ""
-        )
-        top_system_primary_axis_hit = bool(top_primary_axis and top_primary_axis in profile.primary_axes)
-
+        primary_evidence_class = ClinicalEvidenceClass.symptom
         if primary_hits:
-            best_axis, best_weight = max(primary_hits, key=lambda item: item[1])
-            association += 46 * best_weight
-            evidence_ids.append(f"signal:tag_axis_{best_axis}")
+            best_goal, matched_findings = max(
+                primary_hits,
+                key=lambda item: self._support_finding_group_rank(item[1]),
+            )
+            confidence = max(finding.mapping_confidence for finding in matched_findings)
+            primary_evidence_class = self._strongest_support_finding_class(matched_findings)
+            primary_base = {
+                ClinicalEvidenceClass.lab_abnormal: 68.0,
+                ClinicalEvidenceClass.clinical_confirmed: 66.0,
+                ClinicalEvidenceClass.symptom: 52.0,
+                ClinicalEvidenceClass.exposure: 38.0,
+                ClinicalEvidenceClass.genetic_risk: 0.0,
+                ClinicalEvidenceClass.follow_up_only: 0.0,
+            }[primary_evidence_class]
+            association += primary_base + 6 * confidence
+            evidence_ids.append(f"signal:model_support_goal_{best_goal}")
+            evidence_ids.append(f"signal:primary_support_goal_{best_goal}")
+            evidence_ids.append(f"signal:evidence_class_{primary_evidence_class.value}")
+            goal_config = self.support_goals.get(best_goal, {})
+            if goal_config.get("must_cover_when_direct") and primary_evidence_class in {
+                ClinicalEvidenceClass.lab_abnormal,
+                ClinicalEvidenceClass.clinical_confirmed,
+            }:
+                evidence_ids.append(f"signal:must_cover_goal_{best_goal}")
+            evidence_ids.extend(f"finding:{finding.finding_id}" for finding in matched_findings[:3])
         if secondary_hits:
-            association += min(28, sum(18 * weight for _, weight in secondary_hits))
-            for axis, _ in secondary_hits[:2]:
-                evidence_ids.append(f"signal:tag_axis_{axis}")
+            best_goal, matched_findings = max(
+                secondary_hits,
+                key=lambda item: self._support_finding_group_rank(item[1]),
+            )
+            confidence = max(finding.mapping_confidence for finding in matched_findings)
+            secondary_class = self._strongest_support_finding_class(matched_findings)
+            secondary_bonus = {
+                ClinicalEvidenceClass.lab_abnormal: 12.0,
+                ClinicalEvidenceClass.clinical_confirmed: 12.0,
+                ClinicalEvidenceClass.symptom: 8.0,
+                ClinicalEvidenceClass.exposure: 4.0,
+                ClinicalEvidenceClass.genetic_risk: 0.0,
+                ClinicalEvidenceClass.follow_up_only: 0.0,
+            }[secondary_class]
+            association += secondary_bonus + 2 * confidence
+            evidence_ids.append(f"signal:model_support_goal_{best_goal}")
+            evidence_ids.extend(f"finding:{finding.finding_id}" for finding in matched_findings[:2])
         if marker_hits:
-            association += min(28, len(marker_hits) * 14)
+            association += min(25, len(marker_hits) * 15)
             for marker_code in marker_hits[:2]:
                 evidence_ids.append(f"signal:tag_marker_{marker_code}")
-        text_association = 0
-        if symptom_hits:
-            text_association += min(24, len(symptom_hits) * 8)
-            evidence_ids.append("signal:tag_symptom_match")
-        if condition_hits:
-            text_association += min(18, len(condition_hits) * 6)
-            evidence_ids.append("signal:tag_condition_match")
-        if goal_hits:
-            text_association += min(18, len(goal_hits) * 6)
-            evidence_ids.append("signal:tag_goal_match")
-        if lifestyle_hits:
-            text_association += min(12, len(lifestyle_hits) * 4)
-            evidence_ids.append("signal:tag_lifestyle_match")
-        if text_association:
-            association += min(36, text_association)
-            evidence_ids.append("signal:tag_context_match")
-        if mechanism_hits:
-            association += min(12, len(mechanism_hits) * 4)
-            evidence_ids.append("signal:tag_mechanism_match")
-        if top_system_primary_axis_hit and primary_hits:
-            association += 6
-            evidence_ids.append("signal:top_system_primary_axis")
-
-        matched_axis_weights = [weight for _, weight in primary_hits + secondary_hits]
-        if association > 0:
-            if profile.precision_level == "precise":
-                association += 8
-            elif profile.precision_level == "adjunct":
-                association += 2
-            elif profile.precision_level == "general_support" and not (marker_hits or primary_hits or secondary_hits):
-                association -= 12
-            elif profile.precision_level == "requires_confirmation":
-                association = min(association, 70)
-                evidence_ids.append("signal:requires_manual_confirmation")
+            for goal in primary_goals:
+                if self.support_goals.get(goal, {}).get("must_cover_when_direct"):
+                    evidence_ids.append(f"signal:primary_support_goal_{goal}")
+                    evidence_ids.append(f"signal:must_cover_goal_{goal}")
+        if profile.precision_level == "precise":
+            association += 8
+        elif profile.precision_level == "adjunct":
+            association += 2
+        elif profile.precision_level == "requires_confirmation":
+            association = min(association, 70)
+            evidence_ids.append("signal:requires_manual_confirmation")
 
         if profile.precision_level == "adjunct":
             association = min(association, 88)
         elif profile.precision_level == "general_support":
             association = min(association, 82 if marker_hits else 72)
+        if primary_evidence_class == ClinicalEvidenceClass.exposure:
+            association = min(association, 65)
 
-        association_percent = max(0, min(95, int(round(association))))
-        if association_percent < 35:
-            return 0.0, []
+        association_percent = max(1, min(95, int(round(association))))
 
         evidence_ids.insert(0, f"signal:association_{association_percent}")
-        if matched_axis_weights:
-            priority_percent = max(1, min(100, int(round(max(matched_axis_weights) * 100))))
-            evidence_ids.insert(1, f"signal:system_priority_{priority_percent}")
+        matched_goals = {goal for goal, _ in [*primary_hits, *secondary_hits]}
+        system_scores = [
+            item.score
+            for item in (priority_findings or [])
+            if matched_goals.intersection(item.axes)
+        ]
+        if system_scores:
+            evidence_ids.insert(1, f"signal:system_priority_{int(max(system_scores))}")
         score = association_percent / 100 * 2.2
         return round(score, 3), list(dict.fromkeys(evidence_ids))
+
+    @staticmethod
+    def _strongest_support_finding_class(findings: list) -> ClinicalEvidenceClass:
+        priority = {
+            ClinicalEvidenceClass.lab_abnormal: 6,
+            ClinicalEvidenceClass.clinical_confirmed: 5,
+            ClinicalEvidenceClass.symptom: 4,
+            ClinicalEvidenceClass.exposure: 3,
+            ClinicalEvidenceClass.genetic_risk: 2,
+            ClinicalEvidenceClass.follow_up_only: 1,
+        }
+        classes = [classify_confirmed_evidence(finding) for finding in findings]
+        return max(classes, key=lambda item: priority[item], default=ClinicalEvidenceClass.symptom)
+
+    @classmethod
+    def _support_finding_group_rank(cls, findings: list) -> tuple[int, float, int]:
+        evidence_class = cls._strongest_support_finding_class(findings)
+        priority = {
+            ClinicalEvidenceClass.lab_abnormal: 6,
+            ClinicalEvidenceClass.clinical_confirmed: 5,
+            ClinicalEvidenceClass.symptom: 4,
+            ClinicalEvidenceClass.exposure: 3,
+            ClinicalEvidenceClass.genetic_risk: 2,
+            ClinicalEvidenceClass.follow_up_only: 1,
+        }
+        confidence = max((finding.mapping_confidence for finding in findings), default=0.0)
+        return priority[evidence_class], confidence, len(findings)
+
+    @staticmethod
+    def _directionally_eligible_findings(
+        capability: dict,
+        goal: str,
+        findings: list,
+    ) -> list:
+        requirements = capability.get("goal_direction_requirements") or {}
+        allowed = {str(value) for value in requirements.get(goal, [])}
+        if not allowed:
+            return findings
+        return [
+            finding
+            for finding in findings
+            if getattr(
+                getattr(finding, "support_direction", None),
+                "value",
+                getattr(finding, "support_direction", "unknown"),
+            )
+            in allowed
+        ]
 
     def _matched_marker_tags(self, marker_tags: tuple[str, ...], context: RecommendationContext) -> list[str]:
         matched: list[str] = []
@@ -2122,7 +2973,8 @@ class RecommendationService:
             "antioxidant": "抗氧化轴",
             "bone_metabolism": "骨代谢轴",
             "cardiovascular": "心血管系统",
-            "digestive_enzyme": "消化酶/胃酸支持",
+            "gastric_acid": "胃酸分泌支持",
+            "digestive_enzyme": "消化酶/营养吸收支持",
             "energy_mitochondria": "细胞能量/线粒体系统",
             "female_hormone": "女性激素系统",
             "foundational": "基础营养支持",
@@ -2142,6 +2994,7 @@ class RecommendationService:
             "thyroid_axis": "甲状腺系统",
             "vitamin_d_repletion": "维生素D补充",
             "weight_metabolism": "体重/脂肪代谢系统",
+            "nutrition_repletion": "体重过轻与营养恢复支持",
         }
         if signal_id.startswith("association_"):
             return f"关联度：{signal_id.rsplit('_', 1)[-1]}%"
@@ -2153,6 +3006,13 @@ class RecommendationService:
         if signal_id.startswith("tag_marker_"):
             marker_code = signal_id.replace("tag_marker_", "", 1)
             return f"产品标签命中：{marker_code} 异常"
+        if signal_id.startswith("model_support_goal_"):
+            axis = signal_id.replace("model_support_goal_", "", 1)
+            return f"医生确认异常的营养支持方向：{axis_labels.get(axis, axis)}"
+        if signal_id.startswith("client_recall_"):
+            rule_id = signal_id.replace("client_recall_", "", 1)
+            rule = self.client_recall_rules_by_id.get(rule_id)
+            return f"既定召回规则：{rule.message}" if rule else "既定召回规则"
         if signal_id == "top_system_primary_axis":
             return "最高优先系统主轴匹配"
         if signal_id == "tag_context_match":
@@ -2190,44 +3050,6 @@ class RecommendationService:
         }
         return labels.get(signal_id, signal_id)
 
-    def _finalize_lifestyle_actions(self, actions: list[str], knowledge_hits, context: RecommendationContext) -> list[str]:
-        chinese_actions = [
-            item.strip()
-            for item in actions
-            if isinstance(item, str) and item.strip() and self._contains_cjk(item)
-        ]
-        local_actions = self._build_local_lifestyle_actions(knowledge_hits, context)
-        return list(dict.fromkeys(chinese_actions + local_actions))[:8]
-
-    def _build_local_lifestyle_actions(self, knowledge_hits, context: RecommendationContext) -> list[str]:
-        actions: list[str] = []
-        for hit in knowledge_hits[:4]:
-            actions.extend(hit.statement.lifestyle_actions)
-
-        if "sleep_recovery" in context.lifestyle_tags:
-            actions.append("固定每日入睡和起床时间，睡前 1-2 小时减少咖啡因、酒精和电子屏幕暴露。")
-
-        for items in context.markers_by_code.values():
-            for item in items:
-                if item.marker_code == "ferritin" and item.abnormal_flag.value == "low":
-                    actions.append(
-                        "铁蛋白偏低时，建议结合医生评估缺铁风险；在确认适用后增加红肉、贝类、动物肝、豆类和深色叶菜，并搭配维生素 C 促进吸收。"
-                    )
-                if item.marker_code == "magnesium" and item.abnormal_flag.value == "high":
-                    actions.append(
-                        "血清镁偏高时，当前阶段避免额外叠加非处方镁补充剂，并结合肾功能、补剂使用史和近期输液情况做人工复核。"
-                    )
-                if item.marker_code in {"thyroglobulin_antibody", "thyroid_peroxidase_antibody"} and item.abnormal_flag.value == "high":
-                    actions.append("甲状腺抗体升高时，优先保持规律作息并减少长期高压暴露，暂不建议自行叠加高碘来源。")
-
-        if not actions:
-            actions = [
-                "围绕睡眠、压力、运动和饮食一致性先做基础生活方式干预。",
-                "若用药或过敏信息尚不明确，先补齐信息后再升级方案。",
-            ]
-
-        return list(dict.fromkeys(actions))[:6]
-
     def _matches_rule(self, rule: str, context: RecommendationContext) -> bool:
         parts = rule.split(":")
         kind = parts[0].strip().lower()
@@ -2247,6 +3069,10 @@ class RecommendationService:
             return self._contains_normalized_value(value, context.symptoms)
         if kind == "condition":
             return self._contains_normalized_value(value, context.conditions)
+        if kind == "finding":
+            # Safety facts use exact, locally validated clinical codes. This is a
+            # finite product-safety check, not free-text medical keyword matching.
+            return value in context.clinical_findings_by_code
         if kind == "med":
             return self._contains_normalized_value(value, context.medications)
         if kind == "allergy":
@@ -2255,6 +3081,34 @@ class RecommendationService:
             return value in context.lifestyle_tags
         if kind == "pregnancy":
             return context.pregnancy
+        if kind == "age":
+            if context.age is None:
+                return False
+            try:
+                threshold = int(extra)
+            except (TypeError, ValueError):
+                return False
+            if value == "lt":
+                return context.age < threshold
+            if value == "lte":
+                return context.age <= threshold
+            if value == "gt":
+                return context.age > threshold
+            if value == "gte":
+                return context.age >= threshold
+            return False
+        if kind == "med_count":
+            try:
+                threshold = int(extra)
+            except (TypeError, ValueError):
+                return False
+            if value == "gte":
+                return len(context.medications) >= threshold
+            if value == "gt":
+                return len(context.medications) > threshold
+            return False
+        if kind == "support_goal":
+            return value in context.support_goal_findings
         if kind == "pattern":
             return self._matches_pattern(value, context)
         return False
@@ -2348,7 +3202,23 @@ class RecommendationService:
 
     def _build_product_reason(self, product: ProductRule, evidence_ids: list[str]) -> str:
         use_case = "、".join(product.candidate_use_cases[:2]) if product.candidate_use_cases else "当前病例目标"
+        recall_rules = [
+            self.client_recall_rules_by_id.get(
+                evidence_id.replace("signal:client_recall_", "", 1)
+            )
+            for evidence_id in evidence_ids
+            if evidence_id.startswith("signal:client_recall_")
+        ]
+        recall_rules = [rule for rule in recall_rules if rule]
+        if recall_rules:
+            return f"病例命中既定营养支持规则：{recall_rules[0].message}，并已通过本地安全检查。"
         association_percent = self._association_percent(evidence_ids)
+        profile = self.product_tag_profiles.get(product.sku_id)
+        system_name = (
+            SYSTEM_NAMES.get(profile.primary_system_ids[0], "")
+            if profile and profile.primary_system_ids
+            else ""
+        )
         axis_labels = [
             self._signal_label(evidence_id.split(":", 1)[1])
             for evidence_id in evidence_ids
@@ -2356,7 +3226,8 @@ class RecommendationService:
         ]
         if association_percent:
             axis_text = f"，命中{ '、'.join(list(dict.fromkeys(axis_labels))[:2]) }" if axis_labels else ""
-            return f"关联度约 {association_percent}%：结合 {use_case}{axis_text}，作为当前阶段的候选推荐。"
+            system_text = f"，用于支持{system_name}" if system_name else ""
+            return f"关联度约 {association_percent}%：结合 {use_case}{axis_text}{system_text}，作为当前阶段的候选推荐。"
         if evidence_ids:
             return f"结合 {use_case} 与已审核知识命中，作为当前阶段的候选推荐。"
         return f"结合 {use_case} 和现有产品适配规则，作为当前阶段的候选推荐。"
@@ -2527,7 +3398,6 @@ class RecommendationService:
             self._format_rag_public_line,
             limit=1,
         )
-        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=1)
         add_unique_rag_items(
             "RAG复查建议",
             self._rag_hit_supports_follow_up,
@@ -2543,7 +3413,6 @@ class RecommendationService:
             limit=2,
         )
         add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=2)
-        add_unique_rag_items("RAG生活方式干预", self._rag_hit_supports_lifestyle, self._format_rag_public_line, limit=2)
         add_unique_rag_items(
             "RAG复查建议",
             self._rag_hit_supports_follow_up,
@@ -2707,22 +3576,6 @@ class RecommendationService:
             )
         )
 
-    def _rag_hit_supports_lifestyle(self, hit: SafeRagHit) -> bool:
-        excerpt = self._normalize(hit.excerpt)
-        return any(
-            term in excerpt
-            for term in (
-                "睡眠",
-                "压力",
-                "运动",
-                "饮食",
-                "生活方式",
-                "作息",
-                "久坐",
-                "活动",
-            )
-        )
-
     def _rag_hit_supports_follow_up(self, hit: SafeRagHit) -> bool:
         return bool(self._format_rag_followup_line(hit.excerpt))
 
@@ -2746,10 +3599,8 @@ class RecommendationService:
         self,
         report_sections: dict[str, list[str] | str],
         overrides: dict[str, list[str]],
-        *,
-        analysis_mode: str,
     ) -> dict[str, list[str] | str]:
-        if analysis_mode != "llm_primary" or not overrides:
+        if not overrides:
             return report_sections
 
         merged = dict(report_sections)
@@ -2813,11 +3664,6 @@ class RecommendationService:
         questionnaire = case.questionnaire
         summary_nutrient_hints = self._extract_summary_nutrient_hints(case.clinical_summary_text)
         summary = [f"客户姓名: {customer_name or case.customer_name}"]
-        summary.append(
-            "分析模式: 大模型优先，本地知识辅助"
-            if getattr(case.analysis_mode, "value", str(case.analysis_mode)) == "llm_primary"
-            else "分析模式: 本地知识优先"
-        )
         if questionnaire:
             if questionnaire.age is not None:
                 summary.append(f"年龄: {questionnaire.age}")
@@ -2858,6 +3704,43 @@ class RecommendationService:
                 f"{indicator.indicator_name}: {indicator.result_text}（{status_labels.get(status_value, status_value)}）"
             )
         return list(dict.fromkeys(highlights))
+
+    def _build_grouped_key_lab_highlights(
+        self,
+        case,
+        structured_system_findings: list[StructuredSystemFinding],
+    ) -> list[str]:
+        confirmed_by_name: dict[str, list] = {}
+        for finding in getattr(case, "confirmed_clinical_findings", []) or []:
+            confirmed_by_name.setdefault(self._normalize(finding.finding_name), []).append(finding)
+
+        status_labels = {
+            "attention": "需关注",
+            "positive": "阳性/异常",
+        }
+        items: list[ReportAbnormalItem] = []
+        for index, indicator in enumerate(self.indicator_service.build(case)):
+            status_value = getattr(indicator.status, "value", str(indicator.status))
+            if status_value not in status_labels:
+                continue
+            confirmed = confirmed_by_name.get(self._normalize(indicator.indicator_name), [])
+            matched = confirmed[0] if confirmed else None
+            source_span = getattr(indicator, "source_span", None)
+            items.append(
+                ReportAbnormalItem(
+                    item_id=(
+                        matched.finding_id
+                        if matched
+                        else f"indicator:{index}:{self._normalize(indicator.indicator_name)}"
+                    ),
+                    name=indicator.indicator_name,
+                    result=indicator.result_text,
+                    status_label=status_labels[status_value],
+                    system_ids=tuple(matched.system_ids if matched else ()),
+                    search_text=getattr(source_span, "snippet", "") or "",
+                )
+            )
+        return group_abnormal_items(items, structured_system_findings)
 
     def _extract_anti_aging_findings(self, case, context: RecommendationContext) -> list[str]:
         source_text = "\n".join(
@@ -2926,55 +3809,35 @@ class RecommendationService:
         case,
         context: RecommendationContext,
         key_lab_highlights: list[str],
-        red_flags: list[str],
+        risk_notices: list[str],
         report_guidance: list[str] | None = None,
         anti_aging_findings: list[str] | None = None,
     ) -> list[str]:
-        questionnaire = case.questionnaire
-        portrait: list[str] = []
-
-        if questionnaire and questionnaire.chief_concerns:
-            portrait.append(f"主要诉求：{'、'.join(questionnaire.chief_concerns[:3])}")
-        if questionnaire and questionnaire.symptoms:
-            portrait.append(f"主要症状：{'、'.join(questionnaire.symptoms[:4])}")
-
-        msq_burdens = self._top_msq_burdens(context.msq_system_scores)
-        if msq_burdens:
-            portrait.append(f"MSQ 系统负担：{'、'.join(msq_burdens[:4])}")
-        if anti_aging_findings:
-            portrait.extend(anti_aging_findings[:2])
-
         priority_findings = self._prioritized_system_findings(
             context,
             report_guidance=report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
-        if priority_findings:
-            top = priority_findings[0]
-            portrait.append(
-                f"当前优先级最高的是{top.title}，建议先围绕这一条主线整合异常指标、问卷症状和生活方式执行。"
-            )
-            if len(priority_findings) > 1:
-                next_titles = "、".join(item.title for item in priority_findings[1:4])
-                portrait.append(f"其次需要同步跟进：{next_titles}。")
-        if "gut_support" in context.lifestyle_tags:
-            portrait.append("问卷与症状提示肠道与消化支持可能参与当前问题表现。")
-        if "stress_support" in context.lifestyle_tags or "sleep_recovery" in context.lifestyle_tags:
-            portrait.append("睡眠恢复和压力调节是当前方案中的基础优先级。")
-        if "sedentary_risk" in context.lifestyle_tags:
-            portrait.append("久坐与活动不足提示代谢和能量系统需要同步重建。")
-        if red_flags:
-            portrait.append("当前存在需要人工优先复核的风险信号，最终建议以顾问审核为准。")
-        elif key_lab_highlights:
-            portrait.append("当前草案以异常指标、症状负担与已审核知识命中为主线进行整理。")
-        if report_guidance:
-            portrait.append("原体检报告中的阳性结果、检查小结和专家建议已纳入本次综合分析。")
-        if case.clinical_summary_text:
-            portrait.append("人工录入的病例总结诊断已一并纳入当前综合分析。")
-        if context.summary_nutrient_hints:
-            portrait.append("病例总结中提到的营养支持方向已作为后续方案整理的参考。")
+        if not priority_findings:
+            return ["一句话健康画像：当前资料已完成异常梳理，但尚缺少足够证据形成明确的身体系统优先主线。"]
 
-        return list(dict.fromkeys(portrait))[:8]
+        top_names = "、".join(SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0]) for item in priority_findings[:3])
+        portrait = [
+            f"一句话健康画像：当前问题主要集中在{top_names}，应按证据强弱分层处理，并结合症状与复查趋势持续校正。"
+        ]
+        for index, finding in enumerate(priority_findings[:5], start=1):
+            evidence = "、".join(self._system_evidence_names(context, finding.system_id)[:3]) or "已确认异常和症状"
+            portrait.append(
+                f"核心问题主线{index}：{SYSTEM_NAMES.get(finding.system_id, finding.title.split('（', 1)[0])}，主要依据为{evidence}，当前分级为{finding.priority_level}。"
+            )
+        first_month_names = "、".join(
+            SYSTEM_NAMES.get(item.system_id, item.title.split("（", 1)[0])
+            for item in priority_findings[:2]
+        )
+        portrait.append(
+            f"首月优先方向：先围绕{first_month_names}调整饮食、睡眠和活动节律，再按医生确认后的异常匹配营养支持并观察耐受。"
+        )
+        return portrait
 
     def _build_system_analysis(
         self,
@@ -2984,63 +3847,14 @@ class RecommendationService:
         report_guidance: list[str] | None = None,
         anti_aging_findings: list[str] | None = None,
     ) -> list[str]:
-        analysis: list[str] = []
-        questionnaire = case.questionnaire
         priority_findings = self._prioritized_system_findings(
             context,
             report_guidance=report_guidance,
             anti_aging_findings=anti_aging_findings,
         )
-        priority_system_ids = {item.system_id for item in priority_findings}
+        analysis: list[str] = []
         for finding in priority_findings:
             analysis.append(f"{finding.title}：{finding.body}")
-
-        if anti_aging_findings and "anti_aging" not in priority_system_ids:
-            analysis.append(
-                "抗衰系统整合（观察支持）：端粒或 DNA 甲基化摘要不作为单独诊断结论，但可帮助判断内分泌、心血管、免疫和细胞修复的优先级；后续建议与症状、生活方式执行和复查趋势一起看。"
-            )
-
-        if self._has_marker(context, "ferritin", "low") and "iron_repletion" not in priority_system_ids:
-            analysis.append("铁储备/造血支持（重点跟进）：铁蛋白偏低提示储备不足，可能与疲劳、恢复差、头晕或注意力下降有关。")
-
-        if "gut_support" in context.lifestyle_tags or questionnaire and questionnaire.food_sensitivities:
-            if "gut_digestive" not in priority_system_ids:
-                analysis.append("消化系统/肠道（重点跟进）：腹胀、排便波动、食物敏感或外食偏多时，往往需要先处理消化道负担和饮食触发因素。")
-
-        if "energy_support" in context.lifestyle_tags or self._normalize("疲劳") in context.symptoms:
-            if "neuro_sleep" not in priority_system_ids and "anti_aging" not in priority_system_ids:
-                analysis.append("细胞能量/恢复系统（重点跟进）：疲劳、活动后恢复慢或晨起乏力时，应同步关注线粒体支持、睡眠质量与营养缺口。")
-
-        guidance_text = " ".join(report_guidance or [])
-        if "乳腺增生" in guidance_text:
-            analysis.append("乳腺健康：原报告提示乳腺增生时，生活方式部分需同步关注压力、睡眠、体重管理和高脂饮食控制。")
-        if "尿抗坏血酸" in guidance_text:
-            analysis.append("尿检复核：原报告提示尿抗坏血酸增高，可能影响部分尿干化学项目，建议结合复查结果再判断泌尿系统风险。")
-        if "心律不齐" in guidance_text:
-            analysis.append("心血管节律：原报告提示窦性心律不齐，如有心悸、胸闷或运动不适，应优先转临床复核。")
-        if any(
-            term in context.clinical_summary_text
-            for term in ("脂肪酸代谢不佳", "脂代谢异常", "脂肪燃烧")
-        ):
-            analysis.append("脂肪酸代谢：人工评估提示脂代谢或脂肪燃烧效率偏弱时，方案中应提高心血管与代谢支持优先级。")
-        if any(
-            term in context.clinical_summary_text
-            for term in ("碳水化合物代谢不佳", "胰岛素抵抗", "2型糖尿病", "血糖")
-        ):
-            analysis.append("碳水代谢：人工评估提示碳水代谢效率下降时，需同步关注血糖稳定、外食结构和活动恢复。")
-        if any(
-            term in context.clinical_summary_text
-            for term in ("细胞能量生成反应不佳", "细胞能量生成不佳", "线粒体", "活动力下降", "认知功能衰退")
-        ):
-            analysis.append("细胞能量：人工评估提示线粒体或细胞能量生成支持不足时，可优先考虑能量与抗氧化支持。")
-        if context.summary_nutrient_hints:
-            analysis.append(
-                f"营养支持提醒：病例总结中提到 {'、'.join(context.summary_nutrient_hints[:10])} 等方向，后续需要结合症状、指标趋势和耐受情况由医生确认。"
-            )
-
-        if not analysis and key_lab_highlights:
-            analysis.append("当前已根据异常指标和已审核知识，整理出需要优先干预的系统方向。")
-
         return self._format_numbered_subsections(list(dict.fromkeys(analysis)), max_groups=8)
 
     def _format_numbered_subsections(self, items: list[str], *, max_groups: int) -> list[str]:
@@ -3069,6 +3883,15 @@ class RecommendationService:
         return formatted
 
     def _first_month_dosage(self, product: ProductRule) -> str:
+        mapping = self.product_dosage_mapping.get(product.sku_id, {})
+        options = [
+            option
+            for option in mapping.get("dose_options", [])
+            if isinstance(option, dict) and option.get("enabled", True)
+        ]
+        default = next((option for option in options if option.get("is_default")), options[0] if options else None)
+        if default and str(default.get("display_text") or "").strip():
+            return str(default["display_text"]).strip()
         first_month_rules = {
             "sku_liver_detox_support": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；连续 4 周后根据肝胆指标和胃肠耐受调整。",
             "sku_amino_acid_detox": "每日 2 粒，早餐后 1 粒、午餐后 1 粒，随餐使用；用于首月二阶段解毒支持，需结合肝肾功能人工确认。",
@@ -3139,8 +3962,80 @@ class RecommendationService:
                 lines.append(f"{item.display_name}：{item.dosage}；适用说明：{item.reason}{safety_suffix}")
         return lines
 
-    def _product_safety_warnings(self, product: ProductRule) -> list[str]:
-        return list(dict.fromkeys(product.contraindications + product.interaction_rule + product.warning_text))[:6]
+    def _dosage_review_reasons(self, context: RecommendationContext) -> list[str]:
+        reasons: list[str] = []
+        if context.age is not None and context.age < 18:
+            reasons.append("未成年人需按年龄/体重由医生确认剂量")
+        if context.pregnancy:
+            reasons.append("孕哺期需由医生确认剂量与成分安全性")
+        high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
+        if any(term in condition for condition in context.conditions for term in high_risk_conditions):
+            reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
+        if context.medications:
+            reasons.append("当前用药可能影响营养素剂量或服用时机")
+        return reasons
+
+    def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
+        return str(self._resolve_dosage_payload(product, context)["dosage"])
+
+    def _resolve_dosage_payload(
+        self,
+        product: ProductRule,
+        context: RecommendationContext,
+        *,
+        requires_review: bool = False,
+    ) -> dict[str, object]:
+        mapping = self.product_dosage_mapping.get(product.sku_id, {})
+        if not mapping.get("dose_options"):
+            base = self._first_month_dosage(product).strip() or "请按医生建议使用"
+            review_reasons = self._dosage_review_reasons(context)
+            if requires_review and "该产品需要医生复核剂量" not in review_reasons:
+                review_reasons.append("该产品需要医生复核剂量")
+            dosage = f"医生复核剂量；{base}" if review_reasons else base
+            return {
+                "dosage": dosage,
+                "dosage_match_reasons": review_reasons,
+            }
+
+        selection = select_dosage_option(mapping, context, self._normalize)
+        selected = selection.option
+        review_reasons = self._dosage_review_reasons(context)
+        if selected.get("requires_review"):
+            review_reasons.append("该剂量档位要求医生复核")
+        if requires_review:
+            review_reasons.append("该产品需要医生复核剂量")
+        review_reasons = list(dict.fromkeys(review_reasons))
+        display_text = str(selected.get("display_text") or "").strip() or "请按医生建议使用"
+        dosage = f"医生复核剂量；{display_text}" if review_reasons else display_text
+        match_reasons = list(selection.match_reasons)
+        if selection.fallback_reason:
+            match_reasons.append(selection.fallback_reason)
+        match_reasons.extend(review_reasons)
+
+        enabled_options = [
+            DosageOptionSummary(
+                option_id=str(option["option_id"]),
+                label=str(option.get("label") or "剂量档位"),
+                display_text=str(option.get("display_text") or ""),
+                requires_review=bool(option.get("requires_review")),
+                regimen=DosageRegimen.model_validate(option.get("regimen") or {}),
+            )
+            for option in mapping.get("dose_options", [])
+            if isinstance(option, dict) and option.get("enabled", True) and option.get("option_id")
+        ]
+        return {
+            "dosage": dosage,
+            "dosage_option_id": str(selected["option_id"]),
+            "dosage_option_label": str(selected.get("label") or "剂量档位"),
+            "dosage_match_reasons": list(dict.fromkeys(match_reasons)),
+            "dosage_options": enabled_options,
+            "dosage_regimen": DosageRegimen.model_validate(selected.get("regimen") or {}),
+        }
+
+    def _product_safety_warnings(self, product: ProductRule, context: RecommendationContext | None = None) -> list[str]:
+        dosage_reasons = self._dosage_review_reasons(context) if context is not None else []
+        warnings = dosage_reasons + product.contraindications + product.interaction_rule + product.warning_text
+        return list(dict.fromkeys(warnings))[:6]
 
     def _public_safety_note(self, warnings: list[str], *, limit: int = 3) -> str:
         public_warnings = []
@@ -3154,48 +4049,6 @@ class RecommendationService:
     def _is_internal_safety_note(self, warning: str) -> bool:
         normalized = warning.lower()
         return "sku" in normalized or "规格" in warning
-
-    def _build_lifestyle_prescription(self, case, context: RecommendationContext, lifestyle_actions: list[str]) -> list[str]:
-        questionnaire = case.questionnaire
-        prescription = [
-            "### A. 饮食干预：移除-替代-重建",
-            "移除：首月先减少酒精、含糖饮料、甜点、油炸食物、夜宵和高盐外食；若有桥本/甲状腺免疫问题，可观察麸质、乳制品和高度加工食品是否加重不适。",
-            "替代：每餐按半盘非淀粉蔬菜、1掌心优质蛋白、1拳头低升糖主食执行；油脂优先橄榄油、坚果、深海鱼或相应替代，主食优先全谷物、豆类和薯类。",
-            "重建：连续4周记录早餐、外食、酒精、咖啡因、排便和餐后困倦，用记录来判断血糖、尿酸、肠道和睡眠是否随执行改善。",
-            "### B. 运动处方：低冲击代谢激活",
-            "运动安排：第1-2周以饭后步行15-20分钟和久坐打断为主；第3-4周逐步过渡到每周150分钟中等强度有氧，加每周2次轻抗阻训练。",
-            "运动禁忌：若出现胸闷、明显心悸、头晕、关节急性疼痛、痛风急性发作或血压明显异常，先暂停高强度训练并联系医生。",
-            "### C. 睡眠与节律重建",
-            "睡眠节律：固定起床时间，晨起自然光15分钟；14点后减少咖啡因，睡前1小时减少屏幕、工作输入和剧烈运动。",
-            "### D. 压力与解毒负担管理",
-            "压力与解毒负担：每天安排2次5分钟呼吸/冥想/伸展；首月减少熬夜、酒精、香烟和不必要的环境暴露，让肝脏解毒和HPA轴先降负荷。",
-        ]
-        if questionnaire and questionnaire.dining_out_frequency:
-            prescription.append(f"外食策略：当前外食频率为 {questionnaire.dining_out_frequency}，建议先把外食控制在可计划场景，优先选择清蒸/炖煮、足量蛋白和蔬菜。")
-        if questionnaire and questionnaire.food_sensitivities:
-            prescription.append(f"触发食物观察：已记录食物敏感为 {'、'.join(questionnaire.food_sensitivities[:4])}，建议先做4周回避和症状记录。")
-        if questionnaire and questionnaire.supplement_use:
-            prescription.append("补剂执行：现有补充剂不要和新方案一次性全部叠加，先确认名称、剂量、服用时间和耐受性。")
-        prescription.extend(lifestyle_actions)
-        return list(dict.fromkeys(prescription))[:16]
-
-    def _build_lifestyle_focus(self, case, context: RecommendationContext, lifestyle_actions: list[str]) -> list[str]:
-        questionnaire = case.questionnaire
-        focus: list[str] = []
-
-        if questionnaire and questionnaire.dining_out_frequency:
-            focus.append(f"饮食执行：当前外食频率为 {questionnaire.dining_out_frequency}，建议先减少高不确定性的外食场景。")
-        if questionnaire and questionnaire.food_sensitivities:
-            focus.append(f"饮食关注：已记录的食物敏感为 {'、'.join(questionnaire.food_sensitivities[:4])}，建议优先做回避与观察。")
-        if questionnaire and questionnaire.sleep_hours is not None:
-            focus.append(f"睡眠恢复：当前睡眠约 {questionnaire.sleep_hours} 小时，建议优先修复睡眠时长与深度。")
-        if questionnaire and questionnaire.exercise_frequency:
-            focus.append(f"运动执行：当前运动频率为 {questionnaire.exercise_frequency}，建议以可持续、低门槛的方式逐步恢复活动量。")
-        if questionnaire and questionnaire.chemical_sensitivity:
-            focus.append(f"环境暴露：已记录环境或化学敏感信息为 {questionnaire.chemical_sensitivity}，建议同步减少可疑暴露源。")
-
-        focus.extend(lifestyle_actions)
-        return list(dict.fromkeys(focus))[:8]
 
     def _build_prioritized_test_recommendations(
         self,
@@ -3308,35 +4161,202 @@ class RecommendationService:
         product_evidence_map: dict[str, list[str]],
     ) -> list[ProductRule]:
         min_option_count = min(4, len(ranked_products))
-        if not selected_sku_ids:
-            qualified = [
-                product
-                for product in ranked_products
-                if self._association_percent(product_evidence_map.get(product.sku_id, [])) >= 50
-                or product.sku_id not in self.product_tag_profiles
-            ]
-            selected_products = list(qualified[:10])
-            if len(selected_products) < min_option_count:
-                for product in ranked_products:
-                    if product in selected_products:
-                        continue
-                    if not self._is_reasonable_top_up_candidate(
-                        product_evidence_map.get(product.sku_id, []),
-                    ):
-                        continue
-                    selected_products.append(product)
-                    if len(selected_products) >= min_option_count:
-                        break
-            return (selected_products or ranked_products)[:10]
-
         by_id = {product.sku_id: product for product in ranked_products}
-        selected_products: list[ProductRule] = []
-        for sku_id in selected_sku_ids:
-            product = by_id.get(sku_id)
-            if product and product not in selected_products:
-                selected_products.append(product)
+        requested = [by_id[sku_id] for sku_id in selected_sku_ids if sku_id in by_id]
+        pool: list[ProductRule] = []
+        for product in [*requested, *ranked_products]:
+            if product not in pool:
+                pool.append(product)
 
-        return selected_products or (ranked_products[:10])
+        selected_products: list[ProductRule] = []
+        covered_goals: set[str] = set()
+        system_counts: dict[str, int] = {}
+
+        # Direct actionable deficiencies are reserved before the general top-N
+        # pass. This prevents broad multi-goal products from crowding out a
+        # precise product such as VD3+K after the list is truncated.
+        must_cover_products: dict[str, ProductRule] = {}
+        for product in ranked_products:
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
+            if not any(evidence_id.startswith("signal:client_recall_") for evidence_id in evidence_ids):
+                continue
+            selected_products.append(product)
+            primary_goal = self._selection_primary_goal(evidence_ids)
+            if primary_goal:
+                covered_goals.add(primary_goal)
+            system_id = self._selection_system_id(evidence_ids)
+            if system_id:
+                system_counts[system_id] = system_counts.get(system_id, 0) + 1
+            if len(selected_products) >= 10:
+                return selected_products
+        for product in ranked_products:
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
+            for goal in self._must_cover_goals(evidence_ids):
+                must_cover_products.setdefault(goal, product)
+        for goal, product in must_cover_products.items():
+            if product not in selected_products:
+                selected_products.append(product)
+            covered_goals.add(goal)
+            system_id = self._selection_system_id(product_evidence_map.get(product.sku_id, []))
+            if system_id:
+                system_counts[system_id] = system_counts.get(system_id, 0) + 1
+
+        for product in pool:
+            if product in selected_products:
+                continue
+            evidence_ids = product_evidence_map.get(product.sku_id, [])
+            association = self._association_percent(evidence_ids)
+            if association < 50 and product.sku_id in self.product_tag_profiles:
+                continue
+            primary_goal = self._selection_primary_goal(evidence_ids)
+            if primary_goal and primary_goal in covered_goals:
+                continue
+            system_id = self._selection_system_id(evidence_ids)
+            system_limit = 1 if system_id == "liver_detox" else 3
+            if system_id and system_counts.get(system_id, 0) >= system_limit:
+                continue
+            selected_products.append(product)
+            if primary_goal:
+                covered_goals.add(primary_goal)
+            if system_id:
+                system_counts[system_id] = system_counts.get(system_id, 0) + 1
+            if len(selected_products) >= 10:
+                break
+
+        if len(selected_products) < min_option_count:
+            for product in pool:
+                if product in selected_products:
+                    continue
+                evidence_ids = product_evidence_map.get(product.sku_id, [])
+                if not self._is_reasonable_top_up_candidate(evidence_ids):
+                    continue
+                primary_goal = self._selection_primary_goal(evidence_ids)
+                if primary_goal and primary_goal in covered_goals:
+                    continue
+                selected_products.append(product)
+                if primary_goal:
+                    covered_goals.add(primary_goal)
+                if len(selected_products) >= min_option_count:
+                    break
+
+        return (selected_products or ranked_products)[:10]
+
+    @staticmethod
+    def _must_cover_goals(evidence_ids: list[str]) -> list[str]:
+        return [
+            evidence_id.replace("signal:must_cover_goal_", "", 1)
+            for evidence_id in evidence_ids
+            if evidence_id.startswith("signal:must_cover_goal_")
+        ]
+
+    @staticmethod
+    def _selection_primary_goal(evidence_ids: list[str]) -> str | None:
+        for evidence_id in evidence_ids:
+            if evidence_id.startswith("signal:primary_support_goal_"):
+                return evidence_id.replace("signal:primary_support_goal_", "", 1)
+        return None
+
+    @staticmethod
+    def _selection_system_id(evidence_ids: list[str]) -> str | None:
+        for evidence_id in evidence_ids:
+            if not evidence_id.startswith("signal:body_system_"):
+                continue
+            system_id = evidence_id.replace("signal:body_system_", "", 1)
+            if system_id.startswith("rank_"):
+                continue
+            return system_id
+        return None
+
+    @staticmethod
+    def _has_direct_product_evidence(evidence_ids: list[str]) -> bool:
+        return any(
+            evidence_id.startswith("signal:tag_marker_")
+            or evidence_id.startswith("signal:direct_marker_rule_")
+            for evidence_id in evidence_ids
+        )
+
+    def _product_has_direct_context_match(self, product: ProductRule, context: RecommendationContext) -> bool:
+        if self._matched_client_recall_rules(product, context):
+            return True
+        if any(rule.startswith("marker:") and self._matches_rule(rule, context) for rule in product.indications):
+            return True
+        profile = self.product_tag_profiles.get(product.sku_id)
+        return bool(
+            profile
+            and (
+                self._matched_marker_tags(profile.marker_tags, context)
+                or set(profile.primary_axes) & set(context.support_goal_findings)
+            )
+        )
+
+    def _finding_standardization_audit(self, case) -> list[dict[str, str | None]]:
+        latest = self.repository.get_latest_case_analysis(case.id)
+        if not latest:
+            return []
+        findings = latest.reviewed_abnormal_findings or latest.abnormal_findings
+        return [
+            {
+                "finding_id": finding.id,
+                "marker_code": finding.marker_code,
+                "finding_code": finding.finding_code,
+                "system_ids": ",".join(finding.system_ids),
+                "support_goals": ",".join(finding.support_goals),
+                "status": getattr(finding.standardization_status, "value", str(finding.standardization_status)),
+            }
+            for finding in findings
+        ]
+
+    def _product_selection_audit(
+        self,
+        *,
+        context: RecommendationContext,
+        recommended_items: list[DraftRecommendationItem],
+        product_evidence_map: dict[str, list[str]],
+        safety_decisions_by_sku: dict[str, list[SafetyDecision]],
+    ) -> list[dict[str, object]]:
+        recommended_ids = {item.sku_id for item in recommended_items}
+        recommended_by_id = {item.sku_id: item for item in recommended_items}
+        audit: list[dict[str, object]] = []
+        for product in self._list_products(enabled_only=True):
+            direct_match = self._product_has_direct_context_match(product, context)
+            safety_exclusions = [
+                decision
+                for decision in safety_decisions_by_sku.get(product.sku_id, [])
+                if decision.action == SafetyRuleAction.exclude
+            ]
+            if not direct_match and not safety_exclusions:
+                continue
+            if product.sku_id in recommended_ids:
+                reason = "recommended"
+            elif safety_exclusions:
+                reason = "safety_excluded"
+            elif product.sku_id in product_evidence_map:
+                reason = "ranking_or_model_selection_excluded"
+            else:
+                reason = "no_qualified_evidence"
+            entry: dict[str, object] = {"sku_id": product.sku_id, "result": reason}
+            selected = recommended_by_id.get(product.sku_id)
+            if selected and selected.dosage_option_id:
+                mapping = self.product_dosage_mapping.get(product.sku_id, {})
+                option = next(
+                    (
+                        candidate
+                        for candidate in mapping.get("dose_options", [])
+                        if candidate.get("option_id") == selected.dosage_option_id
+                    ),
+                    {},
+                )
+                entry.update(
+                    {
+                        "dosage_option_id": selected.dosage_option_id,
+                        "dosage_option_label": selected.dosage_option_label,
+                        "dosage_match_reasons": selected.dosage_match_reasons,
+                        "dosage_source": option.get("source"),
+                        "dosage_fallback": any("默认基础档" in item for item in selected.dosage_match_reasons),
+                    }
+                )
+            audit.append(entry)
+        return audit
 
     def _is_reasonable_top_up_candidate(self, evidence_ids: list[str]) -> bool:
         association_percent = self._association_percent(evidence_ids)
@@ -3355,7 +4375,7 @@ class RecommendationService:
     def _ranked_product_sort_key(
         self,
         item: tuple[float, ProductRule, list[str]],
-    ) -> tuple[int, int, int, int, int, int, int, float]:
+    ) -> tuple[int, int, int, int, int, int, int, int, float]:
         score, _product, evidence_ids = item
         association_percent = self._association_percent(evidence_ids)
         system_priority_percent = self._system_priority_percent(evidence_ids)
@@ -3363,16 +4383,34 @@ class RecommendationService:
         top_system_primary_axis_hit = "signal:top_system_primary_axis" in evidence_ids
         marker_tag_hit = any(evidence_id.startswith("signal:tag_marker_") for evidence_id in evidence_ids)
         direct_product_rule_hit = "signal:direct_product_rule" in evidence_ids
+        direct_marker_rule_hit = any(
+            evidence_id.startswith("signal:direct_marker_rule_") for evidence_id in evidence_ids
+        )
+        must_cover_hit = any(
+            evidence_id.startswith("signal:must_cover_goal_") for evidence_id in evidence_ids
+        )
         return (
             1 if clinician_rule_hit else 0,
+            1 if must_cover_hit else 0,
+            1 if marker_tag_hit or direct_marker_rule_hit else 0,
             1 if top_system_primary_axis_hit else 0,
-            1 if marker_tag_hit else 0,
             system_priority_percent,
             1 if association_percent >= 50 else 0,
             association_percent,
-            1 if direct_product_rule_hit else 0,
+            1 if marker_tag_hit or direct_product_rule_hit else 0,
             score,
         )
+
+    @staticmethod
+    def _body_system_rank(evidence_ids: list[str]) -> int | None:
+        for evidence_id in evidence_ids:
+            if not evidence_id.startswith("signal:body_system_rank_"):
+                continue
+            try:
+                return int(evidence_id.rsplit("_", 1)[1])
+            except ValueError:
+                return None
+        return None
 
     def _association_percent(self, evidence_ids: list[str]) -> int:
         for evidence_id in evidence_ids:

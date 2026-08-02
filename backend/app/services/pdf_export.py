@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,12 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+
+@dataclass(frozen=True)
+class PdfReportItem:
+    kind: str
+    text: str
 
 
 class PdfReportExporter:
@@ -45,7 +52,10 @@ class PdfReportExporter:
         recommended_skus: list[Any] | None = None,
     ) -> Path:
         safe_name = self._sanitize_filename(customer_name)
-        target = self.root / f"{safe_name}-{draft_id}.pdf"
+        # The downloaded report should be recognizable by the case name. A case
+        # can be regenerated repeatedly, so the newest approved report replaces
+        # the previous file with the same customer-facing name.
+        target = self.root / f"{safe_name}.pdf"
         self._build_pdf(
             target,
             customer_name=customer_name,
@@ -93,10 +103,17 @@ class PdfReportExporter:
                 continue
             story.append(Paragraph(escape(section_title), self._section_style(section_title, styles)))
             story.append(Spacer(1, 5))
-            if section_title in self.nutrition_sections and recommended_skus:
-                prescription_advice_items: list[str] = []
-                if index + 1 < len(sections) and sections[index + 1][0] == "总医嘱说明":
-                    prescription_advice_items = sections[index + 1][1]
+            canonical_title = self._canonical_section_title(section_title)
+            if canonical_title in self.nutrition_sections and recommended_skus:
+                prescription_advice_items = self._subsection_items(items, "总医嘱说明")
+                if (
+                    not prescription_advice_items
+                    and index + 1 < len(sections)
+                    and self._canonical_section_title(sections[index + 1][0]) == "总医嘱说明"
+                ):
+                    prescription_advice_items = [
+                        item.text for item in sections[index + 1][1] if item.kind != "subsection"
+                    ]
                     skip_section_indexes.add(index + 1)
                 story.extend(
                     self._build_nutrition_table_flowables(
@@ -107,11 +124,22 @@ class PdfReportExporter:
                 )
             else:
                 for item in items:
-                    if self._is_subheading_item(item):
-                        story.append(Paragraph(self._format_subheading_item(item), styles["subsection"]))
+                    if item.kind == "subsection":
+                        story.append(Paragraph(self._format_subheading_item(item.text), styles["subsection"]))
                         story.append(Spacer(1, 4))
                         continue
-                    story.append(Paragraph(self._format_item(section_title, item), self._body_style(section_title, styles)))
+                    is_list = item.kind == "list"
+                    story.append(
+                        Paragraph(
+                            self._format_item(canonical_title, item.text),
+                            self._body_style(
+                                canonical_title,
+                                styles,
+                                is_list=is_list,
+                            ),
+                            bulletText="•" if is_list else None,
+                        )
+                    )
                     story.append(Spacer(1, 5))
             story.append(Spacer(1, 4))
 
@@ -180,6 +208,35 @@ class PdfReportExporter:
                 leading=16,
                 textColor=self.text,
             ),
+            "body-paragraph": ParagraphStyle(
+                "PdfBodyParagraph",
+                parent=sample["BodyText"],
+                fontName=self.font_name,
+                fontSize=10.4,
+                leading=16,
+                textColor=self.text,
+                firstLineIndent=20.8,
+            ),
+            "body-list": ParagraphStyle(
+                "PdfBodyList",
+                parent=sample["BodyText"],
+                fontName=self.font_name,
+                fontSize=10.4,
+                leading=16,
+                textColor=self.text,
+                leftIndent=15,
+                bulletIndent=3,
+            ),
+            "body-list-risk": ParagraphStyle(
+                "PdfBodyListRisk",
+                parent=sample["BodyText"],
+                fontName=self.font_name,
+                fontSize=10.4,
+                leading=16,
+                textColor=self.risk,
+                leftIndent=15,
+                bulletIndent=3,
+            ),
             "body-muted": ParagraphStyle(
                 "PdfBodyMuted",
                 parent=sample["BodyText"],
@@ -246,26 +303,37 @@ class PdfReportExporter:
         }
 
     def _section_style(self, section_title: str, styles: dict[str, ParagraphStyle]) -> ParagraphStyle:
-        if section_title in {"风险提示", "关键指标", "关键指标摘要", "异常指标汇总"}:
+        canonical_title = self._canonical_section_title(section_title)
+        if canonical_title in {"风险提示", "关键指标", "关键指标摘要", "异常指标汇总"}:
             return styles["section-risk"]
-        if section_title in {"生活方式建议", "生活方式干预重点", "生活方式干预处方", "待确认项", "需要补充确认", "复查与跟进建议", "后续检查建议", "现有补充剂调整建议"}:
+        if canonical_title in {"生活方式建议", "生活方式干预重点", "生活方式干预处方", "待确认项", "需要补充确认", "复查与跟进建议", "后续检查建议", "现有补充剂调整建议"}:
             return styles["section-notice"]
-        if section_title == "证据来源":
+        if canonical_title == "证据来源":
             return styles["section-evidence"]
         return styles["section"]
 
-    def _body_style(self, section_title: str, styles: dict[str, ParagraphStyle]) -> ParagraphStyle:
+    def _body_style(
+        self,
+        section_title: str,
+        styles: dict[str, ParagraphStyle],
+        *,
+        is_list: bool,
+    ) -> ParagraphStyle:
         if section_title == "证据来源":
             return styles["body-muted"]
+        if is_list and section_title in {"关键指标", "关键指标摘要", "异常指标汇总", "风险提示"}:
+            return styles["body-list-risk"]
+        if is_list:
+            return styles["body-list"]
         if section_title in {"关键指标", "关键指标摘要", "异常指标汇总", "风险提示"}:
             return styles["body-risk"]
-        return styles["body"]
+        return styles["body-paragraph"]
 
-    def _parse_report(self, report_text: str) -> tuple[str, list[tuple[str, list[str]]]]:
+    def _parse_report(self, report_text: str) -> tuple[str, list[tuple[str, list[PdfReportItem]]]]:
         title = "功能医学营养干预报告"
-        sections: list[tuple[str, list[str]]] = []
+        sections: list[tuple[str, list[PdfReportItem]]] = []
         current_title: str | None = None
-        current_items: list[str] = []
+        current_items: list[PdfReportItem] = []
         skip_titles = {"病例摘要", "证据来源", "审核备注", "审计信息"}
         skipping = False
 
@@ -280,17 +348,34 @@ class PdfReportExporter:
                 if current_title:
                     sections.append((current_title, current_items))
                 section_title = line[3:].strip()
-                skipping = section_title in skip_titles or self._is_hidden_customer_section(section_title)
+                canonical_title = self._canonical_section_title(section_title)
+                skipping = canonical_title in skip_titles or self._is_hidden_customer_section(canonical_title)
                 current_title = None if skipping else section_title
                 current_items = []
                 continue
             if current_title is None or skipping:
                 continue
-            current_items.append(line[2:].strip() if line.startswith("- ") else line)
+            if line.startswith("### "):
+                current_items.append(PdfReportItem(kind="subsection", text=line[4:].strip()))
+            elif line.startswith(("- ", "* ", "• ")):
+                current_items.append(PdfReportItem(kind="list", text=line[2:].strip()))
+            else:
+                current_items.append(PdfReportItem(kind="paragraph", text=line))
 
         if current_title:
             sections.append((current_title, current_items))
         return title, sections
+
+    def _subsection_items(self, items: list[PdfReportItem], title: str) -> list[str]:
+        collecting = False
+        collected: list[str] = []
+        for item in items:
+            if item.kind == "subsection":
+                collecting = self._canonical_section_title(item.text) == title
+                continue
+            if collecting:
+                collected.append(item.text)
+        return collected
 
     def _is_hidden_customer_section(self, section_title: str) -> bool:
         return (
@@ -368,7 +453,6 @@ class PdfReportExporter:
         )
         flowables.append(table)
         flowables.extend(self._build_prescription_advice_flowables(prescription_advice_items or [], styles))
-        flowables.extend(self._build_nutrition_basis_flowables(rows, styles))
         return flowables
 
     def _build_prescription_advice_flowables(
@@ -386,13 +470,12 @@ class PdfReportExporter:
             Spacer(1, 4),
         ]
         for item in cleaned_items:
-            flowables.append(Paragraph(self._format_item("总医嘱说明", item), styles["body"]))
+            flowables.append(Paragraph(self._format_item("总医嘱说明", item), styles["body-paragraph"]))
             flowables.append(Spacer(1, 4))
         return flowables
 
     def _nutrition_table_rows(self, recommended_skus: list[Any]) -> list[dict[str, Any]]:
         products = self.product_report_catalog.get("products", {})
-        ignored_names = {"综合消化酶", "复合益生菌"}
         rows: list[dict[str, Any]] = []
         seen_skus: set[str] = set()
 
@@ -402,14 +485,8 @@ class PdfReportExporter:
                 continue
             seen_skus.add(sku_id)
             display_name = self._clean_customer_text(self._sku_value(sku, "display_name"))
-            if display_name in ignored_names:
-                continue
-
             product_profile = products.get(sku_id, {}) if sku_id else {}
             product_name = self._clean_customer_text(product_profile.get("product_name") or display_name or "营养素")
-            if product_name in ignored_names:
-                continue
-
             sequence = self._clean_customer_text(product_profile.get("sequence") or "待确认")
             dosage = self._clean_customer_text(self._sku_value(sku, "dosage") or "请按顾问建议使用")
             reason = self._clean_customer_text(self._sku_value(sku, "reason"))
@@ -428,74 +505,6 @@ class PdfReportExporter:
                 }
             )
         return rows
-
-    def _build_nutrition_basis_flowables(
-        self,
-        rows: list[dict[str, Any]],
-        styles: dict[str, ParagraphStyle],
-    ) -> list[Any]:
-        basis_items = self._nutrition_basis_items(rows)
-        if not basis_items:
-            return []
-
-        flowables: list[Any] = [
-            Spacer(1, 9),
-            Paragraph("推荐搭配说明", styles["subsection"]),
-            Spacer(1, 4),
-        ]
-        for item in basis_items:
-            flowables.append(Paragraph(f"- {escape(item)}", styles["body-muted"]))
-            flowables.append(Spacer(1, 4))
-        return flowables
-
-    def _nutrition_basis_items(self, rows: list[dict[str, Any]]) -> list[str]:
-        items: list[str] = []
-        for row in rows:
-            product_name = self._clean_customer_text(row.get("product_name", ""))
-            reason = self._clean_customer_text(row.get("reason", ""))
-            if not product_name or not reason:
-                continue
-            polished = self._polish_nutrition_reason(product_name, reason)
-            if polished:
-                items.append(f"{product_name}：{polished}")
-        return list(dict.fromkeys(items))
-
-    def _polish_nutrition_reason(self, product_name: str, reason: str) -> str:
-        source_text = self._strip_internal_reason_terms(f"{product_name} {reason}")
-        normalized = self._clean_customer_text(source_text)
-
-        if any(token in normalized for token in ("肝脏", "肝胆", "解毒", "谷胱甘肽", "胆汁", "脂肪肝", "酒精", "尿酸")):
-            return "本次方案更关注肝胆代谢、解毒负担和氧化压力管理，因此把它放入首月支持；执行时建议同步减少酒精、精制碳水和高油外食，并结合后续肝肾功能、尿酸和血脂趋势观察。"
-        if any(token in normalized for token in ("甲状腺", "桥本", "甲减", "硒", "碘")):
-            return "它主要用于配合甲状腺营养基础和代谢节律管理；若正在使用甲状腺相关药物，服用时间和剂量需要由医生确认。"
-        if any(token in normalized for token in ("血脂", "心血管", "鱼油", "EPA", "DHA", "心肌", "同型半胱氨酸", "HCY")):
-            return "它更偏向心血管和血脂代谢支持，适合与控油、优质脂肪摄入、规律运动和复查血脂趋势一起评估效果。"
-        if any(token in normalized for token in ("血糖", "胰岛素", "碳水", "体重", "减重", "代谢")):
-            return "它用于配合血糖稳定、餐盘结构和体重管理；首月重点不是单靠补充剂，而是和主食比例、饭后活动、睡眠节律一起调整。"
-        if any(token in normalized for token in ("睡眠", "压力", "镁", "GABA", "焦虑", "紧张", "南非醉茄")):
-            return "它主要服务于睡眠恢复、压力调节和神经放松；建议配合固定作息、减少下午咖啡因和睡前屏幕刺激来观察改善。"
-        if any(token in normalized for token in ("肠道", "消化", "胃", "菌群", "腹胀", "便秘", "黏膜")):
-            return "它用于配合消化道负担和肠道屏障管理；建议同时记录排便、腹胀、外食和触发食物，方便后续判断是否需要调整。"
-        if any(token in normalized for token in ("维生素D", "VD3", "骨骼", "免疫")):
-            return "它用于补足维生素D相关支持，和免疫调节、骨骼健康及整体恢复有关；后续可结合25-OH维生素D复查结果调整。"
-        if any(token in normalized for token in ("线粒体", "能量", "疲劳", "辅酶Q10", "认知", "脑雾")):
-            return "它用于支持细胞能量、疲劳恢复和脑力状态；建议结合睡眠、运动耐受和白天精力变化一起观察。"
-        if any(token in normalized for token in ("抗炎", "炎症", "抗氧化", "槲皮素", "维生素C", "白藜芦醇")):
-            return "它用于配合炎症和氧化压力管理；首月建议同时做好抗炎饮食、睡眠恢复和压力管理，避免只依赖单一补充剂。"
-        if any(token in normalized for token in ("女性", "激素", "经前", "潮热", "DHEA")):
-            return "它用于配合内分泌节律和女性周期相关支持；涉及激素前体或特殊阶段时，需要医生确认后再执行。"
-
-        return "本次纳入它，主要是为了围绕当前报告和问卷提示做阶段性营养支持；建议先观察4周耐受、症状和复查趋势，再由医生决定是否继续或调整。"
-
-    def _strip_internal_reason_terms(self, reason: str) -> str:
-        cleaned = self._clean_customer_text(reason)
-        cleaned = re.sub(r"关联度约\s*\d+%\s*[：:，,]?", "", cleaned)
-        cleaned = re.sub(r"命中产品标签命中：[^，。；;]+[，。；;]?", "", cleaned)
-        cleaned = re.sub(r"产品标签命中：[^，。；;]+[，。；;]?", "", cleaned)
-        cleaned = cleaned.replace("作为当前阶段的候选推荐", "")
-        cleaned = cleaned.replace("候选推荐", "")
-        cleaned = re.sub(r"\s+", " ", cleaned)
-        return cleaned.strip(" ，。；;：:")
 
     def _build_dose_summary(self, rows: list[dict[str, Any]]) -> str:
         slot_order = ["早餐后", "午餐后", "晚餐后", "随餐/餐后", "晚间/睡前", "需人工确认", "按顾问建议"]
@@ -525,7 +534,20 @@ class PdfReportExporter:
         return "按顾问建议"
 
     def _full_product_description(self, description: str) -> str:
-        return self._clean_customer_text(description)
+        text = self._clean_customer_text(description)
+        replacements = {
+            "强效": "",
+            "精准": "",
+            "高效": "",
+            "从根源": "",
+            "告别": "改善",
+            "优选": "可选",
+            "突破传统VC吸收局限": "用于改善传统维生素C的吸收利用",
+            "快速降低": "支持调节",
+        }
+        for source, target in replacements.items():
+            text = text.replace(source, target)
+        return re.sub(r"\s+", " ", text).strip()
 
     def _public_warnings(self, warnings: list[Any], *, limit: int = 2) -> list[str]:
         public_warnings: list[str] = []
@@ -562,7 +584,13 @@ class PdfReportExporter:
             return self._highlight_tokens(item)
 
         if section_title in {"关键指标", "关键指标摘要", "异常指标汇总"}:
-            return f"- <font color='#b04a34'><b>{escape(item)}</b></font>"
+            if "：" in item:
+                label, rest = item.split("：", 1)
+                return (
+                    f"<font color='#14564a'><b>{escape(label)}：</b></font>"
+                    f"<font color='#b04a34'><b>{escape(rest)}</b></font>"
+                )
+            return f"<font color='#b04a34'><b>{escape(item)}</b></font>"
 
         if section_title in {"营养素推荐", "个性化营养素方案", "首月营养素干预方案"}:
             formatted = self._highlight_tokens(item)
@@ -578,19 +606,29 @@ class PdfReportExporter:
                 "注意/禁忌：",
                 "<font color='#b04a34'><b>注意/禁忌：</b></font>",
             )
-            return f"- {formatted}"
+            return formatted
 
-        if "：" in item and section_title in {"病例摘要", "关键指标摘要", "异常指标汇总", "风险提示", "待确认项"}:
+        if "：" in item and section_title in {
+            "病例摘要",
+            "核心结论与健康画像",
+            "总体健康画像",
+            "关键指标摘要",
+            "异常指标汇总",
+            "风险提示",
+            "功能医学系统失衡分析",
+            "待确认项",
+        }:
             label, rest = item.split("：", 1)
-            return f"- <font color='#14564a'><b>{escape(label)}：</b></font>{self._highlight_tokens(rest.strip())}"
+            return f"<font color='#14564a'><b>{escape(label)}：</b></font>{self._highlight_tokens(rest.strip())}"
 
-        return f"- {self._highlight_tokens(item)}"
+        return self._highlight_tokens(item)
 
     def _is_subheading_item(self, item: str) -> bool:
         return self._clean_customer_text(item).startswith("### ")
 
     def _format_subheading_item(self, item: str) -> str:
-        title = self._clean_customer_text(item)[4:].strip()
+        cleaned = self._clean_customer_text(item)
+        title = cleaned[4:].strip() if cleaned.startswith("### ") else cleaned
         return f"<font color='#14564a'><b>{escape(title)}</b></font>"
 
     def _highlight_tokens(self, text: str) -> str:
@@ -641,6 +679,14 @@ class PdfReportExporter:
         canvas.setFont(self.font_name, 8.8)
         canvas.drawRightString(A4[0] - doc.rightMargin, 8 * mm, f"第 {canvas.getPageNumber()} 页")
         canvas.restoreState()
+
+    @staticmethod
+    def _canonical_section_title(value: str) -> str:
+        return re.sub(
+            r"^(?:[零一二三四五六七八九十百]+|\d+)[、.．]\s*",
+            "",
+            str(value or "").strip(),
+        )
 
     def _clean_customer_text(self, value: str) -> str:
         cleaned = str(value or "").replace("\ufffd", "").strip()

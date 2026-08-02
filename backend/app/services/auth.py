@@ -65,6 +65,15 @@ class AuthService:
         self.repository.save_session(session)
         return AuthSession(doctor=doctor, session=session)
 
+    def change_password(self, *, doctor: DoctorAccount, current_password: str, new_password: str) -> DoctorAccount:
+        if not self._verify_password(current_password, doctor.password_hash):
+            raise ValueError("当前密码不正确。")
+        if len(new_password or "") < 6:
+            raise ValueError("新密码至少需要 6 位。")
+        doctor.password_hash = self._hash_password(new_password)
+        doctor.updated_at = utc_now()
+        return self.repository.save_doctor(doctor)
+
     def issue_external_trust_session(
         self,
         *,

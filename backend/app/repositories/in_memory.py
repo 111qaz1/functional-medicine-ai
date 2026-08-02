@@ -4,11 +4,15 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 from app.domain.models import (
     AuditLog,
+    AnalysisStatus,
+    FinalGenerationStatus,
+    CaseAnalysis,
     CaseRecord,
     ClinicianRule,
     DoctorAccount,
@@ -46,6 +50,21 @@ class LocalRepository:
                 CREATE TABLE IF NOT EXISTS drafts (
                     id TEXT PRIMARY KEY,
                     case_id TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS case_analyses (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_case_analyses_case_updated
+                    ON case_analyses(case_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS document_analysis_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    owner_scope TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS review_decisions (
@@ -144,6 +163,38 @@ class LocalRepository:
                 ],
             )
 
+    def migrate_product_sku(self, legacy_sku_id: str, canonical_sku_id: str) -> int:
+        """Replace a retired SKU in persisted JSON records, then remove its catalog row."""
+        if not legacy_sku_id or not canonical_sku_id or legacy_sku_id == canonical_sku_id:
+            return 0
+
+        payload_tables = (
+            "cases",
+            "drafts",
+            "case_analyses",
+            "document_analysis_cache",
+            "review_decisions",
+            "audit_logs",
+            "knowledge",
+            "clinician_rules",
+        )
+        changed = 0
+        with self._lock, closing(self._connect()) as connection, connection:
+            for table in payload_tables:
+                rows = connection.execute(
+                    f"SELECT rowid, payload FROM {table} WHERE instr(payload, ?) > 0",
+                    (legacy_sku_id,),
+                ).fetchall()
+                for row in rows:
+                    migrated_payload = str(row["payload"]).replace(legacy_sku_id, canonical_sku_id)
+                    connection.execute(
+                        f"UPDATE {table} SET payload = ? WHERE rowid = ?",
+                        (migrated_payload, row["rowid"]),
+                    )
+                    changed += 1
+            connection.execute("DELETE FROM products WHERE sku_id = ?", (legacy_sku_id,))
+        return changed
+
     def _knowledge_fingerprint(self, knowledge: list[KnowledgeStatement]) -> str:
         digest = hashlib.sha256()
         for item in sorted(knowledge, key=lambda statement: statement.statement_id):
@@ -241,12 +292,20 @@ class LocalRepository:
             sql += " WHERE " + " AND ".join(clauses)
         with self._lock, closing(self._connect()) as connection, connection:
             rows = connection.execute(sql, tuple(params)).fetchall()
-        return [CaseRecord.model_validate_json(row["payload"]) for row in rows]
+        return [self._load_case_record(row["payload"]) for row in rows]
 
     def get_case(self, case_id: str) -> CaseRecord | None:
         with self._lock, closing(self._connect()) as connection, connection:
             row = connection.execute("SELECT payload FROM cases WHERE id = ?", (case_id,)).fetchone()
-        return CaseRecord.model_validate_json(row["payload"]) if row else None
+        return self._load_case_record(row["payload"]) if row else None
+
+    @staticmethod
+    def _load_case_record(payload: str) -> CaseRecord:
+        data = json.loads(payload)
+        # Historical records may contain the removed analysis-mode selector.
+        # All cases now use the single LLM-primary workflow.
+        data.pop("analysis_mode", None)
+        return CaseRecord.model_validate(data)
 
     def save_case(self, record: CaseRecord) -> CaseRecord:
         with self._lock, closing(self._connect()) as connection, connection:
@@ -268,6 +327,7 @@ class LocalRepository:
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute("DELETE FROM cases WHERE id = ?", (case_id,))
             connection.execute("DELETE FROM audit_logs WHERE entity_id = ?", (case_id,))
+            connection.execute("DELETE FROM case_analyses WHERE case_id = ?", (case_id,))
             for draft_id in draft_ids:
                 connection.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
                 connection.execute("DELETE FROM review_decisions WHERE draft_id = ?", (draft_id,))
@@ -285,6 +345,110 @@ class LocalRepository:
                 (draft.id, draft.case_id, draft.model_dump_json()),
             )
         return draft
+
+    def list_case_analyses(self, case_id: str) -> list[CaseAnalysis]:
+        with self._lock, closing(self._connect()) as connection, connection:
+            rows = connection.execute(
+                "SELECT payload FROM case_analyses WHERE case_id = ? ORDER BY updated_at DESC",
+                (case_id,),
+            ).fetchall()
+        return [CaseAnalysis.model_validate_json(row["payload"]) for row in rows]
+
+    def get_case_analysis(self, analysis_id: str) -> CaseAnalysis | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                "SELECT payload FROM case_analyses WHERE id = ?",
+                (analysis_id,),
+            ).fetchone()
+        return CaseAnalysis.model_validate_json(row["payload"]) if row else None
+
+    def get_latest_case_analysis(self, case_id: str) -> CaseAnalysis | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                "SELECT payload FROM case_analyses WHERE case_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (case_id,),
+            ).fetchone()
+        return CaseAnalysis.model_validate_json(row["payload"]) if row else None
+
+    def save_case_analysis(self, analysis: CaseAnalysis) -> CaseAnalysis:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO case_analyses (id, case_id, status, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    analysis.id,
+                    analysis.case_id,
+                    analysis.status.value,
+                    analysis.updated_at.isoformat(),
+                    analysis.model_dump_json(),
+                ),
+            )
+        return analysis
+
+    def mark_active_analyses_interrupted(self) -> int:
+        active = {
+            AnalysisStatus.queued.value,
+            AnalysisStatus.preparing.value,
+            AnalysisStatus.analyzing_documents.value,
+            AnalysisStatus.synthesizing.value,
+            AnalysisStatus.validating.value,
+        }
+        changed = 0
+        with self._lock, closing(self._connect()) as connection, connection:
+            rows = connection.execute("SELECT id, payload FROM case_analyses").fetchall()
+            for row in rows:
+                analysis = CaseAnalysis.model_validate_json(row["payload"])
+                initial_active = analysis.status.value in active
+                final_active = analysis.final_generation_status in {
+                    FinalGenerationStatus.queued,
+                    FinalGenerationStatus.final_synthesizing,
+                    FinalGenerationStatus.validating_support_needs,
+                    FinalGenerationStatus.mapping_products,
+                    FinalGenerationStatus.checking_safety,
+                    FinalGenerationStatus.generating_draft,
+                }
+                if not initial_active and not final_active:
+                    continue
+                if initial_active:
+                    analysis.status = AnalysisStatus.failed
+                    analysis.error_code = "interrupted_by_restart"
+                    analysis.error_message = "后端服务重启导致分析中断，请手动重试。"
+                if final_active:
+                    analysis.final_generation_status = FinalGenerationStatus.failed
+                    analysis.final_generation_error = "后端服务重启导致草案生成中断，请手动重试。"
+                analysis.updated_at = datetime.now(timezone.utc)
+                connection.execute(
+                    "UPDATE case_analyses SET status = ?, updated_at = ?, payload = ? WHERE id = ?",
+                    (
+                        analysis.status.value,
+                        analysis.updated_at.isoformat(),
+                        analysis.model_dump_json(),
+                        analysis.id,
+                    ),
+                )
+                changed += 1
+        return changed
+
+    def get_document_analysis_cache(self, cache_key: str, owner_scope: str) -> dict | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                "SELECT payload FROM document_analysis_cache WHERE cache_key = ? AND owner_scope = ?",
+                (cache_key, owner_scope),
+            ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def save_document_analysis_cache(self, cache_key: str, owner_scope: str, payload: dict) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO document_analysis_cache (cache_key, owner_scope, updated_at, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (cache_key, owner_scope, now, json.dumps(payload, ensure_ascii=False)),
+            )
 
     def save_review_decision(self, review: ReviewDecision) -> ReviewDecision:
         with self._lock, closing(self._connect()) as connection, connection:

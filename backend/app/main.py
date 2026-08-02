@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,10 +38,17 @@ def allowed_cors_origins() -> list[str]:
 
 def create_app() -> FastAPI:
     container = build_container()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        yield
+        application.state.container.case_analysis_service.shutdown()
+
     app = FastAPI(
         title="Functional Medicine Nutrition AI",
         version="0.1.0",
         summary="Grounded recommendation engine for internal nutrition experts.",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -48,6 +56,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
     )
     app.state.container = container
     app.include_router(router)

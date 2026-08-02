@@ -188,6 +188,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         serialized_sections = json.dumps(draft.report_sections, ensure_ascii=False)
+        serialized_audit = json.dumps(draft.internal_audit, ensure_ascii=False)
         catalog_ids = {product.sku_id for product in self.container.repository.list_products()}
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
 
@@ -200,8 +201,10 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertIn("RAG异常指标解释", draft.report_sections)
         self.assertIn("RAG生活方式干预", draft.report_sections)
         self.assertIn("RAG复查建议", draft.report_sections)
-        self.assertEqual(len(composer.last_input.rag_hits), 4)
-        self.assertIn("rag_rejected:unsafe_drug", serialized_sections)
+        # Product selection is now entirely local. The model/composer must not
+        # receive RAG hits together with product candidates or SKU names.
+        self.assertIsNone(composer.last_input)
+        self.assertIn("rag_rejected:unsafe_drug", serialized_audit)
 
         review = self.container.review_service.approve(
             draft.id,
@@ -246,7 +249,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("血脂异常的分型", safe_hits[0].excerpt)
         self.assertNotIn("续表", safe_hits[0].excerpt)
 
-    def test_red_flags_and_contraindications_still_take_priority_over_rag(self) -> None:
+    def test_risk_notices_do_not_block_draft_and_unsafe_rag_is_still_filtered(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
             [
                 rag_hit(
@@ -257,7 +260,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
             ]
         )
         case = self._prepare_case(
-            "空腹血糖 6.2 mmol/L 3.9-5.6",
+            "25-OH Vitamin D 18 ng/mL 30-100",
             Questionnaire(
                 age=32,
                 sex="female",
@@ -272,12 +275,13 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         serialized_sections = json.dumps(draft.report_sections, ensure_ascii=False)
 
-        self.assertTrue(draft.abstain_reason)
-        self.assertEqual(draft.recommended_skus, [])
-        self.assertIn("孕期或哺乳期需要人工审核", " ".join(draft.red_flags))
+        self.assertFalse(draft.abstain_reason)
+        self.assertTrue(draft.recommended_skus)
+        self.assertEqual(draft.red_flags, [])
+        self.assertIn("孕期或哺乳期需要医生重点审核", " ".join(draft.report_sections["风险提示"]))
         self.assertNotIn("主动排毒", serialized_sections)
         self.assertNotIn("间歇性禁食", serialized_sections)
-        self.assertIn("skipped_due_to_red_flags", serialized_sections)
+        self.assertNotIn("skipped_due_to_red_flags", serialized_sections)
 
     def test_manual_publishable_summary_preserves_doctor_confirmed_text(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
@@ -398,7 +402,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn(CUSTOMER_RAG_PREFIX, review.publishable_report)
         self.assertNotIn("功能医学知识库", review.publishable_report)
         saved_draft = self.container.repository.get_draft(draft.id)
-        self.assertTrue(any(item.startswith("rag_fusion:remote_") for item in saved_draft.report_sections["RAG内部审查"]))
+        self.assertTrue(any(item.startswith("rag_fusion:remote_") for item in saved_draft.internal_audit["rag"]))
         if fusion_provider.last_payload:
             self.assertNotIn("首月营养素干预方案", fusion_provider.last_payload["target_sections"])
 
@@ -457,7 +461,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("\n- -", review.publishable_report)
         self.assertNotIn("\n- 1)", review.publishable_report)
         saved_draft = self.container.repository.get_draft(draft.id)
-        self.assertIn("rag_fusion:remote_success", saved_draft.report_sections["RAG内部审查"])
+        self.assertIn("rag_fusion:remote_success", saved_draft.internal_audit["rag"])
 
     def test_customer_visible_report_collapses_soft_line_breaks(self) -> None:
         raw_report = (
@@ -589,7 +593,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn("内部标签泄露", review.publishable_report)
         self.assertNotIn("功能医学知识库", review.publishable_report)
         saved_draft = self.container.repository.get_draft(draft.id)
-        self.assertIn("rag_fusion:remote_rejected", " ".join(saved_draft.report_sections["RAG内部审查"]))
+        self.assertIn("rag_fusion:remote_rejected", " ".join(saved_draft.internal_audit["rag"]))
 
     def test_rag_filters_english_fragment_hits_after_retrieval_expansion(self) -> None:
         self.container.recommendation_service.rag_retriever = FakeRagRetriever(
@@ -632,12 +636,13 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         serialized_sections = json.dumps(draft.report_sections, ensure_ascii=False)
+        serialized_audit = json.dumps(draft.internal_audit, ensure_ascii=False)
 
         self.assertNotIn("potassium, chloride", serialized_sections)
         self.assertNotIn("palmitoleic", serialized_sections)
         self.assertIn("甲状腺HPT轴", serialized_sections)
-        self.assertIn("rag_rejected:bad_english_lab_list:english_lab_list_fragment", serialized_sections)
-        self.assertIn("rag_rejected:bad_english_continuation:english_continuation_fragment", serialized_sections)
+        self.assertIn("rag_rejected:bad_english_lab_list:english_lab_list_fragment", serialized_audit)
+        self.assertIn("rag_rejected:bad_english_continuation:english_continuation_fragment", serialized_audit)
 
     def test_clinician_rule_is_not_overridden_by_rag_context(self) -> None:
         self.container.repository.save_product(
@@ -698,12 +703,14 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         serialized_sections = json.dumps(draft.report_sections, ensure_ascii=False)
+        serialized_audit = json.dumps(draft.internal_audit, ensure_ascii=False)
         recommended_ids = {item.sku_id for item in draft.recommended_skus}
 
-        self.assertIn("sku_doctor_custom_lipid_support", recommended_ids)
-        self.assertTrue(any(evidence_id.startswith("clinician_rule:") for evidence_id in draft.evidence_ids))
+        # A clinician boost rule can reorder an evidence-backed candidate, but
+        # cannot introduce a product that has no versioned capability mapping.
+        self.assertNotIn("sku_doctor_custom_lipid_support", recommended_ids)
         self.assertNotIn("改为推荐目录外产品", serialized_sections)
-        self.assertIn("direct_product_reference", serialized_sections)
+        self.assertIn("direct_product_reference", serialized_audit)
 
 if __name__ == "__main__":
     unittest.main()

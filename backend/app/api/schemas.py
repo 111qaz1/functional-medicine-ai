@@ -6,10 +6,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.domain.models import (
-    AnalysisMode,
+    AbnormalFinding,
     AuditLog,
     CaseIndicator,
     CaseRecord,
+    CaseAnalysis,
     ClinicianRule,
     ClinicianRuleAction,
     ConsentRecord,
@@ -33,11 +34,14 @@ class CreateCaseRequest(BaseModel):
     workspace_scope: WorkspaceScope = WorkspaceScope.public
     notes: str | None = None
     consent: ConsentRecord | None = None
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
 
 
 class GenerateDraftRequest(BaseModel):
     requested_by: str = "system"
+
+
+class StartAnalysisRequest(BaseModel):
+    third_party_processing_confirmed: bool = False
 
 
 class ApproveDraftRequest(BaseModel):
@@ -72,10 +76,23 @@ class ClinicalSummaryUpdateRequest(BaseModel):
     clinical_summary_text: str | None = None
 
 
+class ReviewAndGenerateRequest(BaseModel):
+    reviewer_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=1)
+    abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+
+
+class ReviewAndGenerateResponse(BaseModel):
+    analysis: CaseAnalysis
+    review_saved: bool = True
+    draft_generated: bool = False
+    draft: RecommendationDraft | None = None
+    generation_error: str | None = None
+
+
 class CaseSummaryResponse(BaseModel):
     id: str
     customer_name: str
-    analysis_mode: AnalysisMode = AnalysisMode.llm_primary
     status: str
     consultant_id: str | None = None
     workspace_scope: WorkspaceScope = WorkspaceScope.public
@@ -98,6 +115,17 @@ class CaseDetailResponse(BaseModel):
     review_decision: ReviewDecision | None = None
     audit_logs: list[AuditLog] = Field(default_factory=list)
     matched_clinician_rules: list[ClinicianRule] = Field(default_factory=list)
+    operation: "ProcessingOperationResponse | None" = None
+
+
+class ProcessingOperationResponse(BaseModel):
+    success: bool
+    stage: str
+    status: str
+    progress_percent: int = Field(default=100, ge=0, le=100)
+    parsing_succeeded: bool | None = None
+    message: str
+    filename: str | None = None
 
 
 class ClinicalSummaryImageImportResponse(BaseModel):
@@ -237,6 +265,11 @@ class AuthRegisterRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class AuthResponse(BaseModel):

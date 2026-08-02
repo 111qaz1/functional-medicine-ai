@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.domain.models import (
-    AnalysisMode,
+    AnalysisStatus,
     AuditLog,
     CaseIndicator,
     CaseRecord,
@@ -51,7 +51,6 @@ class CaseService:
         consultant_id: str | None,
         notes: str | None,
         consent: ConsentRecord | None,
-        analysis_mode: AnalysisMode = AnalysisMode.llm_primary,
         workspace_scope: WorkspaceScope = WorkspaceScope.public,
         owner_doctor_id: str | None = None,
     ) -> CaseRecord:
@@ -61,7 +60,6 @@ class CaseService:
             consultant_id=consultant_id,
             workspace_scope=workspace_scope,
             owner_doctor_id=owner_doctor_id,
-            analysis_mode=analysis_mode,
             notes=notes,
             consent=consent,
         )
@@ -71,8 +69,6 @@ class CaseService:
             "case_created",
             "system",
             {
-                "customer_name": customer_name,
-                "analysis_mode": analysis_mode.value,
                 "workspace_scope": workspace_scope.value,
                 "owner_doctor_id": owner_doctor_id,
             },
@@ -90,7 +86,17 @@ class CaseService:
         case.parsing_review_notes = None
         case.updated_at = utc_now()
         self.repository.save_case(case)
-        self._audit(case.id, "file_uploaded", "system", {"file_id": uploaded_file.id, "filename": uploaded_file.filename})
+        self._mark_analysis_stale(case.id)
+        self._audit(
+            case.id,
+            "file_uploaded",
+            "system",
+            {
+                "file_id": uploaded_file.id,
+                "content_sha256": uploaded_file.content_sha256,
+                "intake_status": uploaded_file.intake_status.value,
+            },
+        )
         return case
 
     def attach_parse_results(
@@ -145,7 +151,13 @@ class CaseService:
         if case.parsing_review_completed:
             case.status = CaseStatus.ready_for_recommendation
         self.repository.save_case(case)
-        self._audit(case.id, "questionnaire_submitted", "system", questionnaire.model_dump(mode="json"))
+        self._mark_analysis_stale(case.id)
+        self._audit(
+            case.id,
+            "questionnaire_submitted",
+            "system",
+            {"form_version": questionnaire.form_version, "has_msq_scores": bool(questionnaire.msq_system_scores)},
+        )
         return case
 
     def import_questionnaire(self, case_id: str, questionnaire: Questionnaire, *, filename: str) -> CaseRecord:
@@ -162,18 +174,40 @@ class CaseService:
     ) -> CaseRecord:
         case = self.get_case(case_id)
         normalized_text = (clinical_summary_text or "").strip() or None
+        changed = case.clinical_summary_text != normalized_text
         case.clinical_summary_text = normalized_text
         case.updated_at = utc_now()
         self.repository.save_case(case)
+        if changed:
+            self._mark_analysis_stale(case.id)
         self._audit(
             case.id,
             "clinical_summary_updated",
             actor_id,
             {
                 "has_clinical_summary": bool(normalized_text),
-                "clinical_summary_preview": (normalized_text or "")[:240],
             },
         )
+        return case
+
+    def delete_uploaded_file(self, case_id: str, file_id: str) -> CaseRecord:
+        case = self.get_case(case_id)
+        target = next((item for item in case.files if item.id == file_id), None)
+        if not target:
+            raise KeyError(f"File {file_id} not found")
+        self._safe_unlink(target.storage_uri)
+        case.files = [item for item in case.files if item.id != file_id]
+        case.extracted_lab_items = [
+            item for item in case.extracted_lab_items if item.source_span.file_id != file_id
+        ]
+        case.manual_indicators = [
+            item for item in case.manual_indicators if item.source_span.file_id != file_id
+        ]
+        case.parsing_review_completed = False
+        case.updated_at = utc_now()
+        self.repository.save_case(case)
+        self._mark_analysis_stale(case.id)
+        self._audit(case.id, "file_deleted", "system", {"file_id": file_id})
         return case
 
     def review_parsing(
@@ -264,6 +298,14 @@ class CaseService:
                 payload=payload,
             )
         )
+
+    def _mark_analysis_stale(self, case_id: str) -> None:
+        latest = self.repository.get_latest_case_analysis(case_id)
+        if not latest or latest.status in {AnalysisStatus.failed, AnalysisStatus.stale}:
+            return
+        latest.status = AnalysisStatus.stale
+        latest.updated_at = utc_now()
+        self.repository.save_case_analysis(latest)
 
     def _safe_unlink(self, raw_path: str | None) -> None:
         if not raw_path:

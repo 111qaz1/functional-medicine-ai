@@ -1,5 +1,33 @@
 {
-  "version": "product-tag-matrix-v1",
+  "version": "product-tag-matrix-v4-digestive-products-2026-07-22",
+  "axis_system_map": {
+    "gut_bile": ["digestive_gut", "liver_detox"],
+    "gut_microbiome": ["digestive_gut"],
+    "gut_mucosa": ["digestive_gut", "skin_mucosa"],
+    "gastric_acid": ["digestive_gut"],
+    "digestive_enzyme": ["digestive_gut"],
+    "liver_detox": ["liver_detox"],
+    "methylation": ["liver_detox", "cardiovascular"],
+    "immune": ["immune_inflammation"],
+    "inflammation": ["immune_inflammation"],
+    "antioxidant": ["immune_inflammation"],
+    "thyroid_axis": ["endocrine_metabolic", "immune_inflammation"],
+    "glycemic_balance": ["endocrine_metabolic"],
+    "weight_metabolism": ["endocrine_metabolic"],
+    "nutrition_repletion": ["endocrine_metabolic", "digestive_gut", "bone_muscle"],
+    "vitamin_d_repletion": ["bone_muscle", "immune_inflammation"],
+    "hormone_axis": ["endocrine_metabolic", "reproductive_breast"],
+    "female_hormone": ["reproductive_breast"],
+    "cardiovascular": ["cardiovascular"],
+    "lipid_balance": ["cardiovascular", "endocrine_metabolic"],
+    "sleep_stress": ["neuro_sleep"],
+    "neuro_cognitive": ["neuro_sleep"],
+    "energy_mitochondria": ["neuro_sleep", "bone_muscle"],
+    "bone_metabolism": ["bone_muscle"],
+    "iron_repletion": ["endocrine_metabolic"],
+    "foundational": ["endocrine_metabolic"],
+    "anti_aging": ["immune_inflammation"]
+  },
   "products": [
     {
       "sku_id": "sku_super_anti_inflammatory",
@@ -50,7 +78,7 @@
       "precision_level": "adjunct",
       "primary_axes": ["weight_metabolism"],
       "secondary_axes": ["glycemic_balance", "energy_mitochondria"],
-      "marker_tags": ["bmi:high", "waist:high", "fasting_glucose:high"],
+      "marker_tags": ["bmi:high", "waist_circumference:high"],
       "symptom_tags": ["体重", "肥胖", "脂肪代谢", "活动力下降"],
       "condition_tags": [],
       "goal_tags": ["体重管理", "代谢支持"],
@@ -60,30 +88,16 @@
     {
       "sku_id": "sku_liposomal_vitamin_c_500",
       "sequence": "5",
-      "product_name": "脂质体维生素C500",
-      "precision_level": "general_support",
-      "primary_axes": ["immune"],
-      "secondary_axes": ["inflammation", "antioxidant"],
-      "marker_tags": ["hs_crp:high"],
-      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "炎症"],
-      "condition_tags": [],
-      "goal_tags": ["免疫支持", "抗氧化", "恢复支持"],
-      "lifestyle_tags": [],
-      "mechanism_tags": ["维生素C", "抗氧化", "胶原", "免疫"]
-    },
-    {
-      "sku_id": "sku_liposomal_vitamin_c_300",
-      "sequence": "5",
       "product_name": "脂质体维生素C",
       "precision_level": "general_support",
       "primary_axes": ["immune"],
       "secondary_axes": ["inflammation", "antioxidant", "iron_repletion"],
       "marker_tags": ["hs_crp:high", "ferritin:low", "serum_iron:low"],
-      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "缺铁"],
+      "symptom_tags": ["免疫", "反复感冒", "恢复慢", "炎症", "缺铁"],
       "condition_tags": [],
-      "goal_tags": ["基础抗氧化", "恢复支持", "免疫支持"],
+      "goal_tags": ["免疫支持", "抗氧化", "基础抗氧化", "恢复支持"],
       "lifestyle_tags": [],
-      "mechanism_tags": ["维生素C", "抗氧化", "铁吸收"]
+      "mechanism_tags": ["维生素C", "抗氧化", "胶原", "免疫", "铁吸收"]
     },
     {
       "sku_id": "sku_mitochondrial_support",
@@ -230,7 +244,7 @@
       "sequence": "16",
       "product_name": "植物抗氧化-不含铁",
       "precision_level": "general_support",
-      "primary_axes": ["foundational"],
+      "primary_axes": ["nutrition_repletion", "foundational"],
       "secondary_axes": ["antioxidant", "energy_mitochondria", "immune"],
       "marker_tags": ["ferritin:low", "serum_iron:low"],
       "symptom_tags": ["基础营养", "疲劳", "营养缺口", "恢复慢"],
@@ -244,12 +258,12 @@
       "sequence": "17",
       "product_name": "胃酸替代物",
       "precision_level": "precise",
-      "primary_axes": ["digestive_enzyme"],
-      "secondary_axes": ["gut_bile"],
+      "primary_axes": ["gastric_acid"],
+      "secondary_axes": [],
       "marker_tags": [],
       "symptom_tags": ["消化不良", "腹胀", "餐后胀满", "蛋白质消化", "胃酸"],
       "condition_tags": [],
-      "goal_tags": ["消化支持"],
+      "goal_tags": ["胃酸分泌支持", "低胃酸恢复"],
       "lifestyle_tags": ["gut_support"],
       "mechanism_tags": ["胃酸", "蛋白酶", "蛋白质消化"]
     },
@@ -345,11 +359,39 @@
       "primary_axes": ["gut_microbiome"],
       "secondary_axes": ["immune", "gut_bile"],
       "marker_tags": [],
-      "symptom_tags": ["腹胀", "便秘", "腹泻", "菌群", "肠道", "消化"],
+      "symptom_tags": ["致病菌增多", "有害菌增多", "细菌过度生长", "真菌过度生长", "病原体负荷"],
       "condition_tags": [],
-      "goal_tags": ["肠道支持"],
+      "goal_tags": ["抑制有害菌", "减少致病菌", "降低病原体负荷"],
       "lifestyle_tags": ["gut_support"],
-      "mechanism_tags": ["牛至油", "茶树油", "大蒜", "菌群平衡"]
+      "mechanism_tags": ["牛至油", "茶树油", "大蒜", "抑制有害菌"]
+    },
+    {
+      "sku_id": "sku_digestive_enzymes",
+      "sequence": "25",
+      "product_name": "综合消化酶",
+      "precision_level": "precise",
+      "primary_axes": ["digestive_enzyme"],
+      "secondary_axes": [],
+      "marker_tags": [],
+      "symptom_tags": ["消化不良", "餐后腹胀", "积食", "乳糖不耐受", "油腻不耐受", "高蛋白消化负担", "高纤维消化负担"],
+      "condition_tags": [],
+      "goal_tags": ["消化酶支持", "全食物分解", "营养吸收支持"],
+      "lifestyle_tags": ["gut_support"],
+      "mechanism_tags": ["淀粉酶", "蛋白酶", "脂肪酶", "乳糖酶", "纤维素酶", "蔗糖酶"]
+    },
+    {
+      "sku_id": "sku_probiotic_complex",
+      "sequence": "26",
+      "product_name": "复合益生菌",
+      "precision_level": "precise",
+      "primary_axes": ["gut_microbiome"],
+      "secondary_axes": ["gut_mucosa"],
+      "marker_tags": [],
+      "symptom_tags": ["菌群失衡", "益生菌减少", "抗生素后", "腹胀", "腹泻", "便秘", "乳糖不耐受"],
+      "condition_tags": [],
+      "goal_tags": ["菌群恢复", "菌群平衡", "肠道生态重建", "黏膜屏障恢复"],
+      "lifestyle_tags": ["gut_support"],
+      "mechanism_tags": ["布拉酵母", "乳酸杆菌", "嗜热链球菌", "短链脂肪酸", "黏膜屏障"]
     },
     {
       "sku_id": "sku_liver_detox_support",
@@ -422,16 +464,5 @@
       "mechanism_tags": ["谷胱甘肽", "半胱氨酸", "甘氨酸", "谷氨酰胺", "II期解毒", "结合解毒"]
     }
   ],
-  "disabled_products": [
-    {
-      "sequence": "25",
-      "product_name": "综合消化酶",
-      "reason": "客户产品表中存在，但当前版本暂不接入自动推荐。"
-    },
-    {
-      "sequence": "26",
-      "product_name": "复合益生菌",
-      "reason": "客户产品表中存在，但当前版本暂不接入自动推荐。"
-    }
-  ]
+  "disabled_products": []
 }

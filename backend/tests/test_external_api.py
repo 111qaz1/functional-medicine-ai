@@ -167,6 +167,62 @@ class ExternalApiTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 403, denied.text)
 
+    def test_external_attachment_accepts_long_unicode_filename(self) -> None:
+        token = self._external_token(self.client, "doctor-long-name", "外部医生")
+        created = self.client.post(
+            "/api/v1/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_name": "外部长文件名病例"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case_id"]
+        original_name = f"{'病例总结' * 80}.txt"
+
+        uploaded = self.client.post(
+            f"/api/v1/cases/{case_id}/attachments",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"files": (original_name, "合成临床总结", "text/plain")},
+            data={"attachment_type": "case"},
+        )
+
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        self.assertEqual(uploaded.json()["results"][0]["filename"], original_name)
+        stored_file = self.container.case_service.get_case(case_id).files[0]
+        self.assertEqual(stored_file.filename, original_name)
+        stored_path = Path(stored_file.storage_uri)
+        self.assertTrue(stored_path.exists())
+        self.assertRegex(stored_path.name, r"^[0-9a-f]{32}\.txt$")
+        self.assertNotIn("病例总结", stored_path.name)
+
+    def test_external_attachment_storage_failure_returns_safe_json(self) -> None:
+        token = self._external_token(self.client, "doctor-storage-failure", "外部医生")
+        created = self.client.post(
+            "/api/v1/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_name": "外部存储失败病例"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case_id"]
+
+        with patch.object(
+            self.container.recommendation_service.object_store,
+            "save",
+            side_effect=OSError("sensitive server path"),
+        ):
+            uploaded = self.client.post(
+                f"/api/v1/cases/{case_id}/attachments",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"files": ("summary.txt", "合成临床总结", "text/plain")},
+                data={"attachment_type": "case"},
+            )
+
+        self.assertEqual(uploaded.status_code, 500, uploaded.text)
+        self.assertEqual(
+            uploaded.json(),
+            {"detail": "文件保存失败，请检查服务器存储空间或目录权限。"},
+        )
+        self.assertEqual(self.container.case_service.get_case(case_id).files, [])
+
     def test_external_token_rejects_invalid_signature(self) -> None:
         payload = self._signed_trust_payload("doctor-bad", "伪造医生")
         payload["signature"] = "0" * 64

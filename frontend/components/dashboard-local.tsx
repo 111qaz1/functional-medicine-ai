@@ -4,18 +4,9 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
 import { createCase, deleteCase, fetchCases } from "../lib/api";
-import { AnalysisMode, CaseSummary, DoctorAccount, WorkspaceScope } from "../lib/types";
+import { CaseSummary, DoctorAccount, WorkspaceScope } from "../lib/types";
 import { SectionCard } from "./section-card";
 import { StatusPillLocal } from "./status-pill-local";
-
-const ANALYSIS_MODE_STORAGE_KEY = "fm_last_analysis_mode";
-const ANALYSIS_MODE_STORAGE_VERSION_KEY = "fm_analysis_mode_default_version";
-const ANALYSIS_MODE_DEFAULT_VERSION = "llm-primary-default-v1";
-const DEFAULT_ANALYSIS_MODE: AnalysisMode = "llm_primary";
-
-function isAnalysisMode(value: string | null): value is AnalysisMode {
-  return value === "local_grounded" || value === "llm_primary";
-}
 
 type DashboardLocalProps = {
   workspaceScope?: WorkspaceScope;
@@ -26,7 +17,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [consultantId, setConsultantId] = useState("nutrition-team");
-  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>(DEFAULT_ANALYSIS_MODE);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [deletingCaseId, setDeletingCaseId] = useState<string | null>(null);
@@ -58,31 +48,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
     }
   }, [currentDoctor, workspaceScope]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const savedVersion = window.localStorage.getItem(ANALYSIS_MODE_STORAGE_VERSION_KEY);
-    const savedMode = window.localStorage.getItem(ANALYSIS_MODE_STORAGE_KEY);
-    if (savedVersion === ANALYSIS_MODE_DEFAULT_VERSION && isAnalysisMode(savedMode)) {
-      setAnalysisMode(savedMode);
-      return;
-    }
-
-    setAnalysisMode(DEFAULT_ANALYSIS_MODE);
-    window.localStorage.setItem(ANALYSIS_MODE_STORAGE_VERSION_KEY, ANALYSIS_MODE_DEFAULT_VERSION);
-    window.localStorage.setItem(ANALYSIS_MODE_STORAGE_KEY, DEFAULT_ANALYSIS_MODE);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(ANALYSIS_MODE_STORAGE_KEY, analysisMode);
-  }, [analysisMode]);
-
   async function handleCreateCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!customerName.trim()) {
@@ -94,7 +59,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
       const response = await createCase(
         customerName.trim(),
         consultantId.trim() || undefined,
-        analysisMode,
         workspaceScope
       );
       setCustomerName("");
@@ -102,7 +66,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
         {
           id: response.case.id,
           customer_name: response.case.customer_name,
-          analysis_mode: response.case.analysis_mode,
           status: response.case.status,
           consultant_id: response.case.consultant_id,
           workspace_scope: response.case.workspace_scope,
@@ -201,16 +164,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
                 placeholder={workspaceScope === "doctor" ? "医生姓名" : "public-workbench"}
               />
             </label>
-            <label className="field">
-              <span>分析模式</span>
-              <select
-                value={analysisMode}
-                onChange={(event) => setAnalysisMode(event.target.value as AnalysisMode)}
-              >
-                <option value="local_grounded">本地知识优先</option>
-                <option value="llm_primary">大模型优先，本地知识辅助</option>
-              </select>
-            </label>
             <button className="primary-button" disabled={submitting || (workspaceScope === "doctor" && !currentDoctor)}>
               {submitting ? "正在创建..." : "创建病例"}
             </button>
@@ -219,9 +172,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
           <div className="info-note">
             <strong>推荐流程</strong>
             <p>上传报告后先做人工校对，再生成草案、审核发布和导出 PDF，避免在未确认数据上直接给出结论。</p>
-            <p>如果选择“大模型优先”，系统会保留当前报告结构，但改为由大模型主导分析，本地知识和产品目录作为辅助约束。</p>
-            <p>使用“大模型优先”前，请先在“模型 API 配置”页完成可用模型设置；若未配置成功，系统会自动回退到本地知识优先流程。</p>
-            <p>系统会记住你上一次选择的分析模式，下一次创建病例时默认沿用，不会自动切回本地知识优先。</p>
             <p>
               {workspaceScope === "doctor"
                 ? "医生工作台里的病例只对当前登录医生可见。"
@@ -245,9 +195,6 @@ export function DashboardLocal({ workspaceScope = "public", currentDoctor = null
                     </div>
                     <p className="muted">
                       文件 {item.file_count} 份 · 指标 {item.lab_item_count} 项 · 顾问 {item.consultant_id ?? "未分配"}
-                    </p>
-                    <p className="muted">
-                      模式：{item.analysis_mode === "llm_primary" ? "大模型优先" : "本地知识优先"}
                     </p>
                   </div>
                   <span className="case-row__arrow">继续处理</span>

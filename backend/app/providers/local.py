@@ -13,6 +13,7 @@ from xml.etree import ElementTree as ET
 import httpx
 from pypdf import PdfReader
 
+from app.core.llm_compat import chat_generation_options
 from app.core.settings import LLMConfig, llm_config_validation_error
 from app.domain.models import KnowledgeStatement, SourceSpan
 from app.providers.base import DraftCompositionInput, DraftCompositionResult, KnowledgeHit, OCRExtraction
@@ -417,7 +418,11 @@ class DocumentOCRProvider:
     def _build_chat_payload(self, data_uri: str) -> dict[str, object]:
         return {
             "model": self.model,
-            "temperature": 0,
+            **chat_generation_options(
+                model=self.model,
+                temperature=0,
+                thinking_type="disabled",
+            ),
             "messages": [
                 {
                     "role": "user",
@@ -671,12 +676,17 @@ class DocumentOCRProvider:
 
 
 class LocalObjectStore:
+    _SAFE_SUFFIX_PATTERN = re.compile(r"^\.[a-z0-9]{1,10}$")
+
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save(self, filename: str, content: bytes) -> str:
-        target = self.root / f"{uuid.uuid4().hex}-{Path(filename).name}"
+        suffix = Path(filename or "").suffix.lower()
+        if not self._SAFE_SUFFIX_PATTERN.fullmatch(suffix):
+            suffix = ".bin"
+        target = self.root / f"{uuid.uuid4().hex}{suffix}"
         target.write_bytes(content)
         return str(target)
 
@@ -722,16 +732,6 @@ class GroundedDraftComposer:
     """Local deterministic composer used when no external LLM is configured."""
 
     def compose(self, draft_input: DraftCompositionInput) -> DraftCompositionResult:
-        if draft_input.red_flags:
-            return DraftCompositionResult(
-                rationale=[f"案例触发人工升级规则: {flag}" for flag in draft_input.red_flags],
-                lifestyle_actions=[
-                    "在人工审核完成前，先暂停自动给出补充剂结论，优先确认高风险指标与既往病史。",
-                ],
-                confidence=0.12,
-                abstain_reason="触发红旗风险，系统已切换为严格拒答并等待人工审核。",
-            )
-
         if not draft_input.candidate_products:
             return DraftCompositionResult(
                 rationale=["本地知识和产品规则未形成足够证据，暂不输出营养素推荐。"],

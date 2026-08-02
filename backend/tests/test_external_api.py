@@ -9,11 +9,13 @@ import tempfile
 import time
 import unittest
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -21,6 +23,15 @@ from app.api.external_routes import router as external_router
 from app.api.routes import router
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
+
+
+def _pdf_with_pages(page_count: int) -> bytes:
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=612, height=792)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
 
 
 class ExternalApiTests(unittest.TestCase):
@@ -193,6 +204,65 @@ class ExternalApiTests(unittest.TestCase):
         self.assertTrue(stored_path.exists())
         self.assertRegex(stored_path.name, r"^[0-9a-f]{32}\.txt$")
         self.assertNotIn("病例总结", stored_path.name)
+
+    def test_external_batch_rejects_overlong_pdf_before_any_write(self) -> None:
+        token = self._external_token(self.client, "doctor-pdf-limit", "外部医生")
+        created = self.client.post(
+            "/api/v1/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_name": "外部PDF页数限制"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case_id"]
+
+        uploaded = self.client.post(
+            f"/api/v1/cases/{case_id}/attachments",
+            headers={"Authorization": f"Bearer {token}"},
+            files=[
+                ("files", ("valid.txt", "合成临床总结", "text/plain")),
+                ("files", ("too-long.pdf", _pdf_with_pages(51), "application/pdf")),
+            ],
+            data={"attachment_type": "case"},
+        )
+
+        self.assertEqual(uploaded.status_code, 422, uploaded.text)
+        self.assertEqual(
+            uploaded.json()["detail"],
+            "PDF 共 51 页，超过单个 PDF 最多 50 页的限制，请拆分为每份不超过 50 页后重新上传。",
+        )
+        self.assertEqual(self.container.case_service.get_case(case_id).files, [])
+
+    def test_external_questionnaire_rejects_overlong_pdf_before_import(self) -> None:
+        token = self._external_token(self.client, "doctor-msq-pdf-limit", "外部医生")
+        created = self.client.post(
+            "/api/v1/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"customer_name": "外部MSQ页数限制"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        case_id = created.json()["case_id"]
+
+        uploaded = self.client.post(
+            f"/api/v1/cases/{case_id}/attachments",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "files": (
+                    "too-long-msq.pdf",
+                    _pdf_with_pages(51),
+                    "application/pdf",
+                )
+            },
+            data={"attachment_type": "questionnaire"},
+        )
+
+        self.assertEqual(uploaded.status_code, 422, uploaded.text)
+        self.assertEqual(
+            uploaded.json()["detail"],
+            "PDF 共 51 页，超过单个 PDF 最多 50 页的限制，请拆分为每份不超过 50 页后重新上传。",
+        )
+        case = self.container.case_service.get_case(case_id)
+        self.assertEqual(case.files, [])
+        self.assertIsNone(case.questionnaire)
 
     def test_external_attachment_storage_failure_returns_safe_json(self) -> None:
         token = self._external_token(self.client, "doctor-storage-failure", "外部医生")

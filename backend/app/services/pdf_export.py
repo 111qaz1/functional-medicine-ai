@@ -35,7 +35,7 @@ class PdfReportExporter:
         self.text_muted = colors.HexColor("#647067")
         app_root = Path(__file__).resolve().parents[1]
         self.product_report_catalog = self._load_product_report_catalog(app_root / "data" / "product_report_catalog.json")
-        self.logo_path = app_root / "assets" / "brand-logo.png"
+        self.logo_path = app_root / "assets" / "balasaier.jpg"
         self.nutrition_sections = {"营养素推荐", "个性化营养素方案", "首月营养素干预方案"}
 
         try:

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.settings import AppSettings, load_settings
+from app.core.llm_rate_limiter import LLMRateLimiter
+from app.core.llm_request_control import LLMRequestController
 from app.domain.models import KnowledgeStatement, ProductRule
 from app.providers.local import (
     DocumentOCRProvider,
@@ -117,7 +119,10 @@ def load_knowledge(settings: AppSettings) -> list[KnowledgeStatement]:
     return list(statements.values())
 
 
-def build_llm_provider(settings: AppSettings):
+def build_llm_provider(
+    settings: AppSettings,
+    request_controller: LLMRequestController | None = None,
+):
     local_fallback = GroundedDraftComposer()
     if not settings.llm_draft_composer_enabled:
         return local_fallback, "local-structured-v1", "local-report-v1"
@@ -132,11 +137,15 @@ def build_llm_provider(settings: AppSettings):
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
         fallback=local_fallback,
+        request_controller=request_controller,
     )
     return remote_provider, f"remote:{settings.llm_model}", "grounded-remote-report-v1"
 
 
-def build_rag_fusion_provider(settings: AppSettings):
+def build_rag_fusion_provider(
+    settings: AppSettings,
+    request_controller: LLMRequestController | None = None,
+):
     if not settings.rag_llm_fusion_enabled:
         return None
     if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
@@ -148,6 +157,7 @@ def build_rag_fusion_provider(settings: AppSettings):
         api_style=settings.llm_api_style,
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=min(settings.llm_temperature, 0.2),
+        request_controller=request_controller,
     )
 
 
@@ -180,6 +190,8 @@ class ApplicationContainer:
     auth_service: AuthService
     assistant_rule_service: ClinicianRuleService
     assistant_chat_service: CaseAssistantService
+    llm_rate_limiter: LLMRateLimiter
+    llm_request_controller: LLMRequestController
 
 
 def build_container(settings: AppSettings | None = None) -> ApplicationContainer:
@@ -193,10 +205,32 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
     repository.seed(knowledge=knowledge, products=products, manifest_entries=manifest_entries)
     apply_product_catalog_migrations(repository, products)
 
+    llm_rate_limiter = LLMRateLimiter(
+        max_concurrency=settings.llm_max_concurrency,
+        requests_per_minute=settings.llm_rpm_soft_limit,
+        tokens_per_minute=settings.llm_tpm_soft_limit,
+        window_seconds=settings.llm_rate_limit_window_seconds,
+        default_completion_reservation=(
+            settings.llm_default_completion_reservation
+        ),
+        history=repository.list_llm_request_usage(limit=1000),
+    )
+    llm_request_controller = LLMRequestController(
+        model=settings.llm_model or "unconfigured",
+        rate_limiter=llm_rate_limiter,
+        usage_recorder=repository.save_llm_request_usage,
+    )
+
     vector_store = InMemoryVectorStore()
     vector_store.index([item for item in knowledge if item.review_status.value == "reviewed"])
-    llm_provider, model_version, prompt_version = build_llm_provider(settings)
-    rag_fusion_provider = build_rag_fusion_provider(settings)
+    llm_provider, model_version, prompt_version = build_llm_provider(
+        settings,
+        llm_request_controller,
+    )
+    rag_fusion_provider = build_rag_fusion_provider(
+        settings,
+        llm_request_controller,
+    )
     rag_retriever = build_rag_retriever(settings)
 
     auth_service = AuthService(repository)
@@ -217,6 +251,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             model=settings.llm_model,
             api_style=settings.llm_api_style,
             timeout_seconds=max(settings.llm_timeout_seconds, 90.0),
+            request_controller=llm_request_controller,
         ),
         normalization_service=LabNormalizationService(_data_path(settings, "marker_dictionary.json")),
     )
@@ -256,6 +291,8 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
             retry_attempts=settings.llm_retry_attempts,
             retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
             retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
+            usage_recorder=repository.save_llm_request_usage,
+            rate_limiter=llm_rate_limiter,
         )
     case_analysis_service = CaseAnalysisService(
         repository=repository,
@@ -276,7 +313,10 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service,
         PdfReportExporter(settings.report_export_dir),
         rag_fusion_provider=rag_fusion_provider,
-        prescription_advice_service=PrescriptionAdviceService(settings),
+        prescription_advice_service=PrescriptionAdviceService(
+            settings,
+            request_controller=llm_request_controller,
+        ),
     )
     assistant_rule_service = ClinicianRuleService(
         repository=repository,
@@ -289,6 +329,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         case_service=case_service,
         indicator_service=indicator_service,
         assistant_rule_service=assistant_rule_service,
+        request_controller=llm_request_controller,
     )
 
     return ApplicationContainer(
@@ -306,4 +347,6 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         auth_service=auth_service,
         assistant_rule_service=assistant_rule_service,
         assistant_chat_service=assistant_chat_service,
+        llm_rate_limiter=llm_rate_limiter,
+        llm_request_controller=llm_request_controller,
     )

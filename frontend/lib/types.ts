@@ -378,6 +378,10 @@ export interface RecommendationDraft {
   red_flags: string[];
   structured_system_findings?: StructuredSystemFinding[];
   uncovered_system_ids?: string[];
+  uncovered_system_reasons?: Record<
+    string,
+    "no_approved_mapping" | "evidence_not_eligible" | "safety_excluded"
+  >;
   report_sections: Record<string, string[] | string>;
   internal_audit?: Record<string, unknown>;
   model_version: string;

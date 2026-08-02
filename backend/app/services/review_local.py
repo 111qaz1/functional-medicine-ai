@@ -6,14 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.models import AuditLog, DraftStatus, ReviewDecision
+from app.core.llm_request_control import llm_request_context
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_to_system_ids
 from app.services.indicator_extraction import CaseIndicatorService
+from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.pdf_export import PdfReportExporter
 from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
-from app.services.report_content import build_plan_summary
+from app.services.report_content import (
+    build_core_health_portrait,
+    build_plan_summary,
+    normalize_plan_summary_items,
+)
 
 
 _CHAPTER_DIGITS = "零一二三四五六七八九"
@@ -83,7 +89,9 @@ class ReviewService:
                 and not effective_draft.source_analysis_id
             ),
         )
+        report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._ensure_plan_summary_section(report, effective_draft, case)
+        report = self._remove_lifestyle_confirmation_clauses(report)
         report = self._normalize_customer_visible_report_text(report)
         report = self._number_customer_sections(report)
         pdf_path = self.pdf_exporter.export(
@@ -139,7 +147,9 @@ class ReviewService:
         report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
         report = self._ensure_prescription_advice_section(report, effective_draft)
+        report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._ensure_plan_summary_section(report, effective_draft, case)
+        report = self._remove_lifestyle_confirmation_clauses(report)
         report = self._normalize_customer_visible_report_text(report)
         report = self._number_customer_sections(report)
         review.publishable_report = report
@@ -426,6 +436,7 @@ class ReviewService:
             summary_items = self._as_list(
                 (getattr(draft, "report_sections", {}) or {}).get("方案总结")
             )
+        summary_items = normalize_plan_summary_items(summary_items)
         if not summary_items:
             return report_text
 
@@ -438,6 +449,59 @@ class ReviewService:
             lines.pop()
         lines.extend(["", "## 方案总结", *summary_items])
         return "\n".join(lines).strip()
+
+    def _ensure_core_health_portrait_section(self, report_text: str, draft, case) -> str:
+        portrait_items = build_core_health_portrait(
+            getattr(draft, "structured_system_findings", []) or [],
+            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
+            objective_evidence_items=getattr(draft, "key_lab_highlights", []) or [],
+            risk_notices=getattr(draft, "red_flags", []) or [],
+        )
+        if not portrait_items:
+            return report_text
+
+        lines = str(report_text or "").strip().splitlines()
+        while True:
+            existing_start = self._heading_start_index(
+                lines,
+                "核心结论与健康画像",
+                levels=(2, 3),
+            )
+            if existing_start is None:
+                break
+            existing_end = self._heading_block_end_index(lines, existing_start)
+            lines = lines[:existing_start] + lines[existing_end:]
+
+        insert_at = next(
+            (index for index, line in enumerate(lines) if line.strip().startswith("## ")),
+            len(lines),
+        )
+        block = ["## 核心结论与健康画像", *portrait_items, ""]
+        lines[insert_at:insert_at] = block
+        return "\n".join(lines).strip()
+
+    def _remove_lifestyle_confirmation_clauses(self, report_text: str) -> str:
+        cleaned_lines: list[str] = []
+        in_lifestyle_section = False
+        for raw_line in str(report_text or "").splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("## "):
+                title = self._canonical_section_title(stripped[3:])
+                in_lifestyle_section = title in {
+                    "生活方式干预",
+                    "生活方式干预处方",
+                    "生活方式干预重点",
+                }
+                cleaned_lines.append(raw_line)
+                continue
+            if in_lifestyle_section and not stripped.startswith("### "):
+                cleaned = remove_generic_lifestyle_confirmation(raw_line)
+                if raw_line.strip() and not cleaned:
+                    continue
+                cleaned_lines.append(cleaned)
+                continue
+            cleaned_lines.append(raw_line)
+        return "\n".join(cleaned_lines).strip()
 
     def _number_customer_sections(self, report_text: str) -> str:
         lines: list[str] = []
@@ -817,12 +881,17 @@ class ReviewService:
         }
 
         try:
-            fusion = self.rag_fusion_provider.fuse_report_sections(
-                report_text=report_text,
-                target_sections=target_sections,
-                rag_context=rag_context,
-                case_context=self._llm_fusion_case_context(case, draft),
-            )
+            with llm_request_context(
+                case_id=case.id,
+                analysis_id=getattr(draft, "source_analysis_id", None),
+                draft_id=draft.id,
+            ):
+                fusion = self.rag_fusion_provider.fuse_report_sections(
+                    report_text=report_text,
+                    target_sections=target_sections,
+                    rag_context=rag_context,
+                    case_context=self._llm_fusion_case_context(case, draft),
+                )
             patch_payload = getattr(fusion, "section_patches", {}) or {}
             valid_sections = self._validate_llm_fused_section_patches(patch_payload, target_sections, draft)
             if not valid_sections:
@@ -1355,6 +1424,8 @@ class ReviewService:
             self._append_customer_report_sections(lines, ordered_sections)
             report = "\n".join(lines).strip()
             report = self._ensure_report_rag_enhancement(report, draft, case)
+            report = self._ensure_core_health_portrait_section(report, draft, case)
+            report = self._remove_lifestyle_confirmation_clauses(report)
             return self._number_customer_sections(report)
 
         abnormal_indicators = self._abnormal_indicators(case)
@@ -1401,6 +1472,8 @@ class ReviewService:
         self._append_customer_report_sections(lines, ordered_sections)
         report = "\n".join(lines)
         report = self._ensure_report_rag_enhancement(report, draft, case)
+        report = self._ensure_core_health_portrait_section(report, draft, case)
+        report = self._remove_lifestyle_confirmation_clauses(report)
         return self._number_customer_sections(report)
 
     def _append_customer_report_sections(

@@ -486,9 +486,11 @@ textarea {
 }
 
 .operation-progress--success .operation-progress__track > span { background: #2c9c78; }
+.operation-progress--partial .operation-progress__track > span { background: #c98916; }
 .operation-progress--error .operation-progress__track > span { background: #c35345; }
 
 .operation-progress--success .operation-progress__spinner,
+.operation-progress--partial .operation-progress__spinner,
 .operation-progress--error .operation-progress__spinner { display: none; }
 
 @keyframes operation-spin { to { transform: rotate(360deg); } }
@@ -500,6 +502,8 @@ textarea {
 }
 
 .operation-progress--success { border-color: #9dd8c9; background: #f2fbf7; }
+.operation-progress--partial { border-color: #e8c781; background: #fffaf0; }
+.operation-progress--partial .operation-progress__head span { color: #95620b; }
 .operation-progress--error { border-color: #efb4b4; background: #fff7f7; }
 .operation-progress--error .operation-progress__head span { color: #b33535; }
 
@@ -1375,6 +1379,11 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.62);
+}
+
+.file-row--error {
+  border-color: rgba(195, 83, 69, 0.32);
+  background: rgba(255, 247, 247, 0.9);
 }
 
 .case-row {

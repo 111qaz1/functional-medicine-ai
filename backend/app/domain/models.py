@@ -630,6 +630,10 @@ class RecommendationDraft(StrictModel):
     red_flags: list[str] = Field(default_factory=list)
     structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     uncovered_system_ids: list[str] = Field(default_factory=list)
+    uncovered_system_reasons: dict[
+        str,
+        Literal["no_approved_mapping", "evidence_not_eligible", "safety_excluded"],
+    ] = Field(default_factory=dict)
     report_sections: dict[str, Any] = Field(default_factory=dict)
     internal_audit: dict[str, Any] = Field(default_factory=dict)
     model_version: str
@@ -666,6 +670,35 @@ class AuditLog(StrictModel):
     action: str
     actor_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class LLMRequestUsage(StrictModel):
+    """Privacy-safe accounting data for one provider HTTP attempt."""
+
+    id: str
+    request_group_id: str
+    attempt: int = Field(default=1, ge=1)
+    case_id: str | None = None
+    analysis_id: str | None = None
+    file_id: str | None = None
+    draft_id: str | None = None
+    operation: str
+    schema_name: str
+    model: str
+    api_style: str
+    status: str
+    http_status: int | None = None
+    error_code: str | None = None
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    cached_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    reserved_tokens: int = Field(default=0, ge=0)
+    queue_duration_ms: int = Field(default=0, ge=0)
+    request_duration_ms: int = Field(default=0, ge=0)
+    started_at: datetime
+    completed_at: datetime
     created_at: datetime = Field(default_factory=utc_now)
 
 

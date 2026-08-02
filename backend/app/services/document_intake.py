@@ -110,9 +110,15 @@ class DocumentIntakeService:
 
     def _pdf_result(self, digest: str, content: bytes) -> DocumentIntakeResult:
         reader = PdfReader(BytesIO(content))
-        if len(reader.pages) > self.max_pdf_pages:
-            return self._invalid(digest, "PDF 页数超过允许的上限。")
-        layout_pages = self._pdf_layout_pages(content, len(reader.pages))
+        page_count = len(reader.pages)
+        if page_count > self.max_pdf_pages:
+            return self._invalid(
+                digest,
+                f"PDF 共 {page_count} 页，超过单个 PDF 最多 {self.max_pdf_pages} 页的限制，"
+                f"请拆分为每份不超过 {self.max_pdf_pages} 页后重新上传。",
+                page_count=page_count,
+            )
+        layout_pages = self._pdf_layout_pages(content, page_count)
         pages: list[PageText] = []
         readable_pages = 0
         for page_number, page in enumerate(reader.pages, start=1):
@@ -129,7 +135,7 @@ class DocumentIntakeService:
         return DocumentIntakeResult(
             content_sha256=digest,
             intake_status=FileIntakeStatus.uploaded,
-            page_count=len(reader.pages),
+            page_count=page_count,
             page_texts=pages,
             is_scanned=bool(reader.pages) and readable_pages == 0,
         )
@@ -232,9 +238,16 @@ class DocumentIntakeService:
             result.intake_status = FileIntakeStatus.suspected_irrelevant
             result.precheck_warning = "疑似与病例分析无关，请确认是否误传。"
 
-    def _invalid(self, digest: str, message: str) -> DocumentIntakeResult:
+    def _invalid(
+        self,
+        digest: str,
+        message: str,
+        *,
+        page_count: int = 0,
+    ) -> DocumentIntakeResult:
         return DocumentIntakeResult(
             content_sha256=digest,
             intake_status=FileIntakeStatus.invalid,
+            page_count=page_count,
             validation_error=message,
         )

@@ -630,6 +630,10 @@ class RecommendationDraft(StrictModel):
     red_flags: list[str] = Field(default_factory=list)
     structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     uncovered_system_ids: list[str] = Field(default_factory=list)
+    uncovered_system_reasons: dict[
+        str,
+        Literal["no_approved_mapping", "evidence_not_eligible", "safety_excluded"],
+    ] = Field(default_factory=dict)
     report_sections: dict[str, Any] = Field(default_factory=dict)
     internal_audit: dict[str, Any] = Field(default_factory=dict)
     model_version: str

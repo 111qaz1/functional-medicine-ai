@@ -64,6 +64,12 @@ const BODY_SYSTEM_LABELS: Record<string, string> = {
   skin_mucosa: "皮肤/黏膜系统"
 };
 
+const UNCOVERED_SYSTEM_REASON_LABELS: Record<string, string> = {
+  no_approved_mapping: "暂无批准的产品映射",
+  evidence_not_eligible: "当前证据未达到推荐条件",
+  safety_excluded: "候选产品未通过安全校验"
+};
+
 const ANALYSIS_LABELS: Record<string, string> = {
   queued: "排队中",
   preparing: "准备资料",
@@ -790,7 +796,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       systemId: finding.system_id,
       systemName: BODY_SYSTEM_LABELS[finding.system_id] ?? finding.system_name,
       includedNames: includedItems.map((item) => item.display_name),
-      excludedNames: coveringItems.map((item) => item.display_name)
+      excludedNames: coveringItems.map((item) => item.display_name),
+      uncoveredReason: latestDraft?.uncovered_system_reasons?.[finding.system_id]
     };
   });
   const workflowStep = payload.review_decision ? 5 : latestDraft ? 4 : analysis && ["ready_for_review", "reviewed"].includes(analysis.status) ? 3 : analysis ? 2 : caseRecord.files.length ? 1 : 0;
@@ -1042,7 +1049,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                         ? `已覆盖（${row.includedNames.join("、")}）`
                         : row.excludedNames.length
                           ? `对应产品当前未纳入（${row.excludedNames.join("、")}）`
-                          : "暂无安全候选（无批准映射或未通过安全校验）"}
+                          : UNCOVERED_SYSTEM_REASON_LABELS[row.uncoveredReason ?? ""]
+                            ?? "当前证据未达到推荐条件"}
                     </li>
                   ))}
                 </ul>

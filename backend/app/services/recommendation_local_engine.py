@@ -663,6 +663,92 @@ class RecommendationService:
             default=999,
         )
 
+    def classify_uncovered_system_reasons(
+        self,
+        uncovered_system_ids: list[str],
+        *,
+        support_needs: list[object] | None = None,
+        safety_decisions: list[SafetyDecision] | None = None,
+    ) -> dict[str, str]:
+        """Explain why a locally validated system has no selected product."""
+
+        eligible_by_system: dict[str, list[object]] = {}
+        for need in support_needs or []:
+            status = getattr(
+                getattr(need, "eligibility_status", None),
+                "value",
+                getattr(need, "eligibility_status", None),
+            )
+            system_id = str(getattr(need, "system_id", "") or "")
+            goal_code = str(getattr(need, "support_goal_code", "") or "")
+            if status == "eligible" and system_id and goal_code:
+                eligible_by_system.setdefault(system_id, []).append(need)
+
+        excluded_skus = {
+            str(decision.sku_id)
+            for decision in (safety_decisions or [])
+            if decision.sku_id
+            and decision.action == SafetyRuleAction.exclude
+        }
+
+        def mapped_primary_skus(goal_code: str, direction: str | None = None) -> set[str]:
+            mapped: set[str] = set()
+            for sku_id, capability in self.product_capabilities.items():
+                if not capability.get("enabled", True) or goal_code not in set(
+                    capability.get("primary_goal_codes") or []
+                ):
+                    continue
+                requirements = capability.get("goal_direction_requirements") or {}
+                allowed = {
+                    str(value)
+                    for value in requirements.get(goal_code, [])
+                    if str(value)
+                }
+                if allowed and direction and direction not in allowed:
+                    continue
+                mapped.add(str(sku_id))
+            return mapped
+
+        reasons: dict[str, str] = {}
+        for system_id in uncovered_system_ids:
+            needs = eligible_by_system.get(system_id, [])
+            mapped_for_evidence: set[str] = set()
+            for need in needs:
+                direction = getattr(
+                    getattr(need, "support_direction", None),
+                    "value",
+                    getattr(need, "support_direction", None),
+                )
+                mapped_for_evidence.update(
+                    mapped_primary_skus(
+                        str(getattr(need, "support_goal_code", "") or ""),
+                        str(direction) if direction else None,
+                    )
+                )
+            if mapped_for_evidence:
+                reasons[system_id] = (
+                    "safety_excluded"
+                    if mapped_for_evidence.issubset(excluded_skus)
+                    else "evidence_not_eligible"
+                )
+                continue
+
+            catalog_goals = {
+                goal_code
+                for goal_code, goal in self.support_goals.items()
+                if str(goal.get("system_id") or "") == system_id
+            }
+            has_approved_mapping = any(
+                mapped_primary_skus(goal_code)
+                for goal_code in catalog_goals
+            )
+            reasons[system_id] = (
+                "evidence_not_eligible"
+                if has_approved_mapping
+                else "no_approved_mapping"
+            )
+        return reasons
+
     @staticmethod
     def _matched_finding_signals(evidence_ids: list[str]) -> list[str]:
         return [
@@ -947,6 +1033,16 @@ class RecommendationService:
             for finding in priority_findings
             if finding.system_id not in covered_system_ids
         ]
+        all_safety_decisions = [
+            decision
+            for sku_id in sorted(safety_decisions_by_sku)
+            for decision in safety_decisions_by_sku[sku_id]
+        ]
+        uncovered_system_reasons = self.classify_uncovered_system_reasons(
+            uncovered_system_ids,
+            support_needs=list(latest_analysis.support_needs) if latest_analysis else [],
+            safety_decisions=all_safety_decisions,
+        )
 
         selected_evidence = [
             evidence_id
@@ -1063,11 +1159,7 @@ class RecommendationService:
             evidence_ids=evidence_ids,
             evidence_details=evidence_details,
             contraindications=list(dict.fromkeys(contraindications)),
-            safety_decisions=[
-                decision
-                for sku_id in sorted(safety_decisions_by_sku)
-                for decision in safety_decisions_by_sku[sku_id]
-            ],
+            safety_decisions=all_safety_decisions,
             missing_info=missing_info,
             confidence=composition.confidence,
             abstain_reason=effective_abstain_reason,
@@ -1075,6 +1167,7 @@ class RecommendationService:
             red_flags=risk_notices,
             structured_system_findings=structured_system_findings,
             uncovered_system_ids=uncovered_system_ids,
+            uncovered_system_reasons=uncovered_system_reasons,
             report_sections=report_sections,
             internal_audit={
                 "rag": list(rag_audit_items) if isinstance(rag_audit_items, list) else [],
@@ -1091,6 +1184,7 @@ class RecommendationService:
                         for item in recommended_items
                     },
                     "uncovered_system_ids": list(uncovered_system_ids),
+                    "uncovered_system_reasons": dict(uncovered_system_reasons),
                 },
                 "lifestyle": {
                     "rule_version": lifestyle_plan.rule_version,

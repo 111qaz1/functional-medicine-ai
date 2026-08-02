@@ -5113,6 +5113,22 @@ class CaseAnalysisService:
             for finding in structured_findings
             if finding.system_id not in covered_systems
         ]
+        if hasattr(self.recommendation_service, "classify_uncovered_system_reasons"):
+            draft.uncovered_system_reasons = (
+                self.recommendation_service.classify_uncovered_system_reasons(
+                    draft.uncovered_system_ids,
+                    support_needs=list(analysis.support_needs),
+                    safety_decisions=list(draft.safety_decisions),
+                )
+            )
+        else:
+            draft.uncovered_system_reasons = {
+                system_id: draft.uncovered_system_reasons.get(
+                    system_id,
+                    "evidence_not_eligible",
+                )
+                for system_id in draft.uncovered_system_ids
+            }
         if hasattr(self.recommendation_service, "build_total_advice_items"):
             total_advice = self.recommendation_service.build_total_advice_items(
                 draft.recommended_skus,
@@ -5124,8 +5140,14 @@ class CaseAnalysisService:
                 f"{item.display_name}：针对医生确认的异常问题，本阶段用于支持相关身体系统功能与整体恢复，首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
                 for item in draft.recommended_skus
             ]
+        uncovered_advice = {
+            "no_approved_mapping": "当前产品目录暂无批准的营养支持映射",
+            "evidence_not_eligible": "当前证据尚未达到配置的营养支持条件",
+            "safety_excluded": "相关候选未通过本病例的安全校验",
+        }
         total_advice.extend(
-            f"{SYSTEM_NAMES.get(system_id, '相关身体系统')}：当前未找到同时满足批准映射和安全校验的营养素候选，"
+            f"{SYSTEM_NAMES.get(system_id, '相关身体系统')}："
+            f"{uncovered_advice.get(draft.uncovered_system_reasons.get(system_id), uncovered_advice['evidence_not_eligible'])}，"
             "本阶段以生活方式调整、必要复查和医生评估为主。"
             for system_id in draft.uncovered_system_ids
         )

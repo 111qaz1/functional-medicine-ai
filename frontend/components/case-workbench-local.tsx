@@ -208,6 +208,7 @@ function abnormalFlagLabel(flag: string) {
   if (flag === "high") return "偏高";
   if (flag === "low") return "偏低";
   if (flag === "positive") return "阳性/存在";
+  if (flag === "genetic_risk") return "遗传风险";
   if (flag === "patient_reported") return "患者自述";
   return "异常";
 }
@@ -304,7 +305,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
       const matchesFilter = findingFilter === "all"
-        || (findingFilter === "attention" && ["high", "low", "positive"].includes(finding.abnormal_flag))
+        || (findingFilter === "attention" && ["high", "low", "positive", "genetic_risk"].includes(finding.abnormal_flag))
         || (findingFilter === "needs_review" && findingNeedsEvidenceReview(finding))
         || (findingFilter === "verified" && findingHasVerifiedEvidence(finding));
       return matchesSearch && matchesFilter;
@@ -942,7 +943,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                 <div className="finding-filter" role="group" aria-label="异常指标筛选">
                   {([
                     ["all", `全部 ${findings.length}`],
-                    ["attention", `异常 ${findings.filter((item) => ["high", "low", "positive"].includes(item.abnormal_flag)).length}`],
+                    ["attention", `异常 ${findings.filter((item) => ["high", "low", "positive", "genetic_risk"].includes(item.abnormal_flag)).length}`],
                     ["needs_review", `待确认 ${findings.filter(findingNeedsEvidenceReview).length}`],
                     ["verified", `已核对 ${findings.filter(findingHasVerifiedEvidence).length}`]
                   ] as const).map(([value, label]) => (
@@ -973,7 +974,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                           <label className="field"><span>数值</span><input value={finding.raw_value ?? ""} onChange={(event) => updateFinding(index, { raw_value: event.target.value || null })} /></label>
                           <label className="field"><span>单位</span><input value={finding.unit ?? ""} onChange={(event) => updateFinding(index, { unit: event.target.value || null })} /></label>
                           <label className="field"><span>参考范围</span><input value={finding.reference_range ?? ""} onChange={(event) => updateFinding(index, { reference_range: event.target.value || null })} /></label>
-                          <label className="field"><span>异常方向</span><select value={finding.abnormal_flag} onChange={(event) => updateFinding(index, { abnormal_flag: event.target.value })}><option value="high">偏高</option><option value="low">偏低</option><option value="positive">阳性/存在</option><option value="patient_reported">患者自述</option><option value="unknown">未指定</option></select></label>
+                          <label className="field"><span>异常方向</span><select value={finding.abnormal_flag} onChange={(event) => updateFinding(index, { abnormal_flag: event.target.value })}><option value="high">偏高</option><option value="low">偏低</option><option value="positive">阳性/存在</option><option value="genetic_risk">遗传风险</option><option value="patient_reported">患者自述</option><option value="unknown">未指定</option></select></label>
                         </div>
                         <details className="abnormal-finding-card__evidence">
                           <summary>查看来源证据</summary>

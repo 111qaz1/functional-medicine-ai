@@ -50,6 +50,8 @@ def _normalized(*values: str | None) -> str:
 
 
 def is_genetic_risk_finding(finding: AbnormalFinding) -> bool:
+    if str(finding.abnormal_flag or "").strip().lower() == "genetic_risk":
+        return True
     filename = _normalized(finding.source_file_name)
     content = _normalized(
         finding.name,

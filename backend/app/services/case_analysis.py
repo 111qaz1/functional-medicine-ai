@@ -96,6 +96,39 @@ _EXPLICIT_RESULT_NUMBER_PATTERN = (
 _HIGH_DIRECTION_TERMS = ("↑", "偏高", "升高", "增高", "高于参考范围", "超标")
 _LOW_DIRECTION_TERMS = ("↓", "偏低", "降低", "低于参考范围")
 
+_GUT_REPORT_TERMS = (
+    "肠道菌群",
+    "肠道微生物组",
+    "肠道微生态",
+    "gut microbiome",
+    "gut microbiota",
+    "microbiome profile",
+    "16s rrna",
+)
+_GENETIC_REPORT_TERMS = (
+    "免疫基因分析",
+    "免疫基因",
+    "遗传风险",
+    "基因风险",
+    "immunogenics profile",
+    "genetic risk",
+)
+_FOOD_REPORT_TITLE_TERMS = (
+    "慢性食物敏感分析",
+    "慢性食物敏感报告",
+    "慢性食物过敏",
+    "食物不耐受",
+    "chronic food allergy profile",
+    "food sensitivity profile",
+    "food allergy profile",
+)
+_PATIENT_FOOD_SUMMARY_PATTERN = re.compile(
+    r"(?im)^\s*(?:[1-3]\s*级\s*)?"
+    r"(?P<degree>轻度|中度|重度)"
+    r"(?:\s*\(\s*(?:mild|moderate|high)\s*\))?"
+    r"(?:慢性)?(?:食物)?(?:过敏|敏感)?\s*[：:]\s*(?P<foods>[^\n]+?)\s*$"
+)
+
 
 def _normalized_evidence_text(value: str | None) -> str:
     return re.sub(
@@ -147,6 +180,96 @@ def is_chronic_food_sensitivity_filename(filename: str) -> bool:
     )
 
 
+def _document_identity_text(
+    filename: str,
+    page_texts: list[Any] | None,
+    *,
+    page_limit: int | None = None,
+) -> str:
+    selected_pages = list(page_texts or [])
+    if page_limit is not None:
+        selected_pages = selected_pages[:page_limit]
+    return unicodedata.normalize(
+        "NFKC",
+        "\n".join(
+            [
+                filename or "",
+                *(str(getattr(page, "text", "") or "") for page in selected_pages),
+            ]
+        ),
+    ).lower()
+
+
+def is_gut_microbiome_report(
+    *,
+    filename: str = "",
+    page_texts: list[Any] | None = None,
+) -> bool:
+    normalized_filename = unicodedata.normalize("NFKC", filename or "").lower()
+    if any(term in normalized_filename for term in _GUT_REPORT_TERMS):
+        return True
+    first_page = list(page_texts or [])[:1]
+    title_lines = "\n".join(
+        "\n".join(str(getattr(page, "text", "") or "").splitlines()[:20])
+        for page in first_page
+    )
+    normalized_title = unicodedata.normalize("NFKC", title_lines).lower()
+    return any(term in normalized_title for term in _GUT_REPORT_TERMS)
+
+
+def is_genetic_risk_report(
+    *,
+    filename: str = "",
+    page_texts: list[Any] | None = None,
+) -> bool:
+    normalized_filename = unicodedata.normalize("NFKC", filename or "").lower()
+    if any(term in normalized_filename for term in _GENETIC_REPORT_TERMS):
+        return True
+    first_page = list(page_texts or [])[:1]
+    title_lines = "\n".join(
+        "\n".join(str(getattr(page, "text", "") or "").splitlines()[:20])
+        for page in first_page
+    )
+    normalized_title = unicodedata.normalize("NFKC", title_lines).lower()
+    return any(term in normalized_title for term in _GENETIC_REPORT_TERMS)
+
+
+def _has_patient_food_sensitivity_summary(page_texts: list[Any] | None) -> bool:
+    return any(
+        _is_patient_food_sensitivity_summary_page(
+            str(getattr(page, "text", "") or "")
+        )
+        for page in page_texts or []
+    )
+
+
+def _is_patient_food_sensitivity_summary_page(text: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", text or "")
+    matches = list(_PATIENT_FOOD_SUMMARY_PATTERN.finditer(normalized))
+    if not matches:
+        return False
+    compact = re.sub(r"\s+", "", normalized).lower()
+    has_result_heading = any(
+        marker in compact
+        for marker in (
+            "检测结果汇总",
+            "结果汇总",
+            "患者结果",
+            "检测结果",
+            "resultsummary",
+            "testresult",
+        )
+    )
+    # A complete Mild/Moderate/High block is itself a patient-result summary,
+    # while a single example embedded in educational text is not sufficient.
+    distinct_levels = {
+        match.group("degree")
+        for match in matches
+        if match.group("foods").strip()
+    }
+    return has_result_heading or len(distinct_levels) >= 2
+
+
 def is_chronic_food_sensitivity_result(result: Any) -> bool:
     return is_chronic_food_sensitivity_report(
         filename=str(getattr(result, "file_name", "") or ""),
@@ -170,25 +293,27 @@ def is_chronic_food_sensitivity_report(
     report_type: str = "",
     page_texts: list[Any] | None = None,
 ) -> bool:
+    if is_gut_microbiome_report(filename=filename, page_texts=page_texts):
+        return False
+    if is_genetic_risk_report(filename=filename, page_texts=page_texts):
+        return False
     if is_chronic_food_sensitivity_filename(filename):
+        return True
+    if _has_patient_food_sensitivity_summary(page_texts):
         return True
     normalized_type = re.sub(
         r"[\s\-]+",
         "_",
         unicodedata.normalize("NFKC", report_type or "").strip().lower(),
     )
-    if normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES:
-        return True
     if not page_texts:
-        return False
-    text = unicodedata.normalize(
-        "NFKC",
-        "\n".join(str(getattr(page, "text", "") or "") for page in page_texts),
-    ).lower()
-    compact = re.sub(r"\s+", "", text)
-    return (
-        ("慢性食物敏感" in compact or "慢性食物过敏" in compact)
-        and "igg" in compact
+        return normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
+    identity = _document_identity_text(filename, page_texts, page_limit=1)
+    has_report_title = any(term in identity for term in _FOOD_REPORT_TITLE_TERMS)
+    return has_report_title and (
+        normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
+        or "igg" in identity
+        or "食物" in identity
     )
 
 
@@ -284,6 +409,8 @@ class _SupportNeedPayload(_StrictPayload):
 
 
 class OpenAICompatibleCaseAnalysisProvider:
+    _MEDICAL_REPORT_RETRY_MARKER = "__DOCUMENT_TYPE_RETRY__:medical_report"
+
     """Strict-JSON document extraction and text-only case synthesis."""
 
     def __init__(
@@ -346,7 +473,21 @@ class OpenAICompatibleCaseAnalysisProvider:
         result = self._analyze_document_once(
             uploaded_file,
             questionnaire_content_retry=False,
+            medical_report_retry=False,
         )
+        needs_medical_report_retry = (
+            self._MEDICAL_REPORT_RETRY_MARKER in result.warnings
+        )
+        result = self._without_internal_document_warnings(result)
+        if needs_medical_report_retry:
+            if result.abnormal_findings:
+                return result
+            retry_result = self._analyze_document_once(
+                uploaded_file,
+                questionnaire_content_retry=False,
+                medical_report_retry=True,
+            )
+            return self._without_internal_document_warnings(retry_result)
         if not self._is_empty_medical_questionnaire_result(
             uploaded_file,
             result,
@@ -360,6 +501,7 @@ class OpenAICompatibleCaseAnalysisProvider:
         retry_result = self._analyze_document_once(
             uploaded_file,
             questionnaire_content_retry=True,
+            medical_report_retry=False,
         )
         if not self._is_empty_medical_questionnaire_result(
             uploaded_file,
@@ -376,11 +518,27 @@ class OpenAICompatibleCaseAnalysisProvider:
             }
         )
 
+    @classmethod
+    def _without_internal_document_warnings(
+        cls,
+        result: DocumentAnalysisResult,
+    ) -> DocumentAnalysisResult:
+        return result.model_copy(
+            update={
+                "warnings": [
+                    warning
+                    for warning in result.warnings
+                    if warning != cls._MEDICAL_REPORT_RETRY_MARKER
+                ]
+            }
+        )
+
     def _analyze_document_once(
         self,
         uploaded_file,
         *,
         questionnaire_content_retry: bool,
+        medical_report_retry: bool,
     ) -> DocumentAnalysisResult:
         batches = self._document_batches(uploaded_file)
         if not batches:
@@ -414,6 +572,10 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "不得把报告中的癌症风险、宣传性或绝对化描述改写为确定诊断。"
                 "support_need_text 只描述医学支持需求，不得出现产品、SKU、剂量或疗程。"
                 "所有摘要、解释、系统分析和警告必须使用简体中文；医学缩写和指标英文名可以保留。"
+                "report_type必须描述整份文件的主要报告主题，而不是其中某一科普章节。"
+                "肠道菌群、微生物组或16S报告必须返回gut_microbiome，即使其中讨论食物敏感或IgG也不得返回food_sensitivity。"
+                "免疫基因或遗传风险报告必须返回genetic_risk，不得返回medical_questionnaire；患者结果表中的基因位点和基因型"
+                "可作为genetic_risk异常返回，但必须说明这不代表当前患病。"
                 "如为普通医疗登记表、病史表或医疗调查问卷，report_type 必须为 medical_questionnaire；"
                 "只要存在患者已填写内容，questionnaire 就不得为 null。"
                 "必须将明确填写的主诉、症状、已知疾病、家族史、当前药物、过敏、妊娠、饮食、睡眠、"
@@ -446,6 +608,12 @@ class OpenAICompatibleCaseAnalysisProvider:
                     "不得把有填写内容的问卷描述为空白。只补充有原文依据的 questionnaire 和 summary，"
                     "不得猜测、不得生成检验异常、诊断或治疗建议。"
                 )
+            elif medical_report_retry:
+                prompt += (
+                    "本地核对确认该文件不是医疗问卷。请按普通医疗报告重新提取患者本人的检验、检查、"
+                    "影像或明确临床异常，report_type不得返回medical_questionnaire，questionnaire必须为null。"
+                    "不得把科普、风险介绍或建议文字当作患者异常。"
+                )
             raw = self._call_json(
                 instructions=self._document_instructions(),
                 content=[{"type": "input_text", "text": prompt}, *content],
@@ -453,7 +621,11 @@ class OpenAICompatibleCaseAnalysisProvider:
                 schema_name=(
                     "document_analysis_questionnaire_retry"
                     if questionnaire_content_retry
-                    else "document_analysis"
+                    else (
+                        "document_analysis_medical_report_retry"
+                        if medical_report_retry
+                        else "document_analysis"
+                    )
                 ),
                 thinking_type="disabled",
             )
@@ -517,6 +689,41 @@ class OpenAICompatibleCaseAnalysisProvider:
         )
 
     @staticmethod
+    def _questionnaire_has_source_supported_substantive_content(
+        uploaded_file,
+        questionnaire_payload: dict[str, Any] | None,
+    ) -> bool:
+        if not questionnaire_payload:
+            return False
+        try:
+            questionnaire = Questionnaire.model_validate(questionnaire_payload)
+        except ValidationError:
+            return False
+        source = _normalized_evidence_text(
+            "\n".join(page.text or "" for page in uploaded_file.page_texts)
+        )
+        values = questionnaire.model_dump(
+            exclude={
+                "age",
+                "sex",
+                "completed_at",
+                "form_version",
+                "msq_system_scores",
+            },
+        )
+        candidates: list[str] = []
+        for value in values.values():
+            if isinstance(value, list):
+                candidates.extend(str(item) for item in value if str(item).strip())
+            elif value not in (None, "", {}, "unknown"):
+                candidates.append(str(value))
+        return any(
+            len(normalized) >= 2 and normalized in source
+            for candidate in candidates
+            if (normalized := _normalized_evidence_text(candidate))
+        )
+
+    @staticmethod
     def _is_medical_questionnaire_type(report_type: str) -> bool:
         normalized = re.sub(r"[\s-]+", "_", (report_type or "").strip().lower())
         return normalized in {
@@ -529,19 +736,36 @@ class OpenAICompatibleCaseAnalysisProvider:
 
     @staticmethod
     def _looks_like_medical_questionnaire(uploaded_file) -> bool:
+        filename = unicodedata.normalize(
+            "NFKC",
+            str(getattr(uploaded_file, "filename", "") or ""),
+        ).lower()
         text = "\n".join(
             page.text or ""
             for page in uploaded_file.page_texts
         )
         compact = re.sub(r"\s+", "", text).lower()
-        return any(
+        filename_match = any(
+            marker in filename
+            for marker in (
+                "问卷",
+                "登记表",
+                "病史表",
+                "questionnaire",
+                "intake form",
+            )
+        )
+        text_match = any(
             marker in compact
             for marker in (
                 "medicalquestionnaire",
                 "医疗调查问卷",
+                "医疗登记表",
+                "患者病史表",
                 "patientquestionnaire",
             )
         )
+        return filename_match or text_match
 
     def synthesize_case(
         self,
@@ -2472,19 +2696,83 @@ class OpenAICompatibleCaseAnalysisProvider:
             if questionnaires
             else None
         )
-        if (
-            self._looks_like_medical_questionnaire(uploaded_file)
-            and "msq" not in (report_type or "").lower()
+        model_claimed_questionnaire = self._is_medical_questionnaire_type(
+            report_type
+        )
+        has_meaningful_questionnaire = self._questionnaire_has_meaningful_content(
+            merged_questionnaire
+        )
+        has_supported_questionnaire_content = (
+            self._questionnaire_has_source_supported_substantive_content(
+                uploaded_file,
+                merged_questionnaire,
+            )
+        )
+        locally_identified_questionnaire = self._looks_like_medical_questionnaire(
+            uploaded_file
+        )
+        confirmed_questionnaire = (
+            locally_identified_questionnaire
+            or (
+                has_meaningful_questionnaire
+                and has_supported_questionnaire_content
+                and not findings
+                and not system_findings
+            )
+        )
+        if is_chronic_food_sensitivity_report(
+            filename=uploaded_file.filename,
+            report_type=report_type,
+            page_texts=uploaded_file.page_texts,
         ):
+            report_type = "food_sensitivity"
+            medical_content = True
+            merged_questionnaire = None
+        elif is_gut_microbiome_report(
+            filename=uploaded_file.filename,
+            page_texts=uploaded_file.page_texts,
+        ):
+            report_type = "gut_microbiome"
+            medical_content = True
+            merged_questionnaire = None
+        elif is_genetic_risk_report(
+            filename=uploaded_file.filename,
+            page_texts=uploaded_file.page_texts,
+        ):
+            report_type = "genetic_risk"
+            medical_content = True
+            merged_questionnaire = None
+        elif confirmed_questionnaire and "msq" not in (report_type or "").lower():
             report_type = "medical_questionnaire"
-        if self._is_medical_questionnaire_type(report_type):
+        elif model_claimed_questionnaire:
+            report_type = "medical_report"
+            merged_questionnaire = None
+
+        if (
+            model_claimed_questionnaire
+            and not self._is_medical_questionnaire_type(report_type)
+        ):
+            merged_questionnaire = None
+            warnings = [
+                warning
+                for warning in warnings
+                if not (
+                    "问卷" in warning
+                    and any(
+                        term in warning
+                        for term in ("提取失败", "请重试", "人工补录")
+                    )
+                )
+            ]
+            if not findings and report_type != "food_sensitivity":
+                warnings.append(self._MEDICAL_REPORT_RETRY_MARKER)
+
+        if confirmed_questionnaire and self._is_medical_questionnaire_type(report_type):
             # Generic intake forms contain patient-reported history, not
             # independently verified test abnormalities or diagnoses.
             findings = []
             system_findings = []
-            if self._questionnaire_has_meaningful_content(
-                merged_questionnaire
-            ):
+            if has_meaningful_questionnaire and merged_questionnaire is not None:
                 merged_questionnaire["form_version"] = (
                     "medical_questionnaire_v1"
                 )
@@ -2539,6 +2827,10 @@ class OpenAICompatibleCaseAnalysisProvider:
             "每条异常必须区分报告原文解释 report_explanation 与模型中性解释 neutral_interpretation。"
             "报告风险、宣传性或绝对化表述只能原样保留为报告解释，不得升级为诊断。"
             "所有摘要、解释、系统分析和警告必须使用简体中文，医学缩写和指标英文名可保留。"
+            "report_type必须描述整份文件的主要报告主题，不得用科普或建议章节覆盖报告主题。"
+            "肠道菌群、微生物组或16S报告统一使用gut_microbiome，即使报告讨论慢性食物敏感或IgG也不是food_sensitivity。"
+            "免疫基因或遗传风险报告统一使用genetic_risk，不是medical_questionnaire；患者结果表中的基因位点和基因型"
+            "使用abnormal_flag=genetic_risk，并明确其不表示当前患病。"
             "普通医疗登记表、病史表或医疗调查问卷统一使用 report_type=medical_questionnaire；"
             "存在明确填写内容时必须返回 questionnaire。普通问卷允许 msq_system_scores 为空，"
             "患者自述只进入 questionnaire，不得伪装成检验异常或医生诊断。"
@@ -3202,7 +3494,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     DOCUMENT_ANALYSIS_CACHE_VERSION = (
-        "document-analysis-v8-explicit-finding-values"
+        "document-analysis-v9-deterministic-document-family"
     )
     FOOD_SENSITIVITY_EXTRACTION_FAILURE = (
         "慢性食物敏感结果提取失败，请重新分析或人工补录。"
@@ -3219,6 +3511,13 @@ class CaseAnalysisService:
         r"[“\"]?(?P<grade>[1-3])\s*级\s*[”\"]?\s*"
         r"(?P<degree>(?:轻度|中度|重度)(?:慢性)?(?:食物)?过敏)\s*"
         r"(?P<foods>[^\n]+?)\s*$"
+    )
+    _FOOD_LABELED_SUMMARY_PATTERN = _PATIENT_FOOD_SUMMARY_PATTERN
+    _GENETIC_RESULT_ROW_PATTERN = re.compile(
+        r"^\s*(?P<gene>[A-Za-z][A-Za-z0-9βΒ\-]{1,20})\s*\|\s*"
+        r"(?P<position>[^|\n]{1,40})\s*\|\s*"
+        r"(?P<focus>[^|\n]{1,100})\s*\|\s*"
+        r"(?P<genotype>[ACGTIDacgtid/\-]{1,12})(?:\s*\|.*)?$"
     )
     MSQ_FIELD_LABELS = {
         "age": "患者年龄",
@@ -3601,7 +3900,6 @@ class CaseAnalysisService:
                 raise ValueError("异常发现引用了分析快照以外的文件。")
             if (
                 source_file.id in food_sensitivity_file_ids
-                or is_chronic_food_sensitivity_filename(source_file.filename)
             ):
                 continue
             finding = finding.model_copy(
@@ -4076,6 +4374,9 @@ class CaseAnalysisService:
         for page in uploaded_file.page_texts:
             page_number = logical_source_page(uploaded_file, page.page)
             text = unicodedata.normalize("NFKC", page.text or "")
+            is_labeled_summary_page = _is_patient_food_sensitivity_summary_page(
+                text
+            )
             for raw_line in text.splitlines():
                 line = re.sub(r"\s+", " ", raw_line).strip()
                 if not line:
@@ -4098,24 +4399,41 @@ class CaseAnalysisService:
                     continue
 
                 summary_match = cls._FOOD_SUMMARY_ROW_PATTERN.search(line)
-                if not summary_match:
-                    continue
-                grade = summary_match.group("grade")
-                degree = summary_match.group("degree")
-                grade_level = cls._FOOD_LEVEL_BY_GRADE.get(grade)
-                degree_level = cls._food_degree_level(degree)
-                if grade_level != degree_level:
-                    warnings.append(
-                        "慢性食物敏感汇总行的等级与程度不一致，已留待确认。"
+                if summary_match:
+                    grade = summary_match.group("grade")
+                    degree = summary_match.group("degree")
+                    grade_level = cls._FOOD_LEVEL_BY_GRADE.get(grade)
+                    degree_level = cls._food_degree_level(degree)
+                    if grade_level != degree_level:
+                        warnings.append(
+                            "慢性食物敏感汇总行的等级与程度不一致，已留待确认。"
+                        )
+                        continue
+                    foods_text = summary_match.group("foods")
+                else:
+                    labeled_match = cls._FOOD_LABELED_SUMMARY_PATTERN.search(line)
+                    if not labeled_match or not is_labeled_summary_page:
+                        continue
+                    degree_level = cls._food_degree_level(
+                        labeled_match.group("degree")
                     )
+                    foods_text = labeled_match.group("foods")
+                if degree_level is None:
                     continue
                 foods = [
                     item.strip(" ：:，,；;、。")
-                    for item in re.split(r"[、,，;；]", summary_match.group("foods"))
+                    for item in re.split(r"[、,，;；]", foods_text)
                 ]
                 for name in foods:
                     if (
                         not name
+                        or name.strip().lower() in {
+                            "无",
+                            "阴性",
+                            "未检出",
+                            "none",
+                            "no reaction",
+                        }
                         or len(name) > 40
                         or any(token in name for token in ("项目名称", "检测结果", "过敏等级"))
                     ):
@@ -4124,32 +4442,167 @@ class CaseAnalysisService:
         return entries, list(dict.fromkeys(warnings))
 
     @classmethod
+    def _source_genetic_risk_findings(
+        cls,
+        uploaded_file,
+    ) -> list[AbnormalFinding]:
+        findings: list[AbnormalFinding] = []
+        seen_genes: set[str] = set()
+        for page in uploaded_file.page_texts:
+            page_number = logical_source_page(uploaded_file, page.page)
+            for raw_line in unicodedata.normalize("NFKC", page.text or "").splitlines():
+                line = re.sub(r"\s+", " ", raw_line).strip()
+                match = cls._GENETIC_RESULT_ROW_PATTERN.match(line)
+                if not match:
+                    continue
+                gene = match.group("gene").strip()
+                genotype = match.group("genotype").strip().upper()
+                focus = match.group("focus").strip()
+                gene_key = gene.casefold()
+                if gene_key in seen_genes:
+                    continue
+                seen_genes.add(gene_key)
+                findings.append(
+                    AbnormalFinding(
+                        id=(
+                            "finding_gene_"
+                            + hashlib.sha256(
+                                f"{uploaded_file.id}|{gene_key}|{genotype}".encode("utf-8")
+                            ).hexdigest()[:12]
+                        ),
+                        name=gene,
+                        result_text=genotype,
+                        abnormal_flag="genetic_risk",
+                        report_explanation=(
+                            f"报告关注方向：{focus}" if focus else "遗传风险检测结果"
+                        ),
+                        neutral_interpretation=(
+                            "该结果为遗传风险信息，不表示当前患病或实验室指标异常。"
+                        ),
+                        source_file_id=uploaded_file.id,
+                        source_file_name=uploaded_file.filename,
+                        source_page=page_number,
+                        source_text=line,
+                        confidence=1.0,
+                        system_id_candidates=classify_text_to_system_ids(focus),
+                        mapping_confidence=0.7 if focus else 0.0,
+                    )
+                )
+        return findings
+
+    @classmethod
+    def _normalize_genetic_risk_result(
+        cls,
+        uploaded_file,
+        result: DocumentAnalysisResult,
+    ) -> DocumentAnalysisResult:
+        if not is_genetic_risk_report(
+            filename=uploaded_file.filename,
+            page_texts=uploaded_file.page_texts,
+        ):
+            return result
+        source_findings = cls._source_genetic_risk_findings(uploaded_file)
+        findings = source_findings or [
+            finding.model_copy(
+                update={
+                    "abnormal_flag": "genetic_risk",
+                    "neutral_interpretation": (
+                        finding.neutral_interpretation
+                        or "该结果为遗传风险信息，不表示当前患病或实验室指标异常。"
+                    ),
+                }
+            )
+            for finding in result.abnormal_findings
+            if cls._GENETIC_RESULT_ROW_PATTERN.match(finding.source_text.strip())
+            or (
+                re.fullmatch(r"[A-Za-z][A-Za-z0-9βΒ\-]{1,20}", finding.name.strip())
+                and re.fullmatch(
+                    r"[ACGTIDacgtid/\-]{1,12}",
+                    str(finding.result_text or "").strip(),
+                )
+            )
+        ]
+        return result.model_copy(
+            update={
+                "report_type": "genetic_risk",
+                "medical_content": True,
+                "questionnaire": None,
+                "food_sensitivity": None,
+                "abnormal_findings": findings,
+                "warnings": [
+                    warning
+                    for warning in result.warnings
+                    if "医疗问卷内容提取失败" not in warning
+                ],
+            }
+        )
+
+    @classmethod
     def _normalize_food_sensitivity_result(
         cls,
         uploaded_file,
         result: DocumentAnalysisResult,
     ) -> DocumentAnalysisResult:
+        if is_gut_microbiome_report(
+            filename=uploaded_file.filename,
+            page_texts=uploaded_file.page_texts,
+        ):
+            return result.model_copy(
+                update={
+                    "report_type": "gut_microbiome",
+                    "medical_content": True,
+                    "food_sensitivity": None,
+                }
+            )
+        if is_genetic_risk_report(
+            filename=uploaded_file.filename,
+            page_texts=uploaded_file.page_texts,
+        ):
+            return result.model_copy(
+                update={
+                    "report_type": "genetic_risk",
+                    "medical_content": True,
+                    "food_sensitivity": None,
+                }
+            )
         if not is_chronic_food_sensitivity_report(
             filename=result.file_name,
             report_type=result.report_type,
             page_texts=uploaded_file.page_texts,
         ):
-            return result
+            normalized_type = re.sub(
+                r"[\s\-]+",
+                "_",
+                str(result.report_type or "").strip().lower(),
+            )
+            return result.model_copy(
+                update={
+                    "report_type": (
+                        "medical_report"
+                        if normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
+                        else result.report_type
+                    ),
+                    "food_sensitivity": None,
+                }
+            )
 
         food = result.food_sensitivity or ChronicFoodSensitivityResult(
             source_file_id=uploaded_file.id,
             source_file_name=uploaded_file.filename,
         )
-        entries: list[tuple[str, str, int]] = []
-        entries.extend((name, "mild", food.source_page) for name in food.mild_foods)
-        entries.extend(
-            (name, "moderate", food.source_page) for name in food.moderate_foods
-        )
-        entries.extend((name, "high", food.source_page) for name in food.high_foods)
         source_entries, source_warnings = cls._source_food_sensitivity_entries(
             uploaded_file
         )
-        entries.extend(source_entries)
+        if source_entries:
+            # Deterministic patient-result rows take precedence over model lists,
+            # which may accidentally copy foods from educational or avoidance text.
+            entries = source_entries
+        else:
+            entries = [
+                *((name, "mild", food.source_page) for name in food.mild_foods),
+                *((name, "moderate", food.source_page) for name in food.moderate_foods),
+                *((name, "high", food.source_page) for name in food.high_foods),
+            ]
 
         foods_by_key: dict[str, tuple[str, str, int]] = {}
         conflicting_keys: set[str] = set()
@@ -4162,6 +4615,14 @@ class CaseAnalysisService:
         warnings.extend(source_warnings)
         for name, level, page_number in entries:
             clean_name = re.sub(r"\s+", " ", name).strip()
+            if clean_name.lower() in {
+                "无",
+                "阴性",
+                "未检出",
+                "none",
+                "no reaction",
+            }:
+                continue
             key = re.sub(r"[\s_\-（）()\[\]【】]+", "", clean_name).lower()
             if not key or key in conflicting_keys:
                 continue
@@ -4203,6 +4664,7 @@ class CaseAnalysisService:
         return result.model_copy(
             update={
                 "report_type": "food_sensitivity",
+                "medical_content": True,
                 "food_sensitivity": normalized_food,
             }
         )
@@ -4241,6 +4703,7 @@ class CaseAnalysisService:
                 uploaded_file,
                 DocumentAnalysisResult.model_validate(cached),
             )
+            result = self._normalize_genetic_risk_result(uploaded_file, result)
             if not self._is_uncacheable_document_result(
                 uploaded_file,
                 result,
@@ -4289,6 +4752,7 @@ class CaseAnalysisService:
             ):
                 result = self.provider.analyze_document(uploaded_file)
         result = self._normalize_food_sensitivity_result(uploaded_file, result)
+        result = self._normalize_genetic_risk_result(uploaded_file, result)
         if self._is_uncacheable_document_result(
             uploaded_file,
             result,
@@ -4626,14 +5090,6 @@ class CaseAnalysisService:
                                 )
                             )
                         findings.append(validated_projected)
-            if result.food_sensitivity:
-                food_result = result.food_sensitivity
-                if has_chronic_food_sensitivity_content(food_result):
-                    food_results.append((result_order.get(result.file_id, 0), food_result))
-                if food_result.warning:
-                    analysis.warnings.append(food_result.warning)
-            elif "food" in result.report_type.lower() or "食物敏感" in result.report_type:
-                analysis.warnings.append(f"{result.file_name} 的慢性食物敏感结果识别失败，已跳过该章节。")
             for finding in result.abnormal_findings:
                 if any(token in finding.source_text for token in ("参考案例", "示例患者", "科普说明", "例如：")):
                     analysis.warnings.append(f"已排除疑似科普说明或参考案例中的条目：{finding.name}")
@@ -5476,6 +5932,7 @@ class CaseAnalysisService:
             "high": "偏高",
             "low": "偏低",
             "positive": "阳性",
+            "genetic_risk": "遗传风险",
             "patient_reported": "患者自述",
             "abnormal": "异常",
             "unknown": "异常",

@@ -269,6 +269,261 @@ class DocumentFindingValueRecoveryTests(unittest.TestCase):
         self.assertEqual(downgraded.abnormal_flag, "unknown")
 
 
+class DocumentTypeClassificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://example.invalid/v1",
+            api_key="synthetic",
+            model="synthetic",
+        )
+
+    @staticmethod
+    def _uploaded_file(
+        *,
+        filename: str,
+        pages: list[str],
+        file_id: str = "file-document-type",
+    ) -> UploadedFile:
+        return UploadedFile(
+            id=file_id,
+            case_id="case-document-type",
+            filename=filename,
+            content_type="application/pdf",
+            size_bytes=sum(len(page.encode("utf-8")) for page in pages),
+            content_sha256=f"digest-{file_id}",
+            intake_status=FileIntakeStatus.uploaded,
+            page_count=len(pages),
+            page_texts=[
+                PageText(page=index, text=text)
+                for index, text in enumerate(pages, start=1)
+            ],
+        )
+
+    def test_model_only_questionnaire_label_does_not_clear_medical_findings(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="病例信息提取_整合版.docx",
+            pages=["尿酸 458.3 μmol/L 208.0-428.0 ↑"],
+        )
+        payload = self.provider._validate_document_payload(
+            {
+                "report_type": "medical_questionnaire",
+                "medical_content": True,
+                "abnormal_findings": [
+                    {
+                        "name": "尿酸",
+                        "raw_value": "458.3",
+                        "unit": "μmol/L",
+                        "reference_range": "208.0-428.0",
+                        "abnormal_flag": "high",
+                        "source_page": 1,
+                        "source_text": "尿酸 458.3 μmol/L 208.0-428.0 ↑",
+                    }
+                ],
+            }
+        )
+
+        result = self.provider._merge_document_payloads(uploaded, [payload])
+
+        self.assertEqual(result.report_type, "medical_report")
+        self.assertEqual([finding.name for finding in result.abnormal_findings], ["尿酸"])
+        self.assertIsNone(result.questionnaire)
+        self.assertNotIn(self.provider._MEDICAL_REPORT_RETRY_MARKER, result.warnings)
+
+    def test_empty_model_only_questionnaire_result_requests_one_medical_report_retry(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="病例信息提取_整合版.docx",
+            pages=["超声提示脂肪肝。"],
+        )
+        payload = self.provider._validate_document_payload(
+            {
+                "report_type": "medical_questionnaire",
+                "medical_content": True,
+                "warnings": ["医疗问卷内容提取失败，请重试或人工补录。"],
+            }
+        )
+
+        result = self.provider._merge_document_payloads(uploaded, [payload])
+
+        self.assertEqual(result.report_type, "medical_report")
+        self.assertIn(self.provider._MEDICAL_REPORT_RETRY_MARKER, result.warnings)
+        self.assertFalse(any("问卷" in warning for warning in result.warnings))
+
+    def test_confirmed_questionnaire_still_clears_objective_findings(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="患者医疗问卷.docx",
+            pages=["医疗调查问卷\n目前症状：疲劳"],
+        )
+        payload = self.provider._validate_document_payload(
+            {
+                "report_type": "medical_questionnaire",
+                "medical_content": True,
+                "questionnaire": {"symptoms": ["疲劳"]},
+                "abnormal_findings": [
+                    {
+                        "name": "疲劳",
+                        "result_text": "存在",
+                        "abnormal_flag": "positive",
+                        "source_page": 1,
+                        "source_text": "目前症状：疲劳",
+                    }
+                ],
+            }
+        )
+
+        result = self.provider._merge_document_payloads(uploaded, [payload])
+
+        self.assertEqual(result.report_type, "medical_questionnaire")
+        self.assertEqual(result.abnormal_findings, [])
+        self.assertEqual(result.questionnaire["symptoms"], ["疲劳"])
+
+    def test_gut_report_keeps_findings_when_model_calls_it_food_sensitivity(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="肠道菌群.pdf",
+            pages=[
+                "肠道菌群 16S 检测报告\n双歧杆菌偏低",
+                "健康教育：慢性食物敏感可检测 IgG。",
+            ],
+        )
+        finding = AbnormalFinding(
+            id="finding-bifidobacterium",
+            name="双歧杆菌",
+            result_text="偏低",
+            abnormal_flag="low",
+            source_file_id=uploaded.id,
+            source_file_name=uploaded.filename,
+            source_page=1,
+            source_text="双歧杆菌偏低",
+        )
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="food_sensitivity",
+            abnormal_findings=[finding],
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                mild_foods=["牛奶"],
+                valid=True,
+            ),
+        )
+
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            result,
+        )
+
+        self.assertEqual(normalized.report_type, "gut_microbiome")
+        self.assertEqual([item.name for item in normalized.abnormal_findings], ["双歧杆菌"])
+        self.assertIsNone(normalized.food_sensitivity)
+
+    def test_food_summary_recovers_only_positive_patient_results(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=[
+                "慢性食物敏感分析 IgG",
+                "检测结果汇总",
+                (
+                    "轻度(Mild)：牛奶、羊奶、巧达芝士、蛋白、蛋黄\n"
+                    "中度(Moderate)：无\n"
+                    "重度(High)：阴性"
+                ),
+            ],
+            file_id="file-food-summary",
+        )
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="food_sensitivity",
+        )
+
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            result,
+        )
+
+        self.assertTrue(normalized.food_sensitivity.valid)
+        self.assertEqual(
+            normalized.food_sensitivity.mild_foods,
+            ["牛奶", "羊奶", "巧达芝士", "蛋白", "蛋黄"],
+        )
+        self.assertEqual(normalized.food_sensitivity.moderate_foods, [])
+        self.assertEqual(normalized.food_sensitivity.high_foods, [])
+        self.assertEqual(normalized.food_sensitivity.source_page, 3)
+
+    def test_food_education_does_not_reclassify_a_general_report(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="综合健康报告.pdf",
+            pages=[
+                "综合健康报告\n患者检查结论",
+                "科普：轻度(Mild)：牛奶等食物可作为慢性食物敏感示例。",
+            ],
+            file_id="file-food-education",
+        )
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="food_sensitivity",
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                mild_foods=["牛奶"],
+                valid=True,
+            ),
+        )
+
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            result,
+        )
+
+        self.assertEqual(normalized.report_type, "medical_report")
+        self.assertIsNone(normalized.food_sensitivity)
+
+    def test_genetic_report_creates_neutral_risk_cards_and_report_text(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="免疫基因分析.pdf",
+            pages=[
+                (
+                    "Immunogenics Profile\n"
+                    "ACE2 | Xp22.2 | 心脑血管免疫力 | CC\n"
+                    "MTHFR | 1p36.22 | 叶酸营养代谢 | CT"
+                )
+            ],
+            file_id="file-genetic-risk",
+        )
+        model_result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="medical_questionnaire",
+            warnings=["医疗问卷内容提取失败，请重试或人工补录。"],
+        )
+
+        normalized = CaseAnalysisService._normalize_genetic_risk_result(
+            uploaded,
+            model_result,
+        )
+
+        self.assertEqual(normalized.report_type, "genetic_risk")
+        self.assertEqual(
+            [(item.name, item.result_text) for item in normalized.abnormal_findings],
+            [("ACE2", "CC"), ("MTHFR", "CT")],
+        )
+        self.assertTrue(
+            all(item.abnormal_flag == "genetic_risk" for item in normalized.abnormal_findings)
+        )
+        self.assertTrue(
+            all("不表示当前患病" in item.neutral_interpretation for item in normalized.abnormal_findings)
+        )
+        self.assertFalse(any("问卷" in warning for warning in normalized.warnings))
+
+        grouped = CaseAnalysisService._group_abnormal_findings(
+            SimpleNamespace(confirmed_clinical_findings=[]),
+            normalized.abnormal_findings,
+            [],
+        )
+        self.assertTrue(any("MTHFR：CT（遗传风险）" in item for item in grouped))
+
+
 class CaseAnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -452,7 +707,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertEqual(self.provider.document_calls, 1)
         self.assertEqual(len(first.abnormal_findings), 2)
         self.assertTrue(all(item.evidence_status == EvidenceStatus.verified_text for item in first.abnormal_findings))
-        self.assertEqual(len(first.food_sensitivity.mild_foods), 5)
+        self.assertIsNone(first.food_sensitivity)
 
         second = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
         self.assertEqual(second.status, AnalysisStatus.ready_for_review)
@@ -655,7 +910,7 @@ class CaseAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(self.provider.document_calls, 2)
         self.assertTrue(all(item.source_file_id == "file-second" for item in second.abnormal_findings))
-        self.assertEqual(second.food_sensitivity.source_file_id, "file-second")
+        self.assertIsNone(second.food_sensitivity)
 
     def test_fixed_template_msq_uses_structured_parser_before_document_model(self) -> None:
         case = self._create_case()
@@ -882,6 +1137,13 @@ class CaseAnalysisTests(unittest.TestCase):
     def test_reviewed_findings_can_regenerate_draft_and_preserve_report_order(self) -> None:
         case = self._create_case()
         self._add_text_file(case.id)
+        self._add_text_file(
+            case.id,
+            file_id="file-food-report",
+            digest="food-report-digest",
+            filename="慢性食物敏感报告.pdf",
+            text="检测结果汇总\n轻度(Mild)：合成食物1、合成食物2、合成食物3、合成食物4、合成食物5\n中度(Moderate)：无",
+        )
         analysis = self._wait(self.service.create_analysis(case.id, third_party_processing_confirmed=True).id)
         saved, draft, error = self.service.review_and_generate(
             case_id=case.id,

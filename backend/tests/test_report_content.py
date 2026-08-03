@@ -587,14 +587,20 @@ class LifestyleReportTextTests(unittest.TestCase):
 
 
 class FoodSensitivityRoutingTests(unittest.TestCase):
-    def test_content_identified_food_sensitivity_is_routed_without_filename_dependency(self) -> None:
-        result = SimpleNamespace(
+    def test_model_food_payload_alone_cannot_reclassify_a_general_report(self) -> None:
+        unconfirmed = SimpleNamespace(
             file_name="体检附件-03.pdf",
             report_type="unknown_medical",
             food_sensitivity=SimpleNamespace(valid=True),
         )
+        confirmed = SimpleNamespace(
+            file_name="体检附件-03.pdf",
+            report_type="food_sensitivity",
+            food_sensitivity=SimpleNamespace(valid=True),
+        )
 
-        self.assertTrue(is_chronic_food_sensitivity_result(result))
+        self.assertFalse(is_chronic_food_sensitivity_result(unconfirmed))
+        self.assertTrue(is_chronic_food_sensitivity_result(confirmed))
 
 
 if __name__ == "__main__":

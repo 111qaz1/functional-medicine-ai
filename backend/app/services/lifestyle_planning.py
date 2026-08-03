@@ -252,10 +252,8 @@ class LifestylePlanningService:
                 match_count += 1
                 item = matched[0]
                 refs.append(f"marker:{marker_code}")
-                value = item.normalized_value if item.normalized_value is not None else item.value
-                value_text = f" {value:g}{item.normalized_unit or item.unit or ''}" if isinstance(value, (int, float)) else ""
                 direction = "偏高" if flag == "high" else "偏低" if flag == "low" else "异常"
-                anchor_texts.append(f"{item.marker_name}{value_text}{direction}")
+                anchor_texts.append(f"{item.marker_name}{direction}")
 
         for finding_code in trigger.get("findings", []):
             findings = evidence["finding_codes"].get(str(finding_code), [])

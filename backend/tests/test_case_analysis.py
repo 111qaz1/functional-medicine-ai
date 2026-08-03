@@ -176,6 +176,99 @@ class FakeStructuredQuestionnaireImportService:
         )
 
 
+class DocumentFindingValueRecoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.provider = OpenAICompatibleCaseAnalysisProvider(
+            base_url="https://example.invalid/v1",
+            api_key="synthetic",
+            model="synthetic",
+        )
+
+    def test_recovers_explicit_values_from_the_same_evidence(self) -> None:
+        examples = (
+            ("体重指数", "BMI 值 26.96 小结：（1）体重指数 26.96:超重", "kg/m²", "18.5-23.9", "bmi", "26.96"),
+            ("尿酸", "尿酸 458.3 μmol/L 208.0～428.0 ↑", "μmol/L", "208.0～428.0", "uric_acid", "458.3"),
+            ("甘油三脂", "甘油三脂 1.97 mmol/L 0.00～1.70 ↑", "mmol/L", "0.00～1.70", "triglycerides", "1.97"),
+            ("高密度脂蛋白胆固醇", "高密度脂蛋白胆固醇 1.16 mmol/L ＞1.16 ↓", "mmol/L", "＞1.16", "hdl_c", "1.16"),
+            ("低密度脂蛋白胆固醇", "低密度脂蛋白胆固醇 3.49 mmol/L 0.00～3.37 ↑", "mmol/L", "0.00～3.37", "ldl_c", "3.49"),
+            ("嗜酸性粒细胞比率", "嗜酸性粒细胞比率 7.3 % 0.5～5.0 ↑", "%", "0.5～5.0", "eosinophil_percentage", "7.3"),
+            ("血小板分布宽度", "血小板分布宽度 8.6 fL 9.9～17.0 ↓", "fL", "9.9～17.0", "platelet_distribution_width", "8.6"),
+        )
+        for name, source_text, unit, reference_range, marker_code, expected in examples:
+            with self.subTest(name=name):
+                payload = self.provider._validate_document_payload(
+                    {
+                        "abnormal_findings": [
+                            {
+                                "name": name,
+                                "unit": unit,
+                                "reference_range": reference_range,
+                                "abnormal_flag": "high",
+                                "source_page": 1,
+                                "source_text": source_text,
+                                "marker_code_candidate": marker_code,
+                            }
+                        ]
+                    }
+                )
+                self.assertEqual(payload.abnormal_findings[0].raw_value, expected)
+
+    def test_does_not_recover_reference_range_or_ambiguous_results(self) -> None:
+        reference_only = self.provider._validate_document_payload(
+            {
+                "abnormal_findings": [
+                    {
+                        "name": "尿酸",
+                        "unit": "μmol/L",
+                        "reference_range": "208.0～428.0",
+                        "abnormal_flag": "high",
+                        "source_page": 1,
+                        "source_text": "尿酸参考范围 208.0～428.0 μmol/L ↑",
+                    }
+                ]
+            }
+        )
+        ambiguous = self.provider._validate_document_payload(
+            {
+                "abnormal_findings": [
+                    {
+                        "name": "目标指标",
+                        "unit": "mmol/L",
+                        "reference_range": "0.0～1.0",
+                        "abnormal_flag": "high",
+                        "source_page": 1,
+                        "source_text": "目标指标 3.1 mmol/L；复测 4.2 mmol/L ↑",
+                    }
+                ]
+            }
+        )
+
+        self.assertIsNone(reference_only.abnormal_findings[0].raw_value)
+        self.assertIsNone(ambiguous.abnormal_findings[0].raw_value)
+
+    def test_missing_value_keeps_only_an_explicit_matching_direction(self) -> None:
+        explicit = AbnormalFinding(
+            id="finding-explicit-direction",
+            name="尿酸",
+            unit="μmol/L",
+            reference_range="208.0～428.0",
+            abnormal_flag="high",
+            source_file_id="file-1",
+            source_file_name="report.pdf",
+            source_page=1,
+            source_text="尿酸 ↑",
+        )
+        unsupported = explicit.model_copy(
+            update={"id": "finding-unsupported-direction", "source_text": "尿酸异常"}
+        )
+
+        kept, _ = CaseAnalysisService._validate_missing_value_direction(explicit)
+        downgraded, _ = CaseAnalysisService._validate_missing_value_direction(unsupported)
+
+        self.assertEqual(kept.abnormal_flag, "high")
+        self.assertEqual(downgraded.abnormal_flag, "unknown")
+
+
 class CaseAnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()

@@ -9,8 +9,10 @@ from types import SimpleNamespace
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.services.report_content import (
+    ReportAbnormalItem,
     build_core_health_portrait,
     build_plan_summary,
+    group_abnormal_items,
     normalize_plan_summary_items,
 )
 from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
@@ -42,6 +44,41 @@ def _recommendation(system_id: str, finding_id: str):
 
 
 class PlanSummaryTests(unittest.TestCase):
+    def test_missing_numeric_result_uses_direction_without_pending_text(self) -> None:
+        grouped = group_abnormal_items(
+            [
+                ReportAbnormalItem(
+                    item_id="finding-uric-acid",
+                    name="尿酸",
+                    result="偏高",
+                    status_label="偏高",
+                    system_ids=("endocrine_metabolic",),
+                )
+            ],
+            [],
+        )
+        portrait = build_core_health_portrait(
+            [_finding("endocrine_metabolic", "finding-uric-acid")],
+            abnormal_findings=[
+                SimpleNamespace(
+                    id="finding-uric-acid",
+                    name="尿酸",
+                    result_text=None,
+                    raw_value=None,
+                    unit="μmol/L",
+                    reference_range="208.0～428.0",
+                    abnormal_flag="high",
+                    evidence_class="lab_abnormal",
+                    source_file_name="report.pdf",
+                )
+            ],
+        )[0]
+
+        self.assertIn("尿酸：偏高", grouped[0])
+        self.assertNotIn("待确认", grouped[0])
+        self.assertIn("尿酸偏高", portrait)
+        self.assertNotIn("μmol/L", portrait)
+
     def test_three_problem_summary_matches_confirmed_style(self) -> None:
         findings = [
             _finding("endocrine_metabolic", "finding-glucose", priority_score=90),

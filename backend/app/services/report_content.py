@@ -139,6 +139,9 @@ def group_abnormal_items(
         system_id = _choose_primary_system(candidate_systems, priority_rank)
         group_key = system_id or "__other__"
         status = _clean_text(item.status_label) or "异常"
+        if _compact(result) == _compact(status):
+            groups.setdefault(group_key, []).append(f"{name}：{status}")
+            continue
         detail = "" if _is_redundant_abnormal_result(name, result) else f"：{result}"
         groups.setdefault(group_key, []).append(f"{name}{detail}（{status}）")
 
@@ -475,13 +478,22 @@ def _health_objective_evidence(
             or getattr(item, "raw_value", "")
         )
         unit = _clean_text(getattr(item, "unit", ""))
-        if unit and unit.lower() not in value.lower():
-            value = f"{value}{unit}"
-        if abnormal_flag == "high" and "↑" not in value:
-            value += "↑"
-        elif abnormal_flag == "low" and "↓" not in value:
-            value += "↓"
-        elif abnormal_flag == "positive" and not value:
+        has_numeric_value = bool(re.search(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", value))
+        numeric_context = bool(unit or _clean_text(getattr(item, "reference_range", "")))
+        if numeric_context and not has_numeric_value:
+            value = {
+                "high": "偏高",
+                "low": "偏低",
+                "positive": "阳性",
+            }.get(abnormal_flag, "")
+        else:
+            if unit and unit.lower() not in value.lower():
+                value = f"{value}{unit}"
+            if abnormal_flag == "high" and "↑" not in value:
+                value += "↑"
+            elif abnormal_flag == "low" and "↓" not in value:
+                value += "↓"
+        if abnormal_flag == "positive" and not value:
             value = "阳性"
         if not name or not value:
             continue

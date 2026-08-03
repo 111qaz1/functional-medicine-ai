@@ -230,8 +230,13 @@ function findingEvidenceLabel(finding: AbnormalFinding) {
 }
 
 function findingResultLabel(finding: AbnormalFinding) {
-  return finding.result_text?.trim()
-    || [finding.raw_value, finding.unit].filter(Boolean).join(" ")
+  const resultText = finding.result_text?.trim() || "";
+  const rawValue = finding.raw_value?.trim() || "";
+  const hasNumericContext = Boolean(finding.unit?.trim() || finding.reference_range?.trim());
+  const hasNumericValue = /[+-]?\d+(?:,\d{3})*(?:\.\d+)?/.test(rawValue || resultText);
+  if (hasNumericContext && !hasNumericValue) return "具体数值待确认";
+  return resultText
+    || [rawValue, finding.unit].filter(Boolean).join(" ")
     || finding.interpretation?.trim()
     || "已发现异常";
 }

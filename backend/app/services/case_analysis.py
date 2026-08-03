@@ -218,6 +218,10 @@ class _SynthesisPayload(_StrictPayload):
     warnings: list[str] = Field(default_factory=list)
 
 
+class _CaseSummaryRecoveryPayload(_StrictPayload):
+    case_summary: str = Field(min_length=1)
+
+
 @dataclass
 class _QuestionnaireContext:
     questionnaire: Questionnaire | None
@@ -610,6 +614,7 @@ class OpenAICompatibleCaseAnalysisProvider:
                 schema=_SynthesisPayload.model_json_schema(),
                 schema_name="case_synthesis" if attempt == 0 else "case_synthesis_zh_retry",
                 thinking_type=thinking_type,
+                retry_read_timeout_once=True,
             )
             normalized_raw = self._normalize_synthesis_payload(raw)
             try:
@@ -631,10 +636,19 @@ class OpenAICompatibleCaseAnalysisProvider:
                 try:
                     synthesis = _SynthesisPayload.model_validate(normalized_repair)
                 except ValidationError as repair_validation_error:
-                    synthesis = self._salvage_synthesis_payload(
-                        normalized_repair,
-                        repair_validation_error,
+                    normalized_repair = self._recover_missing_case_summary(
+                        repaired=normalized_repair,
+                        original=normalized_raw,
+                        original_content=content,
+                        validation_error=repair_validation_error,
                     )
+                    try:
+                        synthesis = _SynthesisPayload.model_validate(normalized_repair)
+                    except ValidationError as recovered_validation_error:
+                        synthesis = self._salvage_synthesis_payload(
+                            normalized_repair,
+                            recovered_validation_error,
+                        )
             if self._synthesis_is_simplified_chinese(synthesis):
                 return synthesis
         raise ValueError("病例综合连续两次未按要求输出简体中文，请重试分析。")
@@ -877,6 +891,7 @@ class OpenAICompatibleCaseAnalysisProvider:
         schema_name: str,
         thinking_type: str = "disabled",
         repair_invalid_json: bool = True,
+        retry_read_timeout_once: bool = False,
     ) -> dict[str, Any]:
         if self.api_style not in {"auto", "responses", "chat"}:
             raise ValueError("Case analysis requires LLM_API_STYLE=responses, chat or auto")
@@ -982,7 +997,17 @@ class OpenAICompatibleCaseAnalysisProvider:
                         attempt_response_payload,
                     )
                     lease = None
-                    if attempt_index >= self.retry_attempts or not self._is_retryable_request_error(exc):
+                    read_timeout_retry_exhausted = (
+                        isinstance(exc, httpx.ReadTimeout) and attempt_index >= 1
+                    )
+                    if (
+                        attempt_index >= self.retry_attempts
+                        or read_timeout_retry_exhausted
+                        or not self._is_retryable_request_error(
+                            exc,
+                            retry_read_timeout=retry_read_timeout_once,
+                        )
+                    ):
                         raise
                     retry_number = attempt_index + 1
                     delay = self._retry_delay_seconds(exc, retry_number)
@@ -1198,12 +1223,18 @@ class OpenAICompatibleCaseAnalysisProvider:
             return f"{base}_questionnaire_retry"
         if "zh_retry" in schema_name:
             return f"{base}_language_retry"
+        if schema_name == "case_summary_recovery":
+            return f"{base}_summary_recovery"
         return base
 
     @staticmethod
-    def _is_retryable_request_error(exc: Exception) -> bool:
+    def _is_retryable_request_error(
+        exc: Exception,
+        *,
+        retry_read_timeout: bool = False,
+    ) -> bool:
         if isinstance(exc, httpx.ReadTimeout):
-            return False
+            return retry_read_timeout
         if isinstance(exc, httpx.ConnectTimeout):
             return True
         if isinstance(exc, _MODEL_CONNECTION_ERRORS):
@@ -2805,6 +2836,60 @@ class OpenAICompatibleCaseAnalysisProvider:
                     if text:
                         return text
         return None
+
+    def _recover_missing_case_summary(
+        self,
+        *,
+        repaired: dict[str, Any],
+        original: dict[str, Any],
+        original_content: list[dict[str, Any]],
+        validation_error: ValidationError,
+    ) -> dict[str, Any]:
+        """Restore only a missing summary without weakening other synthesis fields."""
+        repaired_summary = repaired.get("case_summary")
+        if isinstance(repaired_summary, str) and repaired_summary.strip():
+            return repaired
+
+        recovered = dict(repaired)
+        original_summary = original.get("case_summary")
+        if isinstance(original_summary, str) and original_summary.strip():
+            recovered["case_summary"] = original_summary.strip()
+            logger.warning(
+                "case synthesis summary recovered source=initial_model_output"
+            )
+            return recovered
+
+        recovery_raw = self._call_json(
+            instructions=(
+                "你是病例综合结果的摘要字段恢复器。仅根据输入中已经提供的病例事实，"
+                "返回一个简体中文 case_summary。不得新增诊断、医学事实、产品、SKU、"
+                "剂量、疗程或治疗承诺；患者自述内容必须保留患者自述属性。"
+                "只输出包含 case_summary 的 JSON，不输出其他字段、Markdown或解释。"
+            ),
+            content=original_content,
+            schema=_CaseSummaryRecoveryPayload.model_json_schema(),
+            schema_name="case_summary_recovery",
+            thinking_type="disabled",
+        )
+        normalized_recovery = self._normalize_synthesis_payload(recovery_raw)
+        try:
+            summary_payload = _CaseSummaryRecoveryPayload.model_validate(
+                {"case_summary": normalized_recovery.get("case_summary")}
+            )
+        except ValidationError:
+            logger.warning(
+                "case synthesis summary recovery rejected reason=invalid_schema"
+            )
+            raise validation_error
+        summary = summary_payload.case_summary.strip()
+        if not summary:
+            logger.warning(
+                "case synthesis summary recovery rejected reason=empty_summary"
+            )
+            raise validation_error
+        recovered["case_summary"] = summary
+        logger.warning("case synthesis summary recovered source=focused_model_call")
+        return recovered
 
     @classmethod
     def _salvage_synthesis_payload(

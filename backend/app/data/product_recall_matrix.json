@@ -1,5 +1,5 @@
 {
-  "version": "client-recall-matrix-v3-2026-07-29",
+  "version": "client-recall-matrix-v4-2026-08-04",
   "source_note": "一次性结构化自甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第六、七节，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关规则。运行时只使用结构化规则，不读取原始 Markdown。",
   "rules": [
     {
@@ -146,11 +146,34 @@
         "condition:TPOAb高",
         "condition:TGAb高"
       ],
-      "message": "桥本相关甲状腺抗体升高时召回富硒维生素E。",
+      "message": "桥本或甲状腺抗体相关证据明确时召回富硒维生素E。",
+      "message_variants": [
+        {
+          "all_conditions": [],
+          "any_conditions": [
+            "marker:thyroid_peroxidase_antibody:high",
+            "marker:thyroglobulin_antibody:high"
+          ],
+          "reported_any_terms": [],
+          "message": "甲状腺抗体偏高时召回富硒维生素E。"
+        },
+        {
+          "all_conditions": [],
+          "any_conditions": [],
+          "reported_any_terms": ["桥本"],
+          "message": "基于患者自述桥本氏甲状腺炎召回富硒维生素E。"
+        },
+        {
+          "all_conditions": [],
+          "any_conditions": [],
+          "reported_any_terms": ["TPOAb高", "TGAb高"],
+          "message": "基于患者自述的甲状腺抗体偏高信息召回富硒维生素E。"
+        }
+      ],
       "guidance": null,
       "source_ref": "甲方禁忌矩阵V2#七-正向召回规则-桥本抗体",
       "enabled": true,
-      "version": "2.0.0"
+      "version": "2.0.1"
     },
     {
       "rule_id": "rcl_severe_low_ferritin_referral",

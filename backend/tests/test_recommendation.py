@@ -382,7 +382,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertLess(elapsed, 0.1)
         self.assertTrue(any(item.action.value == "exclude" for item in decisions["sku_weight_support"]))
 
-    def test_total_advice_is_one_local_reason_per_product_with_required_length(self) -> None:
+    def test_total_advice_is_one_concise_local_reason_per_product(self) -> None:
         case = self._prepare_case(
             "25-OH维生素D 18 ng/mL 30-100\nhs-CRP 4.2 mg/L 0-3",
             Questionnaire(
@@ -409,10 +409,12 @@ class RecommendationServiceTests(unittest.TestCase):
         for item in advice:
             reason = item.split("：", 1)[1]
             han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", reason))
-            self.assertGreaterEqual(han_count, 50)
+            self.assertGreaterEqual(han_count, 15)
             self.assertLessEqual(han_count, 80)
             self.assertNotIn("规则命中", item)
             self.assertNotIn("RAG", item)
+            self.assertNotIn("评估实际支持效果和下一阶段调整方向", item)
+            self.assertNotIn("复查趋势评估后续调整方向", item)
 
         vitamin_c_advice = next((item for item in advice if item.startswith("脂质体维生素C：")), "")
         if vitamin_c_advice:

@@ -50,6 +50,7 @@ from app.services.report_content import (
     build_plan_summary,
     group_abnormal_items,
 )
+from app.services.report_closing import build_report_closing_sections
 
 
 @dataclass
@@ -76,6 +77,10 @@ class RecommendationContext:
     structured_system_findings: list[StructuredSystemFinding] = field(default_factory=list)
     sex: str | None = None
     unresolved_questionnaire_fields: set[str] = field(default_factory=set)
+    # Kept separately only so patient-facing copy can distinguish a questionnaire
+    # statement from an objective finding. Recommendation matching continues to
+    # use the aggregate ``conditions`` set above.
+    reported_conditions: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -132,6 +137,14 @@ class UnifiedSafetyRule:
 
 
 @dataclass(frozen=True)
+class ClientRecallMessageVariant:
+    all_conditions: tuple[str, ...]
+    any_conditions: tuple[str, ...]
+    reported_any_terms: tuple[str, ...]
+    message: str
+
+
+@dataclass(frozen=True)
 class ClientRecallRule:
     rule_id: str
     sku_ids: tuple[str, ...]
@@ -142,10 +155,69 @@ class ClientRecallRule:
     source_ref: str | None
     enabled: bool
     version: str
+    message_variants: tuple[ClientRecallMessageVariant, ...] = ()
 
 
 class RecommendationService:
     MAX_RECOMMENDED_PRODUCTS = 12
+    # Generic opt-in policy for support goals that may legitimately need more
+    # than one product. Goals without a policy keep the existing selection path.
+    _MULTI_PRODUCT_GOAL_POLICIES = {
+        "liver_detox": {
+            "max_products": 2,
+            "sku_families": {
+                "sku_liver_detox_support": "hepatic_metabolic",
+                "sku_amino_acid_detox": "detox_biotransformation",
+            },
+            "evidence_families": {
+                "hepatic_metabolic": {
+                    "high_markers": (
+                        "alt",
+                        "ast",
+                        "ggt",
+                        "alp",
+                        "total_bilirubin",
+                        "direct_bilirubin",
+                        "indirect_bilirubin",
+                    ),
+                    "finding_codes": ("fatty_liver",),
+                    "terms": (
+                        "脂肪肝",
+                        "肝脂肪变",
+                        "肝脏脂肪浸润",
+                        "肝功能异常",
+                        "肝酶异常",
+                        "转氨酶升高",
+                        "肝损伤",
+                        "肝胆代谢异常",
+                        "胆汁淤积",
+                    ),
+                    "evidence_classes": (),
+                },
+                "detox_biotransformation": {
+                    "high_markers": (),
+                    "finding_codes": (),
+                    "terms": (
+                        "毒素暴露",
+                        "毒性元素",
+                        "重金属",
+                        "镉超标",
+                        "铅超标",
+                        "汞超标",
+                        "砷超标",
+                        "生物转化异常",
+                        "解毒能力异常",
+                        "谷胱甘肽不足",
+                        "谷胱甘肽缺乏",
+                        "谷胱甘肽偏低",
+                        "谷胱甘肽降低",
+                        "谷胱甘肽异常",
+                    ),
+                    "evidence_classes": (ClinicalEvidenceClass.exposure,),
+                },
+            },
+        }
+    }
     _ADMIN_METADATA_PREFIXES = (
         "医嘱名",
         "姓名",
@@ -177,18 +249,20 @@ class RecommendationService:
         indicator_service: CaseIndicatorService,
         vector_store: VectorStoreProvider,
         llm_provider: LLMProvider,
+        follow_up_provider=None,
         parsing_service=None,
         standardization_service=None,
         rag_retriever=None,
         model_version: str = "local-structured-v1",
-        prompt_version: str = "local-report-v1",
-        rule_version: str = "local-rules-v1",
+        prompt_version: str = "local-report-v5-priority-referral",
+        rule_version: str = "local-rules-v6-liver-evidence",
     ) -> None:
         self.repository = repository
         self.case_service = case_service
         self.indicator_service = indicator_service
         self.vector_store = vector_store
         self.llm_provider = llm_provider
+        self.follow_up_provider = follow_up_provider or llm_provider
         self.parsing_service = parsing_service
         self.standardization_service = standardization_service
         self.rag_retriever = rag_retriever
@@ -428,6 +502,16 @@ class RecommendationService:
             rule_id = str(item.get("rule_id") or "").strip()
             if not rule_id:
                 continue
+            message_variants = tuple(
+                ClientRecallMessageVariant(
+                    all_conditions=tuple_value(variant, "all_conditions"),
+                    any_conditions=tuple_value(variant, "any_conditions"),
+                    reported_any_terms=tuple_value(variant, "reported_any_terms"),
+                    message=str(variant.get("message") or "").strip(),
+                )
+                for variant in item.get("message_variants", [])
+                if isinstance(variant, dict) and str(variant.get("message") or "").strip()
+            )
             rules.append(
                 ClientRecallRule(
                     rule_id=rule_id,
@@ -439,6 +523,7 @@ class RecommendationService:
                     source_ref=str(item.get("source_ref") or "").strip() or None,
                     enabled=bool(item.get("enabled", True)),
                     version=str(item.get("version") or payload.get("version") or "").strip(),
+                    message_variants=message_variants,
                 )
             )
         return tuple(rules)
@@ -778,7 +863,7 @@ class RecommendationService:
             product = products.get(item.sku_id)
             target = self._product_support_target(product, item.primary_system_id)
             reason = self._fit_total_advice_reason(evidence=evidence, system_name=system_name, target=target)
-            if 50 <= self._han_count(reason) <= 80:
+            if 15 <= self._han_count(reason) <= 80:
                 advice_items.append(f"{item.display_name}：{reason}")
         return advice_items
 
@@ -821,22 +906,19 @@ class RecommendationService:
         return len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", value or ""))
 
     def _fit_total_advice_reason(self, *, evidence: str, system_name: str, target: str) -> str:
-        candidates = [
-            f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}，并结合症状变化、耐受情况及后续复查趋势评估实际支持效果和下一阶段调整方向。",
-            f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}，建议结合症状变化、耐受情况和后续复查趋势评估效果，再由医生决定后续调整方向。",
-            f"针对{evidence}，本阶段用于支持{system_name}的{target}，首月以稳妥执行和连续观察为主，并结合症状、耐受及复查趋势评估后续调整方向。",
-        ]
-        for candidate in candidates:
-            if 50 <= self._han_count(candidate) <= 80:
-                return candidate
+        candidate = f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}。"
+        if 15 <= self._han_count(candidate) <= 80:
+            return candidate
         compact_evidence = re.split(r"[、，；]", evidence)[0][:12]
-        fallback = (
-            f"针对{compact_evidence}等已确认问题，本阶段用于支持{system_name}相关功能与整体恢复，"
-            "首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
-        )
-        return fallback
+        return f"针对{compact_evidence}等已确认问题，本阶段用于支持{system_name}相关功能与整体恢复。"
 
-    def generate(self, case_id: str, requested_by: str) -> RecommendationDraft:
+    def generate(
+        self,
+        case_id: str,
+        requested_by: str,
+        *,
+        include_closing_sections: bool = True,
+    ) -> RecommendationDraft:
         case = self.case_service.get_case(case_id)
         latest_analysis = self.repository.get_latest_case_analysis(case_id)
         support_need_by_id = {
@@ -914,6 +996,7 @@ class RecommendationService:
             ranked_products,
             composition.selected_sku_ids,
             product_evidence_map,
+            context=context,
             support_need_by_id=support_need_by_id,
             priority_findings=priority_findings,
         )
@@ -961,7 +1044,7 @@ class RecommendationService:
                     for evidence in support_need_by_id[support_need_id].evidence_refs:
                         if evidence.ref.startswith("finding:"):
                             matched_finding_ids.append(evidence.ref.split(":", 1)[1])
-                default_reason = self._build_product_reason(product, evidence_ids)
+                default_reason = self._build_product_reason(product, evidence_ids, context=context)
                 final_reason = self._sanitize_reason_text(
                     self._prefer_chinese_text(
                         composition.product_reason_overrides.get(product.sku_id),
@@ -1103,10 +1186,7 @@ class RecommendationService:
             finding_names_by_id,
         )
         lifestyle_focus = self.lifestyle_planning_service.report_items(lifestyle_plan)
-        test_recommendations = self._build_prioritized_test_recommendations(context, anti_aging_findings)
         supplement_adjustments = self._build_existing_supplement_adjustments(case)
-        follow_up_plan = self._build_follow_up_plan(context)
-        roadmap = self._build_ninety_day_roadmap(recommended_items, context)
         report_sections = {
             "病例摘要": case_summary,
             "核心结论与健康画像": health_portrait,
@@ -1116,14 +1196,10 @@ class RecommendationService:
             # Product exclusions are doctor-side audit information. They remain
             # available in draft.contraindications and safety_decisions, but are
             # not copied into the customer-facing report body.
-            "风险提示": risk_notices,
             "首月营养素干预方案": first_month_protocol,
             "总医嘱说明": total_advice,
             "生活方式干预处方": lifestyle_focus,
-            "后续检查建议": test_recommendations,
             "现有补充剂调整建议": supplement_adjustments,
-            "随访计划": follow_up_plan,
-            "90天健康路线图": roadmap,
             "待确认项": missing_info,
             "方案总结": plan_summary,
         }
@@ -1144,6 +1220,29 @@ class RecommendationService:
             for item in lifestyle_values
             if (cleaned := remove_generic_lifestyle_confirmation(str(item)))
         ]
+        latest_analysis_status = (
+            getattr(latest_analysis.status, "value", latest_analysis.status)
+            if latest_analysis is not None
+            else None
+        )
+        if include_closing_sections and latest_analysis_status == "reviewed":
+            reviewed_findings = list(
+                latest_analysis.reviewed_abnormal_findings
+                or latest_analysis.abnormal_findings
+                or []
+            )
+            report_sections.update(
+                self.build_final_closing_sections(
+                    case=case,
+                    reviewed_findings=reviewed_findings,
+                    recommended_items=recommended_items,
+                    safety_decisions=all_safety_decisions,
+                    risk_notices=risk_notices,
+                    case_summary=case_summary,
+                    system_findings=structured_system_findings,
+                    report_guidance=report_guidance,
+                )
+            )
         rag_audit_items = report_sections.pop("RAG内部审查", [])
 
         draft = RecommendationDraft(
@@ -1232,6 +1331,37 @@ class RecommendationService:
             )
         )
         return draft
+
+    def build_final_closing_sections(
+        self,
+        *,
+        case,
+        reviewed_findings: list,
+        recommended_items: list[DraftRecommendationItem],
+        safety_decisions: list[SafetyDecision],
+        risk_notices: list[str],
+        case_summary: list[str] | None = None,
+        system_findings: list[StructuredSystemFinding] | None = None,
+        report_guidance: list[str] | None = None,
+    ) -> dict[str, list[str]]:
+        follow_up_generator = getattr(
+            self.follow_up_provider,
+            "generate_follow_up_plan",
+            None,
+        )
+        return build_report_closing_sections(
+            case=case,
+            reviewed_findings=reviewed_findings,
+            recommended_items=recommended_items,
+            safety_decisions=safety_decisions,
+            risk_notices=risk_notices,
+            case_summary=case_summary,
+            system_findings=system_findings,
+            report_guidance=report_guidance,
+            follow_up_generator=(
+                follow_up_generator if callable(follow_up_generator) else None
+            ),
+        )
 
     def _build_context(self, case) -> RecommendationContext:
         markers_by_code: dict[str, list] = {}
@@ -1438,6 +1568,11 @@ class RecommendationService:
                 else None
             ),
             unresolved_questionnaire_fields=unresolved_questionnaire_fields,
+            reported_conditions={
+                self._normalize(text)
+                for text in (questionnaire.known_conditions if questionnaire else [])
+                if str(text or "").strip()
+            },
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:
@@ -3445,7 +3580,13 @@ class RecommendationService:
             or self._text_has_any(text, "睡眠", "早醒", "入睡困难", "压力", "焦虑", "紧张", "疲劳", "注意力", "头痛", "HPA")
         )
 
-    def _build_product_reason(self, product: ProductRule, evidence_ids: list[str]) -> str:
+    def _build_product_reason(
+        self,
+        product: ProductRule,
+        evidence_ids: list[str],
+        *,
+        context: RecommendationContext,
+    ) -> str:
         use_case = "、".join(product.candidate_use_cases[:2]) if product.candidate_use_cases else "当前病例目标"
         recall_rules = [
             self.client_recall_rules_by_id.get(
@@ -3456,7 +3597,10 @@ class RecommendationService:
         ]
         recall_rules = [rule for rule in recall_rules if rule]
         if recall_rules:
-            return f"病例命中既定营养支持规则：{recall_rules[0].message}，并已通过本地安全检查。"
+            recall_message = self._client_recall_reason_message(recall_rules[0], context).rstrip(
+                " ，。；"
+            )
+            return f"病例命中既定营养支持规则：{recall_message}，并已通过本地安全检查。"
         association_percent = self._association_percent(evidence_ids)
         profile = self.product_tag_profiles.get(product.sku_id)
         system_name = (
@@ -3476,6 +3620,30 @@ class RecommendationService:
         if evidence_ids:
             return f"结合 {use_case} 与已审核知识命中，作为当前阶段的候选推荐。"
         return f"结合 {use_case} 和现有产品适配规则，作为当前阶段的候选推荐。"
+
+    def _client_recall_reason_message(
+        self,
+        rule: ClientRecallRule,
+        context: RecommendationContext,
+    ) -> str:
+        for variant in rule.message_variants:
+            if not self._rule_matches_context(
+                all_conditions=variant.all_conditions,
+                any_conditions=variant.any_conditions,
+                context=context,
+            ) and (variant.all_conditions or variant.any_conditions):
+                continue
+            normalized_reported_terms = tuple(
+                self._normalize(term) for term in variant.reported_any_terms
+            )
+            if normalized_reported_terms and not any(
+                term in condition
+                for condition in context.reported_conditions
+                for term in normalized_reported_terms
+            ):
+                continue
+            return variant.message
+        return rule.message
 
     def _prefer_chinese_text(self, candidate: str | None, fallback: str) -> str:
         if candidate and self._contains_cjk(candidate):
@@ -3643,12 +3811,6 @@ class RecommendationService:
             self._format_rag_public_line,
             limit=1,
         )
-        add_unique_rag_items(
-            "RAG复查建议",
-            self._rag_hit_supports_follow_up,
-            self._format_rag_followup_line,
-            limit=1,
-        )
         add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=1)
 
         add_unique_rag_items(
@@ -3658,12 +3820,6 @@ class RecommendationService:
             limit=2,
         )
         add_unique_rag_items("RAG总体健康画像", self._rag_hit_supports_health_portrait, self._format_rag_public_line, limit=2)
-        add_unique_rag_items(
-            "RAG复查建议",
-            self._rag_hit_supports_follow_up,
-            self._format_rag_followup_line,
-            limit=2,
-        )
         return merged
 
     def _rag_hit_already_used(
@@ -3736,26 +3892,6 @@ class RecommendationService:
             "不改变当前产品目录、剂量或禁忌审核结论。"
         )
 
-    def _format_rag_followup_line(self, excerpt: str) -> str:
-        normalized = self._normalize(excerpt)
-        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
-            return (
-                f"{CUSTOMER_RAG_PREFIX}复查时建议把甲状腺功能、抗体变化、症状和睡眠压力状态放在同一趋势里观察。"
-            )
-        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢", "甘油三酯", "hdl", "ldl")):
-            return (
-                f"{CUSTOMER_RAG_PREFIX}复查时建议结合血糖、胰岛素或血脂趋势，而不是只看单次结果。"
-            )
-        if any(term in normalized for term in ("维生素d", "免疫", "炎症", "crp")):
-            return (
-                f"{CUSTOMER_RAG_PREFIX}复查时建议结合维生素D、炎症指标和症状变化，评估恢复方向是否稳定。"
-            )
-        if any(term in normalized for term in ("睡眠", "压力", "皮质醇", "hpa", "疲劳")):
-            return (
-                f"{CUSTOMER_RAG_PREFIX}复查时建议同步记录睡眠时长、晨起精力和压力恢复情况。"
-            )
-        return ""
-
     def _rag_hit_supports_indicator_explanation(self, hit: SafeRagHit) -> bool:
         excerpt = self._normalize(hit.excerpt)
         return any(
@@ -3821,9 +3957,6 @@ class RecommendationService:
             )
         )
 
-    def _rag_hit_supports_follow_up(self, hit: SafeRagHit) -> bool:
-        return bool(self._format_rag_followup_line(hit.excerpt))
-
     def _append_report_items(
         self,
         report_sections: dict[str, list[str] | str],
@@ -3856,9 +3989,6 @@ class RecommendationService:
             "功能医学系统失衡分析": "功能医学系统失衡分析",
             "生活方式干预重点": "生活方式干预处方",
             "生活方式干预处方": "生活方式干预处方",
-            "功能医学检测建议": "后续检查建议",
-            "后续检查建议": "后续检查建议",
-            "随访计划": "随访计划",
         }
         for source_key, target_key in override_targets.items():
             values = overrides.get(source_key, [])
@@ -4204,8 +4334,6 @@ class RecommendationService:
         high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
         if any(term in condition for condition in context.conditions for term in high_risk_conditions):
             reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
-        if context.medications:
-            reasons.append("当前用药可能影响营养素剂量或服用时机")
         return reasons
 
     def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:
@@ -4283,29 +4411,6 @@ class RecommendationService:
         normalized = warning.lower()
         return "sku" in normalized or "规格" in warning
 
-    def _build_prioritized_test_recommendations(
-        self,
-        context: RecommendationContext,
-        anti_aging_findings: list[str] | None = None,
-    ) -> list[str]:
-        items = [
-            "首月必做：复查或补齐本次异常指标对应的基础项目，重点看血脂、尿酸、肝肾功能、血糖/胰岛素和炎症指标的趋势，而不是只看单次结果。",
-            "首月必做：记录睡眠、精力、排便、餐后困倦、酒精/咖啡因和运动执行情况，用于判断方案耐受性和生活方式触发因素。",
-        ]
-        if self._has_thyroid_pattern(context):
-            items.append("2-3个月完善：甲状腺功能全套 TSH、FT3、FT4、TPOAb、TGAb，并结合症状、睡眠压力和营养状态判断桥本/甲减管理方向。")
-        if self._has_liver_metabolic_pattern(context):
-            items.append("2-3个月完善：血脂全套、尿酸、肝功能、空腹血糖/胰岛素、HbA1c，必要时加脂肪肝影像或肝胆相关评估。")
-        if self._has_marker(context, "vitamin_d", "low") or self._has_marker(context, "hs_crp", "high"):
-            items.append("2-3个月完善：25(OH)D、hs-CRP 或其他炎症相关指标，用于确认免疫与抗炎支持是否需要调整。")
-        if self._has_gut_or_bile_pattern(context):
-            items.append("可选功能医学检测：若腹胀、便秘、腹泻或食物反应持续，可做肠道菌群/消化吸收/食物不耐受评估，用于细化饮食和肠道策略。")
-        if self._has_neuro_sleep_pattern(context):
-            items.append("可选功能医学检测：若睡眠、疲劳和压力恢复仍明显，可考虑皮质醇节律、营养缺口或线粒体相关评估。")
-        if anti_aging_findings:
-            items.append("可选抗衰追踪：端粒或 DNA 甲基化结果建议作为长期趋势观察，后续与内分泌、心血管、免疫系统年龄和生活方式执行结果一起复盘。")
-        return list(dict.fromkeys(items))[:8]
-
     def _build_existing_supplement_adjustments(self, case) -> list[str]:
         questionnaire = case.questionnaire
         supplement_use = (getattr(questionnaire, "supplement_use", None) or "").strip() if questionnaire else ""
@@ -4318,53 +4423,6 @@ class RecommendationService:
             "调整原则：不要与首月新方案一次性全部叠加；先核对是否存在同类营养素重复、剂量过高、与药物冲突或胃肠不耐受。",
             "如正在使用甲状腺药、抗凝药、降糖药、降压药或长期处方药，补充剂增减必须先由医生确认。",
         ]
-
-    def _build_test_recommendations(self, context: RecommendationContext) -> list[str]:
-        items: list[str] = []
-
-        if self._has_thyroid_pattern(context):
-            items.append("甲状腺功能全套：TSH、FT3、FT4、TPOAb、TGAb，用于判断甲状腺功能与自身免疫活跃度。")
-        if self._has_marker(context, "vitamin_d", "low") or self._has_thyroid_pattern(context):
-            items.append("25(OH)D：用于评估维生素 D 水平，便于后续免疫与骨骼支持调整。")
-        if self._has_marker(context, "ferritin", "low"):
-            items.append("铁代谢相关检查：铁蛋白、血清铁、转铁蛋白饱和度，用于确认缺铁或储备不足风险。")
-        if self._has_marker(context, "fasting_glucose", "high") or self._has_marker(context, "hba1c", "high"):
-            items.append("血糖代谢检查：空腹血糖、胰岛素、HbA1c，用于判断代谢风险与干预优先级。")
-        if "gut_support" in context.lifestyle_tags:
-            items.append("肠道功能评估：可结合菌群、消化吸收或食物不耐受检测进一步细化饮食和肠道方案。")
-        if "stress_support" in context.lifestyle_tags:
-            items.append("压力节律评估：如条件允许，可结合皮质醇节律或睡眠恢复情况做进一步判断。")
-
-        if not items:
-            items.append("建议结合主要症状、异常指标和目标，在顾问评估后决定是否进入功能医学检测。")
-        return items[:6]
-
-    def _build_follow_up_plan(self, context: RecommendationContext) -> list[str]:
-        plan = [
-            "2 周内：回访补剂耐受性、睡眠变化、胃肠反应与执行难点。",
-            "4-6 周：根据症状变化与基础指标，决定是否调整剂量、增减组合或加入下一阶段支持。",
-            "8-12 周：复查关键指标，评估疲劳、睡眠、消化与目标达成度，再决定后续维持策略。",
-        ]
-        if self._has_thyroid_pattern(context):
-            plan.append("如存在甲状腺相关异常，优先跟踪甲状腺症状、复查节奏与药物/营养素使用间隔。")
-        return plan[:4]
-
-    def _build_ninety_day_roadmap(
-        self,
-        recommended_items: list[DraftRecommendationItem],
-        context: RecommendationContext,
-    ) -> list[str]:
-        first = "、".join(item.display_name for item in recommended_items[:2]) or "基础信息补充与症状观察"
-        second = "、".join(item.display_name for item in recommended_items[2:4]) or "饮食与睡眠执行稳定"
-        third = "、".join(item.display_name for item in recommended_items[4:6]) or "复查与方案微调"
-        roadmap = [
-            f"Month 1：建立基础饮食、睡眠与补充剂执行节律，优先完成 {first} 的耐受性观察。",
-            f"Month 2：在前期稳定基础上，推进 {second} 相关支持，并观察体能、睡眠和消化变化。",
-            f"Month 3：结合 {third} 与复查结果，评估是否进入维持期、强化期或进一步检测。",
-        ]
-        if "sedentary_risk" in context.lifestyle_tags:
-            roadmap.append("整个 90 天过程中都应把久坐打断、步行和轻阻力训练纳入常规生活节律。")
-        return roadmap[:4]
 
     def _top_msq_burdens(self, scores: dict[str, int]) -> list[str]:
         labels = {0: "无", 1: "轻度", 2: "中度", 3: "较高", 4: "较重"}
@@ -4387,12 +4445,117 @@ class RecommendationService:
             or any(keyword in condition for condition in context.conditions for keyword in thyroid_terms)
         )
 
+    def _goal_evidence_ids_by_family(
+        self,
+        goal: str,
+        context: RecommendationContext,
+    ) -> dict[str, set[str]]:
+        policy = self._MULTI_PRODUCT_GOAL_POLICIES.get(goal, {})
+        family_configs = policy.get("evidence_families", {})
+        evidence_ids = {family: set() for family in family_configs}
+        normalized_terms_by_family = {
+            family: tuple(self._normalize(term) for term in config.get("terms", ()))
+            for family, config in family_configs.items()
+        }
+        for family, config in family_configs.items():
+            for marker_code in config.get("high_markers", ()):
+                for index, item in enumerate(context.markers_by_code.get(marker_code, [])):
+                    abnormal_flag = getattr(
+                        getattr(item, "abnormal_flag", None),
+                        "value",
+                        getattr(item, "abnormal_flag", "unknown"),
+                    )
+                    if abnormal_flag != "high":
+                        continue
+                    source_span = getattr(item, "source_span", None)
+                    source_key = ":".join(
+                        (
+                            str(getattr(source_span, "file_id", "") or "unknown"),
+                            str(getattr(source_span, "page", 1) or 1),
+                            str(index),
+                        )
+                    )
+                    evidence_ids[family].add(f"marker:{marker_code}:{source_key}")
+
+        for finding in context.clinical_findings:
+            source_span = getattr(finding, "source_span", None)
+            content = self._normalize(
+                " ".join(
+                    filter(
+                        None,
+                        (
+                            getattr(finding, "finding_code", None),
+                            getattr(finding, "finding_name", None),
+                            getattr(source_span, "snippet", None),
+                        ),
+                    )
+                )
+            )
+            source_key = f"finding:{finding.finding_id}"
+            evidence_class = classify_confirmed_evidence(finding)
+            for family, config in family_configs.items():
+                if (
+                    getattr(finding, "finding_code", None) in config.get("finding_codes", ())
+                    or evidence_class in config.get("evidence_classes", ())
+                    or any(term in content for term in normalized_terms_by_family[family])
+                ):
+                    evidence_ids[family].add(source_key)
+
+        for condition in context.reported_conditions:
+            source_key = f"reported_condition:{condition}"
+            for family, terms in normalized_terms_by_family.items():
+                if any(term in condition for term in terms):
+                    evidence_ids[family].add(source_key)
+        return evidence_ids
+
+    def _can_add_multi_product_goal_product(
+        self,
+        product: ProductRule,
+        selected_products: list[ProductRule],
+        goal_evidence_ids: dict[str, dict[str, set[str]]],
+    ) -> bool:
+        matched_policy = self._multi_product_goal_policy_for_sku(product.sku_id)
+        if not matched_policy:
+            return True
+        goal, policy = matched_policy
+        sku_families = policy["sku_families"]
+        product_family = sku_families[product.sku_id]
+        selected_goal_products = [
+            selected
+            for selected in selected_products
+            if selected.sku_id in sku_families
+        ]
+        if not selected_goal_products:
+            return True
+        if len(selected_goal_products) >= int(policy.get("max_products", 1)):
+            return False
+        selected_families = {sku_families[selected.sku_id] for selected in selected_goal_products}
+        if product_family in selected_families:
+            return False
+        family_evidence = goal_evidence_ids.get(goal, {})
+        candidate_ids = family_evidence.get(product_family, set())
+        selected_ids = set().union(
+            *(family_evidence.get(family, set()) for family in selected_families)
+        )
+        return bool(candidate_ids - selected_ids) and bool(selected_ids - candidate_ids)
+
+    def _multi_product_goal_policy_for_sku(self, sku_id: str) -> tuple[str, dict] | None:
+        return next(
+            (
+                (goal, policy)
+                for goal, policy in self._MULTI_PRODUCT_GOAL_POLICIES.items()
+                if sku_id in policy.get("sku_families", {})
+            ),
+            None,
+        )
+
     def _select_products_for_output(
         self,
         ranked_products: list[ProductRule],
         selected_sku_ids: list[str],
         product_evidence_map: dict[str, list[str]],
         *,
+        context: RecommendationContext,
         support_need_by_id: dict[str, object],
         priority_findings: list[SystemPriority],
     ) -> list[ProductRule]:
@@ -4407,6 +4570,15 @@ class RecommendationService:
         selected_products: list[ProductRule] = []
         covered_goals: set[str] = set()
         system_counts: dict[str, int] = {}
+        active_multi_product_goals = {
+            goal
+            for goal, policy in self._MULTI_PRODUCT_GOAL_POLICIES.items()
+            if sum(1 for sku_id in policy.get("sku_families", {}) if sku_id in by_id) >= 2
+        }
+        goal_evidence_ids = {
+            goal: self._goal_evidence_ids_by_family(goal, context)
+            for goal in active_multi_product_goals
+        }
 
         # Reserve one highest-ranked safe product for every locally validated
         # system that has an approved support-goal route. A shared SKU may cover
@@ -4429,6 +4601,12 @@ class RecommendationService:
             if not product:
                 continue
             newly_selected = product not in selected_products
+            if newly_selected and not self._can_add_multi_product_goal_product(
+                product,
+                selected_products,
+                goal_evidence_ids,
+            ):
+                continue
             if newly_selected:
                 selected_products.append(product)
             evidence_ids = product_evidence_map.get(product.sku_id, [])
@@ -4460,13 +4638,20 @@ class RecommendationService:
                 continue
             objective_goal_products.setdefault(primary_goal, product)
         for goal, product in objective_goal_products.items():
-            if product not in selected_products:
+            newly_selected = product not in selected_products
+            if newly_selected and not self._can_add_multi_product_goal_product(
+                product,
+                selected_products,
+                goal_evidence_ids,
+            ):
+                continue
+            if newly_selected:
                 selected_products.append(product)
             covered_goals.add(goal)
             system_id = self._selection_system_id(
                 product_evidence_map.get(product.sku_id, [])
             )
-            if system_id:
+            if system_id and newly_selected:
                 system_counts[system_id] = system_counts.get(system_id, 0) + 1
             if len(selected_products) >= self.MAX_RECOMMENDED_PRODUCTS:
                 return selected_products
@@ -4480,6 +4665,12 @@ class RecommendationService:
             if not any(evidence_id.startswith("signal:client_recall_") for evidence_id in evidence_ids):
                 continue
             newly_selected = product not in selected_products
+            if newly_selected and not self._can_add_multi_product_goal_product(
+                product,
+                selected_products,
+                goal_evidence_ids,
+            ):
+                continue
             if newly_selected:
                 selected_products.append(product)
             primary_goal = self._selection_primary_goal(evidence_ids)
@@ -4496,11 +4687,18 @@ class RecommendationService:
             for goal in self._must_cover_goals(evidence_ids):
                 must_cover_products.setdefault(goal, product)
         for goal, product in must_cover_products.items():
-            if product not in selected_products:
+            newly_selected = product not in selected_products
+            if newly_selected and not self._can_add_multi_product_goal_product(
+                product,
+                selected_products,
+                goal_evidence_ids,
+            ):
+                continue
+            if newly_selected:
                 selected_products.append(product)
             covered_goals.add(goal)
             system_id = self._selection_system_id(product_evidence_map.get(product.sku_id, []))
-            if system_id:
+            if system_id and newly_selected:
                 system_counts[system_id] = system_counts.get(system_id, 0) + 1
 
         for product in pool:
@@ -4511,11 +4709,22 @@ class RecommendationService:
             if association < 50 and product.sku_id in self.product_tag_profiles:
                 continue
             primary_goal = self._selection_primary_goal(evidence_ids)
+            can_add_multi_goal_product = self._can_add_multi_product_goal_product(
+                product,
+                selected_products,
+                goal_evidence_ids,
+            )
             if primary_goal and primary_goal in covered_goals:
-                continue
+                if (
+                    self._multi_product_goal_policy_for_sku(product.sku_id) is None
+                    or not can_add_multi_goal_product
+                ):
+                    continue
             system_id = self._selection_system_id(evidence_ids)
-            system_limit = 1 if system_id == "liver_detox" else 3
+            system_limit = 3
             if system_id and system_counts.get(system_id, 0) >= system_limit:
+                continue
+            if not can_add_multi_goal_product:
                 continue
             selected_products.append(product)
             if primary_goal:
@@ -4533,7 +4742,18 @@ class RecommendationService:
                 if not self._is_reasonable_top_up_candidate(evidence_ids):
                     continue
                 primary_goal = self._selection_primary_goal(evidence_ids)
+                can_add_multi_goal_product = self._can_add_multi_product_goal_product(
+                    product,
+                    selected_products,
+                    goal_evidence_ids,
+                )
                 if primary_goal and primary_goal in covered_goals:
+                    if (
+                        self._multi_product_goal_policy_for_sku(product.sku_id) is None
+                        or not can_add_multi_goal_product
+                    ):
+                        continue
+                if not can_add_multi_goal_product:
                     continue
                 selected_products.append(product)
                 if primary_goal:
@@ -4541,7 +4761,20 @@ class RecommendationService:
                 if len(selected_products) >= min_option_count:
                     break
 
-        return (selected_products or ranked_products)[: self.MAX_RECOMMENDED_PRODUCTS]
+        if selected_products:
+            return selected_products[: self.MAX_RECOMMENDED_PRODUCTS]
+        fallback_products: list[ProductRule] = []
+        for product in ranked_products:
+            if not self._can_add_multi_product_goal_product(
+                product,
+                fallback_products,
+                goal_evidence_ids,
+            ):
+                continue
+            fallback_products.append(product)
+            if len(fallback_products) >= self.MAX_RECOMMENDED_PRODUCTS:
+                break
+        return fallback_products
 
     @staticmethod
     def _must_cover_goals(evidence_ids: list[str]) -> list[str]:

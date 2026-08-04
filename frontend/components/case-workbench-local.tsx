@@ -85,14 +85,14 @@ const ANALYSIS_LABELS: Record<string, string> = {
 const REPORT_LIST_SECTIONS = new Set([
   "异常指标汇总",
   "慢性食物敏感检测结果",
-  "风险提示",
   "生活方式干预",
   "生活方式干预处方",
-  "后续检查建议",
   "首月营养素干预方案",
   "现有补充剂调整建议",
   "需要补充确认",
-  "待确认项"
+  "待确认项",
+  "复查与随访计划",
+  "安全警示"
 ]);
 
 const SOURCE_REPORT_ORDER = [
@@ -103,21 +103,23 @@ const SOURCE_REPORT_ORDER = [
   "生活方式干预",
   "首月营养素干预方案",
   "总医嘱说明",
-  "方案总结"
+  "方案总结",
+  "复查与随访计划",
+  "安全警示"
 ];
 
 const STANDARD_REPORT_ORDER = [
   "核心结论与健康画像",
   "异常指标汇总",
-  "风险提示",
   "功能医学系统失衡分析",
   "生活方式干预处方",
-  "后续检查建议",
   "首月营养素干预方案",
   "总医嘱说明",
   "现有补充剂调整建议",
   "待确认项",
-  "方案总结"
+  "方案总结",
+  "复查与随访计划",
+  "安全警示"
 ];
 
 function chineseChapterNumber(value: number) {

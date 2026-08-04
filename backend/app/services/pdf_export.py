@@ -304,9 +304,9 @@ class PdfReportExporter:
 
     def _section_style(self, section_title: str, styles: dict[str, ParagraphStyle]) -> ParagraphStyle:
         canonical_title = self._canonical_section_title(section_title)
-        if canonical_title in {"风险提示", "关键指标", "关键指标摘要", "异常指标汇总"}:
+        if canonical_title in {"安全警示", "关键指标", "关键指标摘要", "异常指标汇总"}:
             return styles["section-risk"]
-        if canonical_title in {"生活方式建议", "生活方式干预重点", "生活方式干预处方", "待确认项", "需要补充确认", "复查与跟进建议", "后续检查建议", "现有补充剂调整建议"}:
+        if canonical_title in {"生活方式建议", "生活方式干预重点", "生活方式干预处方", "待确认项", "需要补充确认", "复查与随访计划", "现有补充剂调整建议"}:
             return styles["section-notice"]
         if canonical_title == "证据来源":
             return styles["section-evidence"]
@@ -321,11 +321,11 @@ class PdfReportExporter:
     ) -> ParagraphStyle:
         if section_title == "证据来源":
             return styles["body-muted"]
-        if is_list and section_title in {"关键指标", "关键指标摘要", "异常指标汇总", "风险提示"}:
+        if is_list and section_title in {"关键指标", "关键指标摘要", "异常指标汇总"}:
             return styles["body-list-risk"]
         if is_list:
             return styles["body-list"]
-        if section_title in {"关键指标", "关键指标摘要", "异常指标汇总", "风险提示"}:
+        if section_title in {"关键指标", "关键指标摘要", "异常指标汇总"}:
             return styles["body-risk"]
         return styles["body-paragraph"]
 
@@ -614,7 +614,7 @@ class PdfReportExporter:
             "总体健康画像",
             "关键指标摘要",
             "异常指标汇总",
-            "风险提示",
+            "安全警示",
             "功能医学系统失衡分析",
             "待确认项",
         }:
@@ -642,6 +642,8 @@ class PdfReportExporter:
             "异常": "<font color='#b04a34'><b>异常</b></font>",
             "偏低": "<font color='#b07a1f'><b>偏低</b></font>",
             "不足": "<font color='#b07a1f'><b>不足</b></font>",
+            "立即就医": "<font color='#b04a34'><b>立即就医</b></font>",
+            "不得自行": "<font color='#b04a34'><b>不得自行</b></font>",
             "(high)": "<font color='#b04a34'><b>(high)</b></font>",
             "(low)": "<font color='#b07a1f'><b>(low)</b></font>",
         }

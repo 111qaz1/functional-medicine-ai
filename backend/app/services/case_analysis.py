@@ -69,6 +69,7 @@ from app.services.report_content import (
     build_plan_summary,
     group_abnormal_items,
 )
+from app.services.report_closing import build_report_closing_sections
 from app.services.questionnaire_import import QuestionnaireParseResult
 
 
@@ -3494,7 +3495,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     DOCUMENT_ANALYSIS_CACHE_VERSION = (
-        "document-analysis-v9-deterministic-document-family"
+        "document-analysis-v10-graded-reference-ranges"
     )
     FOOD_SENSITIVITY_EXTRACTION_FAILURE = (
         "慢性食物敏感结果提取失败，请重新分析或人工补录。"
@@ -4061,7 +4062,17 @@ class CaseAnalysisService:
             self._project_review_to_case(case, analysis)
             self._set_final_stage(analysis, FinalGenerationStatus.checking_safety, 76)
             self._set_final_stage(analysis, FinalGenerationStatus.generating_draft, 88)
-            draft = self.recommendation_service.generate(analysis.case_id, analysis.reviewed_by or "system")
+            if hasattr(self.recommendation_service, "build_final_closing_sections"):
+                draft = self.recommendation_service.generate(
+                    analysis.case_id,
+                    analysis.reviewed_by or "system",
+                    include_closing_sections=False,
+                )
+            else:
+                draft = self.recommendation_service.generate(
+                    analysis.case_id,
+                    analysis.reviewed_by or "system",
+                )
             draft.source_analysis_id = analysis.id
             draft.source_analysis_revision = analysis.revision
             draft.source_snapshot_hash = analysis.snapshot_hash
@@ -5539,14 +5550,30 @@ class CaseAnalysisService:
             return []
         status = self._numeric_reference_status(finding)
         if status is None:
-            return ["数值或参考范围格式无法安全核对，请医生确认。"]
+            return ["复杂参考范围无法安全核对，已保留模型结果，请医生确认。"]
         flag = str(finding.abnormal_flag or "").strip().lower()
+        has_explicit_marker = self._has_explicit_result_direction_marker(
+            finding.source_text,
+            flag,
+        )
         if status == "within_range" and flag not in {"normal", "info"}:
-            return ["异常方向与数值/参考范围不一致。"]
+            return [
+                "报告异常标记与数值/参考范围需人工核对。"
+                if has_explicit_marker
+                else "异常方向与数值/参考范围不一致。"
+            ]
         if flag in {"high", "above", "up"} and status != "high":
-            return ["异常方向与数值/参考范围不一致。"]
+            return [
+                "报告异常标记与数值/参考范围需人工核对。"
+                if has_explicit_marker
+                else "异常方向与数值/参考范围不一致。"
+            ]
         if flag in {"low", "below", "down"} and status != "low":
-            return ["异常方向与数值/参考范围不一致。"]
+            return [
+                "报告异常标记与数值/参考范围需人工核对。"
+                if has_explicit_marker
+                else "异常方向与数值/参考范围不一致。"
+            ]
         return []
 
     @classmethod
@@ -5555,10 +5582,12 @@ class CaseAnalysisService:
         finding: AbnormalFinding,
     ) -> bool:
         """Reject only contradictions proven by the report's own numeric range."""
+        flag = str(finding.abnormal_flag or "").strip().lower()
+        if cls._has_explicit_result_direction_marker(finding.source_text, flag):
+            return False
         status = cls._numeric_reference_status(finding)
         if status is None:
             return False
-        flag = str(finding.abnormal_flag or "").strip().lower()
         if status == "within_range":
             return flag not in {"normal", "info", "patient_reported"}
         if flag in {"high", "above", "up"}:
@@ -5573,9 +5602,28 @@ class CaseAnalysisService:
         finding: AbnormalFinding,
     ) -> str | None:
         value = cls._number(finding.raw_value or finding.result_text)
-        reference = cls._parse_report_reference_range(finding.reference_range)
-        if value is None or reference is None:
+        if value is None:
             return None
+        reference_text = unicodedata.normalize(
+            "NFKC",
+            finding.reference_range or "",
+        ).strip().lower()
+        graded_status, is_graded = cls._parse_graded_reference_status(
+            reference_text,
+            value,
+        )
+        if is_graded:
+            return graded_status
+        reference = cls._parse_report_reference_range(reference_text)
+        if reference is None:
+            return None
+        return cls._status_against_reference(value, reference)
+
+    @staticmethod
+    def _status_against_reference(
+        value: float,
+        reference: tuple[float | None, float | None, bool, bool],
+    ) -> str:
         lower, upper, lower_inclusive, upper_inclusive = reference
         if lower is not None and (
             value < lower or (value == lower and not lower_inclusive)
@@ -5587,6 +5635,95 @@ class CaseAnalysisService:
             return "high"
         return "within_range"
 
+    @classmethod
+    def _parse_graded_reference_status(
+        cls,
+        value: str,
+        numeric_value: float,
+    ) -> tuple[str | None, bool]:
+        """Interpret labeled reference tiers without treating an abnormal tier as normal."""
+        label_pattern = re.compile(
+            r"边缘(?:升高|增高)|临界(?:升高|增高)|"
+            r"偏高|升高|增高|偏低|降低|减低|"
+            r"正常(?:范围|区间|值)?|理想(?:范围|区间|值)?|适宜(?:范围|区间|值)?"
+        )
+        labels = list(label_pattern.finditer(value))
+        if len(labels) < 2:
+            return None, False
+
+        parsed_tiers: list[
+            tuple[str, tuple[float | None, float | None, bool, bool]]
+        ] = []
+        for index, label_match in enumerate(labels):
+            end = labels[index + 1].start() if index + 1 < len(labels) else len(value)
+            segment = value[label_match.start() : end]
+            reference = cls._parse_single_reference_expression(segment)
+            if reference is None:
+                continue
+            label = label_match.group(0)
+            if any(token in label for token in ("偏高", "升高", "增高")):
+                status = "high"
+            elif any(token in label for token in ("偏低", "降低", "减低")):
+                status = "low"
+            else:
+                status = "within_range"
+            parsed_tiers.append((status, reference))
+
+        # A lone parsed clause is not enough to establish the meaning of a
+        # composite range. Preserve the model result for clinician review.
+        if len(parsed_tiers) < 2:
+            return None, True
+        matches = [
+            status
+            for status, reference in parsed_tiers
+            if cls._value_is_within_reference(numeric_value, reference)
+        ]
+        return (matches[0] if len(matches) == 1 else None), True
+
+    @staticmethod
+    def _value_is_within_reference(
+        value: float,
+        reference: tuple[float | None, float | None, bool, bool],
+    ) -> bool:
+        lower, upper, lower_inclusive, upper_inclusive = reference
+        if lower is not None and (
+            value < lower or (value == lower and not lower_inclusive)
+        ):
+            return False
+        if upper is not None and (
+            value > upper or (value == upper and not upper_inclusive)
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _has_explicit_result_direction_marker(
+        source_text: str | None,
+        flag: str,
+    ) -> bool:
+        source = unicodedata.normalize("NFKC", source_text or "")
+        high_marker = bool(
+            "↑" in source
+            or "红色上箭头" in source
+            or re.search(r"(?:^|[\s|:：,，;；(（])H(?:$|[\s|:：,，;；)）])", source, re.IGNORECASE)
+            or re.search(r"[（(]\s*(?:偏高|升高|增高)\s*[）)]", source)
+        )
+        low_marker = bool(
+            "↓" in source
+            or "红色下箭头" in source
+            or re.search(r"(?:^|[\s|:：,，;；(（])L(?:$|[\s|:：,，;；)）])", source, re.IGNORECASE)
+            or re.search(r"[（(]\s*(?:偏低|降低|减低)\s*[）)]", source)
+        )
+        return (
+            flag in {"high", "above", "up"}
+            and high_marker
+            and not low_marker
+        ) or (
+            flag in {"low", "below", "down"}
+            and low_marker
+            and not high_marker
+        )
+
     @staticmethod
     def _parse_report_reference_range(
         value: str | None,
@@ -5595,34 +5732,39 @@ class CaseAnalysisService:
         if not text:
             return None
         text = text.replace(",", "")
+        return CaseAnalysisService._parse_single_reference_expression(text)
+
+    @staticmethod
+    def _parse_single_reference_expression(
+        text: str,
+    ) -> tuple[float | None, float | None, bool, bool] | None:
+        """Parse one range expression; reject strings containing multiple ranges."""
         number = r"-?\d+(?:\.\d+)?"
-        bounded = re.search(
+        bounded_matches = list(re.finditer(
             rf"(?<![\d.])({number})\s*(?:-|–|—|~|～|至|到)\s*({number})(?![\d.])",
             text,
-        )
-        if bounded:
+        ))
+        comparator_matches = list(re.finditer(
+            rf"(<=|>=|≤|≥|<|>|小于等于|大于等于|不高于|不低于|不超过|不少于|小于|大于)\s*({number})",
+            text,
+        ))
+        if len(bounded_matches) + len(comparator_matches) != 1:
+            return None
+
+        if bounded_matches:
+            bounded = bounded_matches[0]
             lower = float(bounded.group(1))
             upper = float(bounded.group(2))
             if lower <= upper:
                 return lower, upper, True, True
             return None
 
-        upper_match = re.search(
-            rf"(<=|≤|<|小于等于|不高于|不超过|小于)\s*({number})",
-            text,
-        )
-        if upper_match:
-            operator = upper_match.group(1)
-            return None, float(upper_match.group(2)), True, operator != "<" and operator != "小于"
-
-        lower_match = re.search(
-            rf"(>=|≥|>|大于等于|不低于|不少于|大于)\s*({number})",
-            text,
-        )
-        if lower_match:
-            operator = lower_match.group(1)
-            return float(lower_match.group(2)), None, operator != ">" and operator != "大于", True
-        return None
+        comparator = comparator_matches[0]
+        operator = comparator.group(1)
+        numeric = float(comparator.group(2))
+        if operator in {"<=", "≤", "<", "小于等于", "不高于", "不超过", "小于"}:
+            return None, numeric, True, operator not in {"<", "小于"}
+        return numeric, None, operator not in {">", "大于"}, True
 
     @classmethod
     def _finding_name_matches_page(cls, name: str, page_text: str) -> bool:
@@ -5862,7 +6004,7 @@ class CaseAnalysisService:
             )
         else:
             total_advice = [
-                f"{item.display_name}：针对医生确认的异常问题，本阶段用于支持相关身体系统功能与整体恢复，首月以稳妥执行和连续观察为主，并结合症状变化、耐受情况及复查趋势评估后续调整方向。"
+                f"{item.display_name}：针对医生确认的异常问题，本阶段用于支持相关身体系统功能与整体恢复。"
                 for item in draft.recommended_skus
             ]
         uncovered_advice = {
@@ -5911,6 +6053,32 @@ class CaseAnalysisService:
             sections["总医嘱说明"] = total_advice
         if plan_summary:
             sections["方案总结"] = plan_summary
+        report_guidance = existing.get("原报告小结与建议", [])
+        if isinstance(report_guidance, str):
+            report_guidance = [report_guidance]
+        if hasattr(self.recommendation_service, "build_final_closing_sections"):
+            closing_sections = self.recommendation_service.build_final_closing_sections(
+                case=case,
+                reviewed_findings=reviewed_findings,
+                recommended_items=draft.recommended_skus,
+                safety_decisions=draft.safety_decisions,
+                risk_notices=draft.red_flags,
+                case_summary=list(draft.case_summary or []),
+                system_findings=structured_findings,
+                report_guidance=list(report_guidance or []),
+            )
+        else:
+            closing_sections = build_report_closing_sections(
+                case=case,
+                reviewed_findings=reviewed_findings,
+                recommended_items=draft.recommended_skus,
+                safety_decisions=draft.safety_decisions,
+                risk_notices=draft.red_flags,
+                case_summary=list(draft.case_summary or []),
+                system_findings=structured_findings,
+                report_guidance=list(report_guidance or []),
+            )
+        sections.update(closing_sections)
         draft.report_sections = sections
         draft.key_lab_highlights = grouped_findings
         draft.structured_system_findings = structured_findings

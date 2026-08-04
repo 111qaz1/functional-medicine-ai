@@ -103,6 +103,9 @@ class LifestylePlanningService:
             "sleep": [],
             "stress": [],
         }
+        action_keys_by_domain: dict[str, set[tuple[str, str]]] = {
+            domain: set() for domain in sections_by_domain
+        }
         selections: list[LifestyleProtocolSelection] = []
         monitoring: list[str] = []
         missing_info: list[str] = []
@@ -132,8 +135,13 @@ class LifestylePlanningService:
                         context=context,
                         case=case,
                     )
-                    if action is not None and action.text not in {item.text for item in sections_by_domain[domain]}:
-                        sections_by_domain[domain].append(action)
+                    if action is None:
+                        continue
+                    action_key = (match.anchor_text, action.text)
+                    if action_key in action_keys_by_domain[domain]:
+                        continue
+                    sections_by_domain[domain].append(action)
+                    action_keys_by_domain[domain].add(action_key)
             monitoring.extend(str(item).strip() for item in protocol.get("monitoring", []) if str(item).strip())
 
         self._add_age_or_pregnancy_movement_adaptation(sections_by_domain, case, context)
@@ -146,6 +154,8 @@ class LifestylePlanningService:
             sections_by_domain["sleep"] = []
         if "stress_support" not in context.lifestyle_tags and not self._has_stress_terms(evidence):
             sections_by_domain["stress"] = []
+
+        self._apply_single_problem_prefix(sections_by_domain, selected)
 
         sections = [
             LifestyleSection(domain=domain, title=DOMAIN_TITLES[domain], actions=actions)
@@ -343,8 +353,8 @@ class LifestylePlanningService:
         quantity = str(raw_action.get("quantity") or "").strip()
         if not text or not quantity:
             return None
-        patient_text = f"针对您的{match.anchor_text}，{text}"
-        if not self._action_is_safe(patient_text, domain=domain, context=context, case=case):
+        safety_text = f"针对您的{match.anchor_text}，{text}"
+        if not self._action_is_safe(safety_text, domain=domain, context=context, case=case):
             return None
         admission = str(protocol.get("admission") or "review")
         action_requires_review = (
@@ -363,7 +373,7 @@ class LifestylePlanningService:
             action_id=f"{protocol['protocol_id']}_{domain}_{index}",
             domain=domain,
             category=str(raw_action.get("category") or "execution"),
-            text=patient_text,
+            text=text,
             anchor_refs=list(match.anchor_refs),
             quantity=quantity,
             safety_level=(
@@ -373,6 +383,27 @@ class LifestylePlanningService:
             ),
             clinician_review_required=action_requires_review,
         )
+
+    @staticmethod
+    def _apply_single_problem_prefix(
+        sections: dict[str, list[LifestyleAction]],
+        selected: list[ProtocolMatch],
+    ) -> None:
+        """Show each protocol problem anchor only on its first surviving action."""
+        anchors_by_protocol = {
+            str(match.protocol.get("protocol_id") or ""): match.anchor_text
+            for match in selected
+            if match.anchor_text
+        }
+        displayed_anchors: set[str] = set()
+        for actions in sections.values():
+            for action in actions:
+                protocol_id = action.action_id.split("_", 1)[0]
+                anchor_text = anchors_by_protocol.get(protocol_id)
+                if not anchor_text or anchor_text in displayed_anchors:
+                    continue
+                action.text = f"针对您的{anchor_text}，{action.text}"
+                displayed_anchors.add(anchor_text)
 
     def _action_is_safe(self, text: str, *, domain: str, context: Any, case: Any) -> bool:
         if any(term.lower() in text.lower() for term in self.forbidden_output_terms):

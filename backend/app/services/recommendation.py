@@ -165,8 +165,6 @@ class RecommendationService:
         high_risk_conditions = ("肾", "肝", "肿瘤", "癌", "甲亢")
         if any(term in condition for condition in context.conditions for term in high_risk_conditions):
             reasons.append("存在重要既往史，需结合肝肾功能与治疗方案复核")
-        if context.medications:
-            reasons.append("当前用药可能影响营养素剂量或服用时机")
         return reasons
 
     def _resolve_dosage(self, product: ProductRule, context: RecommendationContext) -> str:

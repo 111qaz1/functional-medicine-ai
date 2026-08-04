@@ -388,7 +388,11 @@ def generate_external_nutrition_recommendations(
     container = _container(request)
     _require_owned_case(container, case_id, doctor)
     try:
-        draft = container.recommendation_service.generate(case_id, doctor.display_name or doctor.username)
+        draft = container.recommendation_service.generate(
+            case_id,
+            doctor.display_name or doctor.username,
+            include_closing_sections=False,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _nutrition_response(container, draft)

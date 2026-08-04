@@ -125,9 +125,9 @@ def build_llm_provider(
 ):
     local_fallback = GroundedDraftComposer()
     if not settings.llm_draft_composer_enabled:
-        return local_fallback, "local-structured-v1", "local-report-v1"
+        return local_fallback, "local-structured-v1", "local-report-v5-priority-referral"
     if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
-        return local_fallback, "local-structured-v1", "local-report-v1"
+        return local_fallback, "local-structured-v1", "local-report-v5-priority-referral"
 
     remote_provider = OpenAICompatibleGroundedComposer(
         base_url=settings.llm_base_url,
@@ -139,7 +139,25 @@ def build_llm_provider(
         fallback=local_fallback,
         request_controller=request_controller,
     )
-    return remote_provider, f"remote:{settings.llm_model}", "grounded-remote-report-v1"
+    return remote_provider, f"remote:{settings.llm_model}", "grounded-remote-report-v5-priority-referral"
+
+
+def build_follow_up_provider(
+    settings: AppSettings,
+    request_controller: LLMRequestController | None = None,
+):
+    if not (settings.llm_base_url and settings.llm_api_key and settings.llm_model):
+        return None
+    return OpenAICompatibleGroundedComposer(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        api_style=settings.llm_api_style,
+        timeout_seconds=settings.llm_timeout_seconds,
+        temperature=min(settings.llm_temperature, 0.1),
+        fallback=GroundedDraftComposer(),
+        request_controller=request_controller,
+    )
 
 
 def build_rag_fusion_provider(
@@ -227,6 +245,10 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         settings,
         llm_request_controller,
     )
+    follow_up_provider = build_follow_up_provider(
+        settings,
+        llm_request_controller,
+    )
     rag_fusion_provider = build_rag_fusion_provider(
         settings,
         llm_request_controller,
@@ -262,6 +284,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service=indicator_service,
         vector_store=vector_store,
         llm_provider=llm_provider,
+        follow_up_provider=follow_up_provider,
         parsing_service=parsing_service,
         standardization_service=finding_standardization_service,
         rag_retriever=rag_retriever,

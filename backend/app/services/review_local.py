@@ -29,14 +29,14 @@ _CHAPTER_PREFIX_PATTERN = re.compile(
 _REPORT_LIST_SECTIONS = {
     "异常指标汇总",
     "慢性食物敏感检测结果",
-    "风险提示",
     "生活方式干预",
     "生活方式干预处方",
-    "后续检查建议",
     "首月营养素干预方案",
     "现有补充剂调整建议",
     "需要补充确认",
     "待确认项",
+    "复查与随访计划",
+    "安全警示",
 }
 
 
@@ -309,8 +309,6 @@ class ReviewService:
 
     def _select_publishable_report(self, draft, case, publishable_summary: str | None) -> str:
         if publishable_summary and publishable_summary.strip():
-            if self._looks_like_legacy_customer_report(publishable_summary):
-                return self._render_report(draft, case)
             if not self._looks_like_internal_generated_report(publishable_summary) and not self._looks_like_corrupted_publishable_report(publishable_summary):
                 report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
                 return self._ensure_report_nutrition_safety(report, draft)
@@ -320,8 +318,7 @@ class ReviewService:
         if not publishable_summary or not publishable_summary.strip():
             return False
         return (
-            not self._looks_like_legacy_customer_report(publishable_summary)
-            and not self._looks_like_internal_generated_report(publishable_summary)
+            not self._looks_like_internal_generated_report(publishable_summary)
             and not self._looks_like_corrupted_publishable_report(publishable_summary)
         )
 
@@ -547,7 +544,6 @@ class ReviewService:
     def is_stale_publishable_report(self, report_text: str | None) -> bool:
         return (
             self._looks_like_internal_generated_report(report_text)
-            or self._looks_like_legacy_customer_report(report_text)
             or self._looks_like_unstructured_customer_report(report_text)
         )
 
@@ -584,30 +580,6 @@ class ReviewService:
         if question_count / max(len(stripped), 1) > 0.12 and cjk_count < 50:
             return True
         return False
-
-    def _looks_like_legacy_customer_report(self, report_text: str | None) -> bool:
-        if not report_text:
-            return False
-        text = self._canonicalized_report_headings(str(report_text))
-        legacy_markers = (
-            "# 功能医学营养与生活方式建议",
-            "## 总体健康画像",
-            "## 关键指标",
-            "## 个性化营养素方案",
-            "## 生活方式干预重点",
-            "## 复查与跟进建议",
-        )
-        new_markers = (
-            "# 功能医学综合分析与首月干预方案",
-            "## 核心结论与健康画像",
-            "## 异常指标汇总",
-            "## 功能医学系统失衡分析",
-            "## 生活方式干预处方",
-            "## 首月营养素干预方案",
-        )
-        if any(marker in text for marker in new_markers):
-            return False
-        return sum(1 for marker in legacy_markers if marker in text) >= 2
 
     def _looks_like_unstructured_customer_report(self, report_text: str | None) -> bool:
         if not report_text:
@@ -770,7 +742,7 @@ class ReviewService:
         sections = draft.report_sections or {}
         return any(
             sections.get(key)
-            for key in ("RAG总体健康画像", "RAG异常指标解释", "RAG生活方式干预", "RAG复查建议")
+            for key in ("RAG总体健康画像", "RAG异常指标解释", "RAG生活方式干预")
         )
 
     def _ensure_report_rag_enhancement(self, report_text: str, draft, case) -> str:
@@ -839,24 +811,6 @@ class ReviewService:
                 updated = self._append_clause_to_report_section_item(result, "生活方式干预重点", clause, item_index=row_index)
             if updated != result:
                 used_lifestyle_rows.add(row_index)
-                result = updated
-
-        follow_items = self._extract_report_section_items(result, "后续检查建议")
-        if not follow_items:
-            follow_items = self._extract_report_section_items(result, "复查与跟进建议")
-        used_follow_rows: set[int] = set()
-        for rag_item in self._customerize_items(sections.get("RAG复查建议", []))[:5]:
-            row_index = self._best_follow_up_row(rag_item, follow_items)
-            if row_index is None:
-                row_index = self._fallback_follow_up_row_for_rag(rag_item, follow_items)
-            if row_index is None or row_index in used_follow_rows:
-                continue
-            clause = self._rag_customer_clause(rag_item, max_len=105, purpose="follow_up")
-            updated = self._append_clause_to_report_section_item(result, "后续检查建议", clause, item_index=row_index)
-            if updated == result:
-                updated = self._append_clause_to_report_section_item(result, "复查与跟进建议", clause, item_index=row_index)
-            if updated != result:
-                used_follow_rows.add(row_index)
                 result = updated
 
         return result
@@ -937,7 +891,7 @@ class ReviewService:
     def _llm_fusion_target_sections(self, report_text: str) -> dict[str, list[str]]:
         return {
             title: self._extract_report_section_items(report_text, title)
-            for title in ("核心结论与健康画像", "异常指标汇总", "生活方式干预处方", "后续检查建议")
+            for title in ("核心结论与健康画像", "异常指标汇总", "生活方式干预处方")
         }
 
     def _llm_fusion_rag_context(self, draft) -> dict[str, list[dict[str, str]]]:
@@ -946,7 +900,6 @@ class ReviewService:
             "核心结论与健康画像": ("health", "RAG总体健康画像"),
             "异常指标汇总": ("indicator", "RAG异常指标解释"),
             "生活方式干预处方": ("lifestyle", "RAG生活方式干预"),
-            "后续检查建议": ("followup", "RAG复查建议"),
         }
         context: dict[str, list[dict[str, str]]] = {}
         for title, (prefix, source_key) in source_map.items():
@@ -1382,26 +1335,6 @@ class ReviewService:
                     return index
         return None
 
-    def _fallback_follow_up_row_for_rag(self, rag_item: str, follow_items: list[str]) -> int | None:
-        if not follow_items:
-            return None
-        normalized = self._normalize_text(rag_item)
-        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
-            return self._first_matching_row(follow_items, ("甲状腺", "tsh", "ft3", "ft4", "抗体"))
-        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
-            return self._first_matching_row(follow_items, ("血糖", "胰岛素", "hba1c", "复查"))
-        if any(term in normalized for term in ("睡眠", "压力", "hpa", "皮质醇")):
-            return self._first_matching_row(follow_items, ("睡眠", "压力", "回访"))
-        return None
-
-    def _first_matching_row(self, items: list[str], terms: tuple[str, ...]) -> int | None:
-        normalized_terms = [self._normalize_text(term) for term in terms]
-        for index, item in enumerate(items):
-            normalized_item = self._normalize_text(item)
-            if any(term and term in normalized_item for term in normalized_terms):
-                return index
-        return None
-
     def _render_report(self, draft, case) -> str:
         lines = ["# 功能医学综合分析与首月干预方案", ""]
         sections = draft.report_sections or {}
@@ -1420,6 +1353,8 @@ class ReviewService:
                 ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
                 ("总医嘱说明", total_advice),
                 ("方案总结", sections.get("方案总结")),
+                ("复查与随访计划", sections.get("复查与随访计划")),
+                ("安全警示", sections.get("安全警示")),
             ]
             self._append_customer_report_sections(lines, ordered_sections)
             report = "\n".join(lines).strip()
@@ -1434,7 +1369,6 @@ class ReviewService:
             sections.get("首月营养素干预方案") or sections.get("个性化营养素方案") or sections.get("营养素推荐"),
         )
         nutrition_plan = list(dict.fromkeys(nutrition_plan))
-        follow_up = self._customer_follow_up(sections)
         missing_info = self._public_missing_info(sections.get("待确认项", draft.missing_info))
         draft_health = self._customerize_items(
             sections.get("核心结论与健康画像") or sections.get("总体健康画像")
@@ -1454,16 +1388,15 @@ class ReviewService:
         ordered_sections = [
             ("核心结论与健康画像", health_portrait),
             ("异常指标汇总", key_indicators),
-            ("风险提示", self._customerize_items(sections.get("风险提示", draft.red_flags))),
             ("功能医学系统失衡分析", system_analysis),
             ("生活方式干预处方", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
-            ("后续检查建议", follow_up),
             ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
             ("总医嘱说明", [prescription_advice] if prescription_advice else []),
             ("现有补充剂调整建议", supplement_adjustments),
             ("需要补充确认", missing_info),
-            ("重要提醒", self._customer_notice()),
             ("方案总结", sections.get("方案总结")),
+            ("复查与随访计划", sections.get("复查与随访计划")),
+            ("安全警示", sections.get("安全警示")),
         ]
 
         if draft.abstain_reason:
@@ -1503,7 +1436,7 @@ class ReviewService:
         return [str(item).strip() for item in content if str(item).strip()]
 
     def _is_report_subheading(self, item: str) -> bool:
-        return bool(re.match(r"^###\s*(?:\d+[\.\uFF0E、]|[A-Z]\.)", str(item or "").strip()))
+        return str(item or "").strip().startswith("### ")
 
     def _structure_system_analysis(self, items: list[str]) -> list[str]:
         if not items or any(self._is_report_subheading(item) for item in items):
@@ -1904,64 +1837,6 @@ class ReviewService:
         items.append("安全边界：如正在怀孕/哺乳、使用抗凝药、降糖药、甲状腺药或其他长期药物，任何饮食限制、禁食、排毒和补剂升级都应先让医生确认。")
         return list(dict.fromkeys(items))
 
-    def _customer_follow_up(self, sections: dict) -> list[str]:
-        test_items = self._customerize_items(sections.get("后续检查建议") or sections.get("功能医学检测建议", []))
-        follow_items = self._customerize_items(sections.get("随访计划", []))
-        rag_items = self._customerize_items(sections.get("RAG复查建议", []))
-        items = test_items[:4] + follow_items[:3]
-        for item in test_items[4:] + follow_items[3:]:
-            if len(items) >= 8:
-                break
-            items.append(item)
-        items = self._fuse_rag_into_follow_up(items, rag_items)
-        items = list(dict.fromkeys(items))[:8]
-        if not items:
-            items = [
-                "建议2周内回访一次，重点看睡眠、精力、胃肠反应和方案执行难点。",
-                "建议8-12周后结合本次异常指标做复查，用趋势来判断方案是否需要调整。",
-            ]
-        return items
-
-    def _fuse_rag_into_follow_up(self, follow_items: list[str], rag_items: list[str]) -> list[str]:
-        items = list(follow_items)
-        used_rows: set[int] = set()
-        for rag_item in rag_items[:5]:
-            row_index = self._best_follow_up_row(rag_item, items)
-            if row_index is None:
-                row_index = self._fallback_follow_up_row_for_rag(rag_item, items)
-            if row_index is None or row_index in used_rows:
-                continue
-            clause = self._rag_customer_clause(rag_item, max_len=105, purpose="follow_up")
-            if clause:
-                items[row_index] = f"{items[row_index].rstrip('。')}。{clause}"
-                used_rows.add(row_index)
-        return items
-
-    def _best_follow_up_row(self, rag_item: str, follow_items: list[str]) -> int | None:
-        normalized = self._normalize_text(rag_item)
-        row_preferences = []
-        if any(term in normalized for term in ("甲状腺", "tsh", "ft3", "ft4", "tpo", "tgab", "桥本")):
-            row_preferences.extend(("甲状腺", "tsh"))
-        if any(term in normalized for term in ("维生素d", "25ohd", "免疫")):
-            row_preferences.extend(("25", "维生素d"))
-        if any(term in normalized for term in ("血糖", "胰岛素", "hba1c", "代谢")):
-            row_preferences.extend(("血糖", "胰岛素", "hba1c"))
-        if any(term in normalized for term in ("压力", "皮质醇", "睡眠", "hpa")):
-            row_preferences.extend(("压力", "睡眠", "皮质醇"))
-
-        for preferred in row_preferences:
-            preferred_normalized = self._normalize_text(preferred)
-            for index, item in enumerate(follow_items):
-                if preferred_normalized in self._normalize_text(item):
-                    return index
-        return None
-
-    def _customer_notice(self) -> list[str]:
-        return [
-            "本报告用于健康管理和营养生活方式指导，不能替代医学诊断或治疗。",
-            "如果出现胸痛、持续高热、黑便/便血、明显水肿、严重头晕或其他急性不适，请及时就医。",
-        ]
-
     def _rag_customer_clause(self, rag_item: str, *, max_len: int, purpose: str) -> str:
         cleaned = self._strip_customer_rag_prefix(rag_item)
         cleaned = strip_textbook_internal_markers(cleaned)
@@ -2006,10 +1881,6 @@ class ReviewService:
                 return "因此，减少久坐、增加可持续的低到中等强度活动，可作为改善炎症负担和代谢恢复的基础策略。"
             if "睡眠" in cleaned or "压力" in cleaned:
                 return "因此，睡眠节律和压力恢复应作为生活方式干预的核心观察点。"
-            return ""
-        if purpose == "follow_up":
-            if cleaned.startswith("复查时"):
-                return cleaned.rstrip("。") + "。"
             return ""
         return cleaned.rstrip("。") + "。"
 

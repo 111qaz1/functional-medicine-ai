@@ -20,6 +20,7 @@ import {
   AbnormalFinding,
   CaseAnalysis,
   CaseDetailResponse,
+  CurrentSupplement,
   DraftRecommendationItem,
   RecommendationDraft
 } from "../lib/types";
@@ -280,6 +281,7 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [payload, setPayload] = useState<CaseDetailResponse | null>(null);
   const [analysis, setAnalysis] = useState<CaseAnalysis | null>(null);
   const [findings, setFindings] = useState<AbnormalFinding[]>([]);
+  const [currentSupplements, setCurrentSupplements] = useState<CurrentSupplement[]>([]);
   const [reviewerId, setReviewerId] = useState("reviewer-01");
   const [clinicalSummary, setClinicalSummary] = useState("");
   const [publishableSummary, setPublishableSummary] = useState("");
@@ -341,11 +343,17 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         ? next.reviewed_abnormal_findings
         : next.abnormal_findings;
       setFindings(cloneFindings(source));
+      setCurrentSupplements((next.current_supplements ?? []).map((item) => ({
+        ...item,
+        source_file_ids: [...item.source_file_ids],
+        source_file_names: [...item.source_file_names]
+      })));
       return next;
     } catch (err) {
       if (!options?.quiet404) throw err;
       setAnalysis(null);
       setFindings([]);
+      setCurrentSupplements([]);
       return null;
     }
   }
@@ -668,6 +676,13 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setReviewActionNotice(null);
       return;
     }
+    if (currentSupplements.some((item) => !item.name.trim())) {
+      const message = "当前服用营养素名称不能为空。";
+      setError(message);
+      setReviewActionError(message);
+      setReviewActionNotice(null);
+      return;
+    }
     try {
       setBusy(true);
       setOperation({ placement: "draft", title: "生成结构化草案", stage: "保存医生校对", percent: 3, status: "running" });
@@ -678,9 +693,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         analysis.id,
         reviewerId,
         analysis.revision,
-        findings
+        findings,
+        currentSupplements
       );
       setAnalysis(result.analysis);
+      setCurrentSupplements(result.analysis.current_supplements ?? []);
       const message = "异常校对已保存，草案生成任务已进入后台队列。可以刷新页面或离开后再回来查看进度。";
       setNotice(message);
       setReviewActionNotice(message);
@@ -936,6 +953,61 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                     <p className="muted">MSQ 由固定模板结构化提取；扫描版由模型单次视觉识别兜底，不进入异常指标校对区。</p>
                   </section>
                 ) : null}
+                <section className="synthesis-block synthesis-block--supplements">
+                  <div className="synthesis-block__head">
+                    <h3>当前正在服用的营养素</h3>
+                    <span>医生可编辑</span>
+                  </div>
+                  {currentSupplements.length ? (
+                    <div className="current-supplement-list">
+                      {currentSupplements.map((item, index) => (
+                        <div className="current-supplement-row" key={item.id}>
+                          <div>
+                            <input
+                              value={item.name}
+                              maxLength={120}
+                              disabled={busy || Boolean(payload.review_decision)}
+                              aria-label={`当前服用营养素 ${index + 1}`}
+                              onChange={(event) => setCurrentSupplements((current) => current.map((candidate) => (
+                                candidate.id === item.id ? { ...candidate, name: event.target.value } : candidate
+                              )))}
+                            />
+                            <p className="muted">
+                              {item.doctor_added
+                                ? "医生补充"
+                                : `来源：${item.source_file_names.join("、") || "上传资料"}`}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--danger"
+                            disabled={busy || Boolean(payload.review_decision)}
+                            onClick={() => setCurrentSupplements((current) => current.filter((candidate) => candidate.id !== item.id))}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="muted">未从当前上传资料中识别到正在服用的营养素，可由医生手动补充。</p>}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy || Boolean(payload.review_decision) || currentSupplements.length >= 50}
+                    onClick={() => setCurrentSupplements((current) => [
+                      ...current,
+                      {
+                        id: `supplement_manual_${Date.now()}`,
+                        name: "",
+                        source_file_ids: [],
+                        source_file_names: [],
+                        doctor_added: true
+                      }
+                    ])}
+                  >
+                    添加营养素
+                  </button>
+                </section>
               </div>
             </SectionCard>
 
@@ -1138,6 +1210,11 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                         ) : null}
                         {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
                         {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
+                        {item.current_supplement_overlap_notice ? (
+                          <p className="current-supplement-overlap-notice">
+                            <strong>可能重复服用：</strong>{item.current_supplement_overlap_notice}
+                          </p>
+                        ) : null}
                       </div>
                       <label>
                         <input

@@ -951,9 +951,36 @@ textarea {
 
 .synthesis-block ul { margin-bottom: 0; }
 .synthesis-block--msq { background: rgba(235, 248, 245, 0.82); }
+.synthesis-block--supplements { background: rgba(248, 246, 255, 0.82); }
 .synthesis-block__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .synthesis-block__head span { color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
 .msq-summary-grid > div { padding: 13px 14px; border-radius: 14px; background: rgba(255, 255, 255, 0.72); }
+
+.current-supplement-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.current-supplement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.current-supplement-row input { width: 100%; }
+.current-supplement-row p { margin: 5px 0 0; }
+
+.current-supplement-overlap-notice {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(188, 124, 31, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 244, 220, 0.8);
+  color: #8a5513;
+  line-height: 1.65;
+}
 
 .audit-section details > summary { cursor: pointer; color: var(--accent); font-weight: 800; }
 .audit-section__body { margin-top: 16px; }

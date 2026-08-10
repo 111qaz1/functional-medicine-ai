@@ -93,6 +93,9 @@ class ReviewService:
         report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._remove_lifestyle_confirmation_clauses(report)
         report = self._normalize_customer_visible_report_text(report)
+        # Generic report cleanup removes terminal punctuation. Reinsert the locked
+        # portrait afterwards so its exact three-sentence contract is preserved.
+        report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._number_customer_sections(report)
         pdf_path = self.pdf_exporter.export(
             draft_id=draft_id,
@@ -151,6 +154,7 @@ class ReviewService:
         report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._remove_lifestyle_confirmation_clauses(report)
         report = self._normalize_customer_visible_report_text(report)
+        report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._number_customer_sections(report)
         review.publishable_report = report
         pdf_path = self.pdf_exporter.export(
@@ -448,12 +452,24 @@ class ReviewService:
         return "\n".join(lines).strip()
 
     def _ensure_core_health_portrait_section(self, report_text: str, draft, case) -> str:
-        portrait_items = build_core_health_portrait(
-            getattr(draft, "structured_system_findings", []) or [],
-            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
-            objective_evidence_items=getattr(draft, "key_lab_highlights", []) or [],
-            risk_notices=getattr(draft, "red_flags", []) or [],
-        )
+        persisted = getattr(draft, "core_health_portrait", None)
+        if persisted is not None and str(getattr(persisted, "text", "") or "").strip():
+            portrait_items = [str(persisted.text).strip()]
+        else:
+            existing = (getattr(draft, "report_sections", {}) or {}).get(
+                "核心结论与健康画像",
+                [],
+            )
+            portrait_items = self._as_list(existing)
+        if not portrait_items:
+            # Legacy drafts predate the structured decision. Rebuild only for those
+            # records; new drafts always reuse the reviewed deterministic result.
+            portrait_items = build_core_health_portrait(
+                getattr(draft, "structured_system_findings", []) or [],
+                confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
+                objective_evidence_items=getattr(draft, "key_lab_highlights", []) or [],
+                risk_notices=getattr(draft, "red_flags", []) or [],
+            )
         if not portrait_items:
             return report_text
 
@@ -757,15 +773,6 @@ class ReviewService:
         result = report_text
         abnormal_indicators = self._abnormal_indicators(case)
 
-        for rag_item in self._customerize_items(sections.get("RAG总体健康画像", []))[:4]:
-            clause = self._rag_customer_clause(rag_item, max_len=140, purpose="health")
-            updated = self._append_clause_to_report_section_item(result, "核心结论与健康画像", clause, item_index=0)
-            if updated == result:
-                updated = self._append_clause_to_report_section_item(result, "总体健康画像", clause, item_index=0)
-            if updated != result:
-                result = updated
-                break
-
         indicator_title = "异常指标汇总"
         indicator_items = self._extract_report_section_items(result, indicator_title)
         if not indicator_items:
@@ -891,20 +898,27 @@ class ReviewService:
     def _llm_fusion_target_sections(self, report_text: str) -> dict[str, list[str]]:
         return {
             title: self._extract_report_section_items(report_text, title)
-            for title in ("核心结论与健康画像", "异常指标汇总", "生活方式干预处方")
+            for title in ("异常指标汇总", "生活方式干预处方")
         }
 
     def _llm_fusion_rag_context(self, draft) -> dict[str, list[dict[str, str]]]:
         sections = draft.report_sections or {}
         source_map = {
-            "核心结论与健康画像": ("health", "RAG总体健康画像"),
-            "异常指标汇总": ("indicator", "RAG异常指标解释"),
-            "生活方式干预处方": ("lifestyle", "RAG生活方式干预"),
+            # Legacy retrieval may classify a general metabolic explanation as
+            # overall-health context. It may inform an indicator explanation, but
+            # still never receives permission to rewrite the health portrait.
+            "异常指标汇总": ("indicator", ("RAG异常指标解释", "RAG总体健康画像")),
+            "生活方式干预处方": ("lifestyle", ("RAG生活方式干预",)),
         }
         context: dict[str, list[dict[str, str]]] = {}
-        for title, (prefix, source_key) in source_map.items():
+        for title, (prefix, source_keys) in source_map.items():
             items = []
-            for index, item in enumerate(self._customerize_items(sections.get(source_key, []))[:6], start=1):
+            source_items = [
+                item
+                for source_key in source_keys
+                for item in self._customerize_items(sections.get(source_key, []))
+            ][:6]
+            for index, item in enumerate(source_items, start=1):
                 text = strip_textbook_internal_markers(self._strip_customer_rag_prefix(item))
                 if text and not self._llm_text_quality_reason(text):
                     items.append({"id": f"{prefix}_{index}", "text": text[:420]})

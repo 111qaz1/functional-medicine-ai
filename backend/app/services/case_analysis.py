@@ -71,12 +71,12 @@ from app.services.evidence_policy import classify_finding_evidence, system_evide
 from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.report_content import (
     ReportAbnormalItem,
-    build_core_health_portrait,
     build_plan_summary,
     group_abnormal_items,
 )
 from app.services.report_closing import build_report_closing_sections
 from app.services.questionnaire_import import QuestionnaireParseResult
+from app.services.health_portrait import build_core_health_portrait_result
 
 
 logger = logging.getLogger(__name__)
@@ -6010,12 +6010,6 @@ class CaseAnalysisService:
                 or analysis.system_findings
             ),
         )
-        health_portrait = build_core_health_portrait(
-            structured_findings,
-            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
-            abnormal_findings=reviewed_findings,
-            risk_notices=getattr(draft, "red_flags", []) or [],
-        )
         grouped_findings = self._group_abnormal_findings(
             case,
             reviewed_findings,
@@ -6104,6 +6098,26 @@ class CaseAnalysisService:
             draft.recommended_skus,
             findings_by_id,
         )
+        questionnaire = getattr(case, "questionnaire", None)
+        portrait_result = build_core_health_portrait_result(
+            structured_findings,
+            confirmed_findings=getattr(case, "confirmed_clinical_findings", []) or [],
+            abnormal_findings=reviewed_findings,
+            objective_evidence_items=grouped_findings,
+            risk_notices=getattr(draft, "red_flags", []) or [],
+            age=getattr(questionnaire, "age", None),
+            medication_count=len(getattr(questionnaire, "medications", []) or []),
+            current_supplement_count=len(getattr(case, "current_supplements", []) or []),
+            recommended_items=draft.recommended_skus,
+            lifestyle_plan=getattr(draft, "lifestyle_plan", None),
+        )
+        health_portrait = [portrait_result.text]
+        draft.core_health_portrait = portrait_result
+        draft.manual_review_required = (
+            draft.manual_review_required or portrait_result.manual_review_required
+        )
+        draft.internal_audit = dict(getattr(draft, "internal_audit", {}) or {})
+        draft.internal_audit["core_health_portrait"] = portrait_result.model_dump(mode="json")
 
         sections: dict[str, list[str]] = {}
         if health_portrait:

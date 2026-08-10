@@ -76,7 +76,8 @@ class PlanSummaryTests(unittest.TestCase):
 
         self.assertIn("尿酸：偏高", grouped[0])
         self.assertNotIn("待确认", grouped[0])
-        self.assertIn("尿酸偏高", portrait)
+        self.assertIn("现有证据尚不足", portrait)
+        self.assertEqual(portrait.count("。"), 3)
         self.assertNotIn("μmol/L", portrait)
 
     def test_three_problem_summary_matches_confirmed_style(self) -> None:
@@ -315,8 +316,7 @@ class CoreHealthPortraitTests(unittest.TestCase):
             ],
         )[0]
 
-        self.assertIn("「肠道菌群失衡—甲状腺结节—乳腺结节", portrait)
-        self.assertIn("肠道菌群失衡阳性", portrait)
+        self.assertIn("现有证据尚不足", portrait)
         self.assertNotIn("葵花籽", portrait)
         self.assertNotIn("南瓜", portrait)
         self.assertNotIn("食物过敏IgG", portrait)
@@ -345,7 +345,7 @@ class CoreHealthPortraitTests(unittest.TestCase):
             ],
         )[0]
 
-        self.assertIn("「睡眠节律异常」一条主线", portrait)
+        self.assertIn("食物敏感结果强设干预枢纽", portrait)
         self.assertNotIn("蛋清", portrait)
         self.assertNotIn("胃肠消化", portrait)
 
@@ -413,11 +413,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
 
         self.assertEqual(len(portrait), 1)
         self.assertEqual(portrait[0].count("。"), 3)
-        self.assertIn("肾功能异常", portrait[0])
-        self.assertIn("高尿酸血症", portrait[0])
-        self.assertIn("神经睡眠节律异常", portrait[0])
-        self.assertIn("肌酐100 μmol/L↑/尿酸435 μmol/L↑", portrait[0])
-        self.assertIn("首月以「肾脏减负」为核心", portrait[0])
+        self.assertIn("经过白名单验证的跨系统机制主线", portrait[0])
+        self.assertIn("不依据单项严重度", portrait[0])
         self.assertNotIn("患者自述", portrait[0])
 
     def test_risk_notice_replaces_window_wording_with_medical_evaluation(self) -> None:
@@ -434,7 +431,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
             risk_notices=["存在胸痛红旗，需要及时就医。"],
         )[0]
 
-        self.assertIn("应优先完成医学评估与风险控制", portrait)
+        self.assertIn("优先转诊或紧急医学评估", portrait)
+        self.assertIn("报告其余部分继续生成", portrait)
         self.assertNotIn("重要窗口期", portrait)
 
     def test_explicit_serious_objective_abnormality_uses_risk_wording(self) -> None:
@@ -457,7 +455,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
             ],
         )[0]
 
-        self.assertIn("应优先完成医学评估与风险控制", portrait)
+        self.assertIn("现有证据尚不足", portrait)
+        self.assertIn("报告其余部分继续生成", portrait)
         self.assertNotIn("重要窗口期", portrait)
 
     def test_uses_system_fallback_when_only_a_lab_name_is_available(self) -> None:
@@ -476,8 +475,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
             ],
         )[0]
 
-        self.assertIn("「肾脏与泌尿代谢异常」一条主线", portrait)
-        self.assertIn("肌酐110 μmol/L↑", portrait)
+        self.assertIn("现有证据尚不足", portrait)
+        self.assertNotIn("一条主线", portrait)
 
     def test_limits_portrait_to_five_distinct_system_mainlines(self) -> None:
         structured = [
@@ -496,7 +495,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
 
         portrait = build_core_health_portrait(structured)[0]
 
-        self.assertIn("五条主线", portrait)
+        self.assertNotIn("五条主线", portrait)
+        self.assertIn("现有证据尚不足", portrait)
         self.assertNotIn("神经、情绪与睡眠节律异常", portrait)
 
     def test_review_replaces_old_and_rag_augmented_portrait_once(self) -> None:
@@ -529,8 +529,8 @@ class CoreHealthPortraitTests(unittest.TestCase):
         self.assertEqual(replaced.count("核心结论与健康画像"), 1)
         self.assertNotIn("旧版画像", replaced)
         self.assertNotIn("RAG附加内容", replaced)
-        self.assertIn("肠道菌群失衡", replaced)
-        self.assertIn("首月以「肠道微生态与屏障修复」为核心", replaced)
+        self.assertIn("经过白名单验证的跨系统机制主线", replaced)
+        self.assertIn("报告其余部分继续生成", replaced)
 
 
 class LifestyleReportTextTests(unittest.TestCase):

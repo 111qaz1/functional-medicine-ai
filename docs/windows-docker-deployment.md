@@ -44,9 +44,9 @@ notepad .env
 确认以下配置：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:7800
 BACKEND_PORT=7800
 FRONTEND_PORT=3100
+FM_PUBLIC_BASE_URL=http://localhost:3100
 FM_SESSION_COOKIE_SECURE=0
 
 LLM_BASE_URL=https://api.moonshot.cn/v1
@@ -161,9 +161,9 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-- 前端无法调用后端：检查 `NEXT_PUBLIC_API_BASE_URL`，修改后必须重新构建前端镜像。
+- 前端无法调用后端：检查 `docker compose logs frontend`，并确认前端容器中的 `INTERNAL_API_BASE_URL` 为 `http://backend:8000`。
 - Kimi 请求失败：检查 API Key、账户额度和服务器网络。
 - RAG 模型缺失：复制完整模型到 `bge-m3`，或关闭 `FM_RAG_ENABLED`。
-- 端口冲突：修改 `.env` 中的 `BACKEND_PORT`、`FRONTEND_PORT`，同时修改 `NEXT_PUBLIC_API_BASE_URL`。
+- 端口冲突：修改 `.env` 中的 `BACKEND_PORT`、`FRONTEND_PORT`；如使用外部报告下载地址，同时更新 `FM_PUBLIC_BASE_URL`。
 
 Docker Desktop 安装要求以 [Docker 官方文档](https://docs.docker.com/desktop/setup/install/windows-install/) 为准。

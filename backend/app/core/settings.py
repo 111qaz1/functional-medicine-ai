@@ -31,6 +31,7 @@ class AppSettings:
     sqlite_path: Path
     knowledge_root: Path
     report_reference_path: Path
+    public_base_url: str | None = None
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -100,6 +101,7 @@ def load_settings() -> AppSettings:
     sqlite_path = _resolve_path("FM_SQLITE_PATH", runtime_dir / "app.sqlite3")
     knowledge_root = _resolve_path("FM_KNOWLEDGE_ROOT", project_root / "knowledge")
     report_reference_path = _resolve_path("FM_REPORT_REFERENCE_PATH", project_root / "report-reference.pdf")
+    public_base_url = (os.getenv("FM_PUBLIC_BASE_URL") or "").strip().rstrip("/") or None
     llm_base_url = os.getenv("LLM_BASE_URL") or None
     llm_api_key = normalize_llm_api_key(os.getenv("LLM_API_KEY"))
     llm_model = os.getenv("LLM_MODEL") or None
@@ -172,6 +174,7 @@ def load_settings() -> AppSettings:
         sqlite_path=sqlite_path,
         knowledge_root=knowledge_root,
         report_reference_path=report_reference_path,
+        public_base_url=public_base_url,
         llm_base_url=llm_base_url,
         llm_api_key=llm_api_key,
         llm_model=llm_model,

@@ -19,6 +19,7 @@ services:
       FM_RAG_MODEL_PATH: ${FM_RAG_MODEL_PATH:-/models/bge-m3}
       FM_RAG_LOCAL_FILES_ONLY: ${FM_RAG_LOCAL_FILES_ONLY:-1}
       FM_EXTERNAL_TRUST_SHARED_SECRET: ${FM_EXTERNAL_TRUST_SHARED_SECRET:-}
+      FM_PUBLIC_BASE_URL: ${FM_PUBLIC_BASE_URL:-}
       HF_HOME: ${HF_HOME:-/app/.cache/huggingface}
       SENTENCE_TRANSFORMERS_HOME: ${SENTENCE_TRANSFORMERS_HOME:-/app/.cache/huggingface}
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
@@ -41,10 +42,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://backend:8000}
     depends_on:
       backend:
         condition: service_healthy

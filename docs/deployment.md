@@ -21,8 +21,9 @@
 cp .env.example .env
 ```
 
-2. 根据部署机器调整路径和 API 地址
-- `NEXT_PUBLIC_API_BASE_URL`
+2. 根据部署机器调整路径和服务地址
+- `INTERNAL_API_BASE_URL`（非 Docker 本地开发时可选）
+- `FM_PUBLIC_BASE_URL`（正式公网域名）
 - `FM_RUNTIME_DIR`
 - `FM_UPLOAD_DIR`
 - `FM_SQLITE_PATH`
@@ -72,6 +73,6 @@ docker compose up --build
 
 ## 常见注意事项
 
-- 如果前端能打开但请求后端失败，先检查 `NEXT_PUBLIC_API_BASE_URL` 是否指向浏览器可访问地址
+- 如果前端能打开但请求后端失败，检查 Next.js 的 `INTERNAL_API_BASE_URL` 和后端健康状态
 - 如果部署方没有 `knowledge/` 目录或目录为空，系统仍能启动，但外部资料清单会为空
 - 如果以后要接云端 LLM，建议只把它作为报告整理层，不改变本地规则边界

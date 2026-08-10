@@ -61,13 +61,12 @@ cp .env.example .env
 nano .env
 ```
 
-将 `SERVER_IP` 替换为服务器实际 IP；使用域名时替换为域名。
+将 `SERVER_IP` 替换为服务器实际 IP；使用域名时替换为域名。浏览器 API 统一由 Next.js 同源转发，不需要配置浏览器可见的后端地址。
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://SERVER_IP
-FM_CORS_ALLOW_ORIGINS=http://SERVER_IP
 BACKEND_PORT=7800
 FRONTEND_PORT=3100
+FM_PUBLIC_BASE_URL=http://SERVER_IP
 FM_SESSION_COOKIE_SECURE=0
 
 LLM_BASE_URL=https://api.moonshot.cn/v1
@@ -150,22 +149,10 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
-    location ~ ^/(auth|cases|drafts|catalog|system|health|docs|redoc|openapi\.json|api/v1)(/|$) {
-        proxy_pass http://127.0.0.1:7800;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-    }
-
-    location ~ ^/assistant/(rules|cases)(/|$) {
-        proxy_pass http://127.0.0.1:7800;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-    }
-
     location / {
         proxy_pass http://127.0.0.1:3100;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
     }
 }
 ```
@@ -235,7 +222,7 @@ sudo nginx -t
 sudo tail -n 100 /var/log/nginx/error.log
 ```
 
-- 页面可打开但接口失败：检查 `NEXT_PUBLIC_API_BASE_URL`、`FM_CORS_ALLOW_ORIGINS`，修改后执行 `docker compose up -d --build frontend`。
+- 页面可打开但接口失败：检查前端日志，并确认 Compose 为前端设置了 `INTERNAL_API_BASE_URL=http://backend:8000`。
 - 后端不健康：查看 `docker compose logs backend`，检查 Kimi 配置和模型目录。
 - RAG 模型缺失：复制完整模型到 `bge-m3`，或关闭 `FM_RAG_ENABLED`。
 - Kimi 请求超时：检查服务器能否访问 `https://api.moonshot.cn`。

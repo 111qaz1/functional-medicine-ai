@@ -439,10 +439,16 @@ def get_external_report_download_url(
         _, filename = container.review_service.ensure_pdf(draft_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    report_path = request.url_for("download_external_pdf_report", draft_id=draft_id).path
+    download_url = (
+        f"{container.settings.public_base_url}{report_path}"
+        if container.settings.public_base_url
+        else str(request.url_for("download_external_pdf_report", draft_id=draft_id))
+    )
     return ExternalReportDownloadResponse(
         draft_id=draft_id,
         filename=filename,
-        download_url=str(request.url_for("download_external_pdf_report", draft_id=draft_id)),
+        download_url=download_url,
     )
 
 

@@ -1,6 +1,6 @@
 # Nginx 正式部署说明
 
-这份说明用于正式环境。测试环境可以直接访问 `3000` 和 `8000`，正式环境建议统一通过 Nginx 暴露 `80/443`，前端和后端只在服务器本机监听。
+这份说明用于正式环境。正式环境统一通过 Nginx 暴露 `80/443`；Nginx 只连接 Next.js，Next.js 再通过内部地址访问 FastAPI。
 
 完整 `.env`、端口、HTTPS、千问 API Key 和 RAG 模型目录推荐配置见：`docs/production-recommended-config.md`。
 
@@ -12,9 +12,9 @@
         | HTTPS 443
         v
 Nginx 反向代理
-        |-- / 前端页面       -> 127.0.0.1:3000
-        |-- /auth 等后端接口 -> 127.0.0.1:8000
-        |-- /api/v1 外部接口 -> 127.0.0.1:8000
+        |-- 所有请求 -> 127.0.0.1:3000 (Next.js)
+                              |
+                              `-> backend:8000 (FastAPI)
 ```
 
 正式环境只需要对外开放 `80` 和 `443`。`3000`、`8000` 不对外开放。
@@ -24,20 +24,18 @@ Nginx 反向代理
 项目根目录 `.env` 建议配置为：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://正式域名
-FM_CORS_ALLOW_ORIGINS=https://正式域名
+FM_PUBLIC_BASE_URL=https://正式域名
 FM_SESSION_COOKIE_SECURE=1
 ```
 
 示例：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://fm.example.com
-FM_CORS_ALLOW_ORIGINS=https://fm.example.com
+FM_PUBLIC_BASE_URL=https://fm.example.com
 FM_SESSION_COOKIE_SECURE=1
 ```
 
-注意：`NEXT_PUBLIC_API_BASE_URL` 会写入前端构建结果，修改后必须重新构建前端镜像或重新执行 `npm run build`。
+Docker Compose 会为 Next.js 设置 `INTERNAL_API_BASE_URL=http://backend:8000`。该变量只在服务端使用，不会写入浏览器构建结果。
 
 ## Docker Compose 启动
 

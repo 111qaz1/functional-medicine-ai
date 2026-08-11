@@ -13,6 +13,14 @@ from pypdf import PdfReader
 from app.domain.models import Questionnaire
 
 
+@dataclass(frozen=True)
+class QuestionnaireSemanticFragment:
+    fragment_id: str
+    field_name: str
+    source_text: str
+    source_page: int = 1
+
+
 @dataclass
 class QuestionnaireParseResult:
     questionnaire: Questionnaire
@@ -20,6 +28,7 @@ class QuestionnaireParseResult:
     partial_fields: dict[str, list[str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     field_warnings: dict[str, str] = field(default_factory=dict)
+    semantic_fragments: list[QuestionnaireSemanticFragment] = field(default_factory=list)
 
     def add_uncertainty(self, field_name: str, evidence: str, message: str) -> None:
         cleaned = re.sub(r"\s+", " ", evidence or "").strip()
@@ -49,7 +58,7 @@ class QuestionnaireParseResult:
 
 
 class QuestionnaireImportService:
-    PARSER_VERSION = "msq-structured-v5-medication-fields"
+    PARSER_VERSION = "msq-structured-v6-targeted-semantic-fields"
     _WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     _MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
     _DOCX_SUFFIXES = {".docx"}
@@ -155,16 +164,90 @@ class QuestionnaireImportService:
             questionnaire = self._build_questionnaire(paragraphs=paragraphs, tables=tables)
             if not self._has_meaningful_content(questionnaire):
                 raise ValueError("未能从该 MSQ 问卷中识别出有效字段，请检查文档内容或人工填写。")
-            return self._assess_docx_result(questionnaire, paragraphs, tables)
+            result = self._assess_docx_result(questionnaire, paragraphs, tables)
+            result.semantic_fragments = self._semantic_fragments(questionnaire)
+            return result
 
         if suffix in self._PDF_SUFFIXES:
             text = self._extract_pdf_text(content)
             questionnaire = self._build_pdf_questionnaire(text)
             if not self._has_meaningful_content(questionnaire):
                 raise ValueError("未能从该 MSQ PDF 问卷中识别出有效字段，请检查文档内容或人工填写。")
-            return self._assess_pdf_result(questionnaire, text)
+            result = self._assess_pdf_result(questionnaire, text)
+            result.semantic_fragments = self._semantic_fragments(questionnaire)
+            return result
 
         raise ValueError("当前问卷导入支持已填写的 DOCX 或 PDF 文件。")
+
+    def _semantic_fragments(
+        self,
+        questionnaire: Questionnaire,
+    ) -> list[QuestionnaireSemanticFragment]:
+        """Expose only locally located free-text values, never the MSQ score matrix."""
+        fragments: list[QuestionnaireSemanticFragment] = []
+        list_fields = (
+            "known_conditions",
+            "chief_concerns",
+            "family_history",
+            "medications",
+            "allergies",
+            "food_sensitivities",
+            "goals",
+        )
+        for field_name in list_fields:
+            for index, raw_value in enumerate(getattr(questionnaire, field_name, []) or []):
+                source_text = self._clean_text(str(raw_value or ""))
+                if source_text:
+                    fragments.append(
+                        QuestionnaireSemanticFragment(
+                            fragment_id=f"msq:{field_name}:{index}",
+                            field_name=field_name,
+                            source_text=source_text,
+                        )
+                    )
+
+        scalar_fields = (
+            "diet_pattern",
+            "work_pattern",
+            "chemical_sensitivity",
+            "sleep_quality",
+            "exercise_frequency",
+            "additional_notes",
+        )
+        for field_name in scalar_fields:
+            source_text = self._clean_text(
+                str(getattr(questionnaire, field_name, None) or "")
+            )
+            if not source_text:
+                continue
+            if field_name == "additional_notes":
+                source_text = re.sub(
+                    r"^由已填写 MSQ 问卷自动导入，建议人工核对后再生成最终报告。[；;]?",
+                    "",
+                    source_text,
+                ).strip()
+            if source_text:
+                fragments.append(
+                    QuestionnaireSemanticFragment(
+                        fragment_id=f"msq:{field_name}:0",
+                        field_name=field_name,
+                        source_text=source_text,
+                    )
+                )
+
+        supplement_text = self._clean_text(questionnaire.supplement_use or "")
+        if supplement_text and supplement_text != "无营养补充剂":
+            for index, raw_value in enumerate(re.split(r"[；;\n]+", supplement_text)):
+                source_text = self._clean_text(raw_value)
+                if source_text:
+                    fragments.append(
+                        QuestionnaireSemanticFragment(
+                            fragment_id=f"msq:current_supplements:{index}",
+                            field_name="current_supplements",
+                            source_text=source_text,
+                        )
+                    )
+        return fragments
 
     def _extract_pdf_text(self, content: bytes) -> str:
         try:

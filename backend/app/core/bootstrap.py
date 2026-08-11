@@ -28,7 +28,6 @@ from app.services.ingestion import KnowledgeIngestionService
 from app.services.parsing import DocumentParsingService, LabNormalizationService
 from app.services.finding_standardization import FindingStandardizationService
 from app.services.pdf_export import PdfReportExporter
-from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.questionnaire_import import QuestionnaireImportService
 from app.services.recommendation_local import RecommendationService
 from app.services.review_local import ReviewService
@@ -323,7 +322,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         recommendation_service=recommendation_service,
         provider=case_analysis_provider,
         model_version=settings.llm_model or "unconfigured",
-        prompt_version="case-analysis-v13-three-layer-health-portrait",
+        prompt_version="case-analysis-v16-msq-targeted-semantic",
         standardization_service=finding_standardization_service,
         semantic_support_service=semantic_support_service,
         questionnaire_import_service=questionnaire_import_service,
@@ -336,10 +335,6 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         indicator_service,
         PdfReportExporter(settings.report_export_dir),
         rag_fusion_provider=rag_fusion_provider,
-        prescription_advice_service=PrescriptionAdviceService(
-            settings,
-            request_controller=llm_request_controller,
-        ),
     )
     assistant_rule_service = ClinicianRuleService(
         repository=repository,

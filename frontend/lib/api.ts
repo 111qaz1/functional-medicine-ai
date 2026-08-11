@@ -9,6 +9,7 @@ import {
   CaseSummary,
   ClinicalSummaryImageImportResult,
   ClinicianRule,
+  ChronicFoodSensitivityResult,
   CurrentSupplement,
   LLMConfig,
   ParsingReviewInput,
@@ -185,7 +186,8 @@ export async function reviewAndGenerate(
   reviewerId: string,
   expectedRevision: number,
   abnormalFindings: AbnormalFinding[],
-  currentSupplements: CurrentSupplement[]
+  currentSupplements: CurrentSupplement[],
+  foodSensitivity?: ChronicFoodSensitivityResult | null
 ) {
   return apiFetch<ReviewAndGenerateResponse>(
     `/cases/${caseId}/analyses/${analysisId}:review-and-generate`,
@@ -195,7 +197,8 @@ export async function reviewAndGenerate(
         reviewer_id: reviewerId,
         expected_revision: expectedRevision,
         abnormal_findings: abnormalFindings,
-        current_supplements: currentSupplements
+        current_supplements: currentSupplements,
+        food_sensitivity: foodSensitivity
       })
     }
   );

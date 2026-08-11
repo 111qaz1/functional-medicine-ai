@@ -146,6 +146,22 @@ export interface SemanticSupportNeed {
   validation_notes: string[];
 }
 
+export interface FoodSensitivityItem {
+  id: string;
+  name: string;
+  raw_value?: string | null;
+  unit?: string | null;
+  abnormal_flag: string;
+  severity: "mild" | "moderate" | "high" | "ungraded";
+  reported_grade?: string | null;
+  reported_grade_meaning?: string | null;
+  reference_range?: string | null;
+  grading_basis?: string | null;
+  source_page: number;
+  source_text: string;
+  evidence_status: "verified_text" | "needs_review" | "visual_model_only";
+}
+
 export interface ChronicFoodSensitivityResult {
   source_file_id: string;
   source_file_name: string;
@@ -153,6 +169,7 @@ export interface ChronicFoodSensitivityResult {
   mild_foods: string[];
   moderate_foods: string[];
   high_foods: string[];
+  items: FoodSensitivityItem[];
   interpretations: string[];
   valid: boolean;
   warning?: string | null;

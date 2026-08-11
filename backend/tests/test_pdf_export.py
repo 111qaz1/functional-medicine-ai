@@ -27,7 +27,7 @@ class PdfReportExporterTests(unittest.TestCase):
                 SimpleNamespace(
                     sku_id="sku_immune_support",
                     display_name="免疫支持（现货）",
-                    dosage="每日 1 粒，餐后使用。",
+                    dosage="医生复核剂量；每日 1 粒，餐后使用。",
                     reason="结合本次炎症和免疫状态进行支持。",
                     warnings=["抗凝药物使用者需人工复核"],
                 )
@@ -38,7 +38,8 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertEqual(rows[0]["product_name"], "槲皮素复合物")
         self.assertIn("槲皮素复合物", rows[0]["effect"])
         self.assertNotIn("结合本次炎症和免疫状态进行支持", rows[0]["effect"])
-        self.assertEqual(rows[0]["warnings"], ["抗凝药物使用者需人工复核"])
+        self.assertEqual(rows[0]["dosage"], "每日 1 粒，餐后使用。")
+        self.assertNotIn("warnings", rows[0])
         self.assertNotIn("?????", rows[0]["effect"])
 
     def test_customer_catalog_keeps_current_numbering_authority(self) -> None:
@@ -125,17 +126,6 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertEqual(rows[0]["product_name"], "脂质体维生素C")
         self.assertIn("425mg", rows[0]["effect"])
 
-    def test_warning_text_does_not_stack_sentence_and_semicolon_marks(self) -> None:
-        formatted = self.exporter._format_warning_text(
-            [
-                "若近期手术或有出血风险，请先人工评估。",
-                "合并抗凝药或出血风险较高时需人工确认。",
-            ]
-        )
-
-        self.assertEqual(formatted, "若近期手术或有出血风险，请先人工评估；合并抗凝药或出血风险较高时需人工确认。")
-        self.assertNotIn("。；", formatted)
-
     def test_parse_report_hides_internal_rag_sections(self) -> None:
         _, sections = self.exporter._parse_report(
             "\n".join(
@@ -162,26 +152,23 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertIn("1. 代谢/内分泌系统", formatted)
         self.assertNotIn("- ", formatted)
 
-    def test_nutrition_table_places_prescription_advice_before_basis(self) -> None:
+    def test_nutrition_table_does_not_add_total_advice(self) -> None:
         flowables = self.exporter._build_nutrition_table_flowables(
             [
                 SimpleNamespace(
                     sku_id="sku_immune_support",
                     display_name="免疫支持（现货）",
-                    dosage="每日 1 粒，餐后使用。",
+                    dosage="医生复核剂量；每日 1 粒，餐后使用。",
                     reason="结合本次炎症和免疫状态进行支持。",
                     warnings=[],
                 )
             ],
             self.exporter._styles(),
-            prescription_advice_items=[
-                "处方级营养素用于补充身体当下所需营养，予以免疫调节支持等方向的营养支持，帮助平衡免疫、抗炎、抗氧化及代谢调节。"
-            ],
         )
 
         paragraph_text = [item.getPlainText() for item in flowables if hasattr(item, "getPlainText")]
 
-        self.assertIn("总医嘱说明", paragraph_text)
+        self.assertNotIn("总医嘱说明", paragraph_text)
         self.assertNotIn("推荐搭配说明", paragraph_text)
 
     def test_export_generates_pdf_with_structured_nutrition_table(self) -> None:
@@ -203,7 +190,7 @@ class PdfReportExporterTests(unittest.TestCase):
                 SimpleNamespace(
                     sku_id="sku_immune_support",
                     display_name="免疫支持（现货）",
-                    dosage="每日 1 粒，餐后使用。",
+                    dosage="医生复核剂量；每日 1 粒，餐后使用。",
                     reason="结合本次炎症和免疫状态进行支持。",
                     warnings=["抗凝药物使用者需人工复核"],
                 )
@@ -215,6 +202,11 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertGreater(pdf_path.stat().st_size, 1_000)
         reader = PdfReader(str(pdf_path))
         self.assertGreaterEqual(len(reader.pages), 1)
+        pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        self.assertIn("每日 1 粒，餐后使用", pdf_text)
+        self.assertNotIn("医生复核剂量", pdf_text)
+        self.assertNotIn("注意/禁忌", pdf_text)
+        self.assertNotIn("抗凝药物使用者需人工复核", pdf_text)
 
 
 if __name__ == "__main__":

@@ -382,44 +382,6 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertLess(elapsed, 0.1)
         self.assertTrue(any(item.action.value == "exclude" for item in decisions["sku_weight_support"]))
 
-    def test_total_advice_is_one_concise_local_reason_per_product(self) -> None:
-        case = self._prepare_case(
-            "25-OH维生素D 18 ng/mL 30-100\nhs-CRP 4.2 mg/L 0-3",
-            Questionnaire(
-                age=34,
-                sex="female",
-                symptoms=["疲劳"],
-                known_conditions=[],
-                medications=[],
-                allergies=[],
-                goals=["免疫支持"],
-            ),
-        )
-
-        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
-        advice = draft.report_sections["总医嘱说明"]
-
-        self.assertEqual(len(advice), len(draft.recommended_skus))
-        self.assertNotIn("RAG内部审查", draft.report_sections)
-        self.assertNotIn("审核备注", draft.report_sections)
-        self.assertEqual(
-            [item.split("：", 1)[0] for item in advice],
-            [item.display_name for item in draft.recommended_skus],
-        )
-        for item in advice:
-            reason = item.split("：", 1)[1]
-            han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", reason))
-            self.assertGreaterEqual(han_count, 15)
-            self.assertLessEqual(han_count, 80)
-            self.assertNotIn("规则命中", item)
-            self.assertNotIn("RAG", item)
-            self.assertNotIn("评估实际支持效果和下一阶段调整方向", item)
-            self.assertNotIn("复查趋势评估后续调整方向", item)
-
-        vitamin_c_advice = next((item for item in advice if item.startswith("脂质体维生素C：")), "")
-        if vitamin_c_advice:
-            self.assertNotIn("补足维生素D", vitamin_c_advice)
-
     def test_product_rows_follow_body_system_priority(self) -> None:
         case = self._prepare_case(
             "空腹血糖 6.2 mmol/L 3.9-5.6\nLDL-C 3.49 mmol/L 0-3.37\nhs-CRP 4.2 mg/L 0-3",
@@ -2302,13 +2264,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("说明：", review.publishable_report)
         self.assertIn("## 生活方式干预处方", review.publishable_report)
         self.assertIn("## 首月营养素干预方案", review.publishable_report)
-        self.assertIn("## 总医嘱说明", review.publishable_report)
-        self.assertLess(
-            review.publishable_report.index("## 首月营养素干预方案"),
-            review.publishable_report.index("## 总医嘱说明"),
-        )
-        self.assertIn("处方级营养素", review.publishable_report)
-        self.assertIn("身体当下所需营养", review.publishable_report)
+        self.assertNotIn("总医嘱说明", review.publishable_report)
         self.assertNotIn("对症治疗", review.publishable_report)
         self.assertIn("### 1.", review.publishable_report)
         self.assertIn("### A. 饮食干预", review.publishable_report)
@@ -2397,12 +2353,7 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertIn(recommended.display_name, review.publishable_report)
-        self.assertIn("## 总医嘱说明", review.publishable_report)
-        self.assertLess(
-            review.publishable_report.index("## 首月营养素干预方案"),
-            review.publishable_report.index("## 总医嘱说明"),
-        )
-        self.assertIn("处方级营养素", review.publishable_report)
+        self.assertNotIn("总医嘱说明", review.publishable_report)
         self.assertNotIn("对症治疗", review.publishable_report)
 
     def test_approval_rerenders_legacy_auto_customer_report(self) -> None:

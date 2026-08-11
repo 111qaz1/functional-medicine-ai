@@ -268,6 +268,14 @@ class ChronicFoodSensitivityResult(StrictModel):
     warning: str | None = None
 
 
+class CurrentSupplement(StrictModel):
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    source_file_ids: list[str] = Field(default_factory=list)
+    source_file_names: list[str] = Field(default_factory=list)
+    doctor_added: bool = False
+
+
 class DocumentAnalysisResult(StrictModel):
     file_id: str
     file_name: str
@@ -276,6 +284,7 @@ class DocumentAnalysisResult(StrictModel):
     summary: str | None = None
     abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
     system_findings: list[str] = Field(default_factory=list)
+    current_supplements: list[str] = Field(default_factory=list)
     questionnaire: dict[str, Any] | None = None
     food_sensitivity: ChronicFoodSensitivityResult | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -322,6 +331,7 @@ class CaseAnalysis(StrictModel):
     reviewed_system_findings: list[str] = Field(default_factory=list)
     abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
     reviewed_abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    current_supplements: list[CurrentSupplement] = Field(default_factory=list)
     questionnaire: Questionnaire | None = None
     food_sensitivity: ChronicFoodSensitivityResult | None = None
     ignored_files: list[str] = Field(default_factory=list)
@@ -422,6 +432,7 @@ class CaseRecord(StrictModel):
     consent: ConsentRecord | None = None
     files: list[UploadedFile] = Field(default_factory=list)
     questionnaire: Questionnaire | None = None
+    current_supplements: list[CurrentSupplement] = Field(default_factory=list)
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[CaseIndicator] = Field(default_factory=list)
     confirmed_clinical_findings: list[ConfirmedClinicalFinding] = Field(default_factory=list)
@@ -549,6 +560,7 @@ class DraftRecommendationItem(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    current_supplement_overlap_notice: str | None = None
     primary_system_id: str | None = None
     covered_system_ids: list[str] = Field(default_factory=list)
     matched_finding_ids: list[str] = Field(default_factory=list)

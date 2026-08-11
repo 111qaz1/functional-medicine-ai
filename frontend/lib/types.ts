@@ -158,6 +158,14 @@ export interface ChronicFoodSensitivityResult {
   warning?: string | null;
 }
 
+export interface CurrentSupplement {
+  id: string;
+  name: string;
+  source_file_ids: string[];
+  source_file_names: string[];
+  doctor_added: boolean;
+}
+
 export interface CaseAnalysis {
   id: string;
   case_id: string;
@@ -176,6 +184,7 @@ export interface CaseAnalysis {
   reviewed_system_findings: string[];
   abnormal_findings: AbnormalFinding[];
   reviewed_abnormal_findings: AbnormalFinding[];
+  current_supplements: CurrentSupplement[];
   questionnaire?: Questionnaire | null;
   food_sensitivity?: ChronicFoodSensitivityResult | null;
   ignored_files: string[];
@@ -240,6 +249,7 @@ export interface CaseRecord {
   clinical_summary_text?: string | null;
   files: UploadedFile[];
   questionnaire?: Questionnaire | null;
+  current_supplements: CurrentSupplement[];
   extracted_lab_items: ExtractedLabItem[];
   manual_indicators: CaseIndicator[];
   confirmed_clinical_findings?: Array<{
@@ -301,6 +311,7 @@ export interface DraftRecommendationItem {
   evidence_ids: string[];
   evidence_details: string[];
   warnings: string[];
+  current_supplement_overlap_notice?: string | null;
   primary_system_id?: string | null;
   covered_system_ids?: string[];
   matched_finding_ids?: string[];

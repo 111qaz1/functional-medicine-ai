@@ -51,6 +51,7 @@ from app.services.report_content import (
     group_abnormal_items,
 )
 from app.services.report_closing import build_report_closing_sections
+from app.services.current_supplements import product_overlap_notice
 
 
 @dataclass
@@ -255,7 +256,7 @@ class RecommendationService:
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v5-priority-referral",
-        rule_version: str = "local-rules-v6-liver-evidence",
+        rule_version: str = "local-rules-v7-current-supplement-overlap",
     ) -> None:
         self.repository = repository
         self.case_service = case_service
@@ -1045,6 +1046,7 @@ class RecommendationService:
                         if evidence.ref.startswith("finding:"):
                             matched_finding_ids.append(evidence.ref.split(":", 1)[1])
                 default_reason = self._build_product_reason(product, evidence_ids, context=context)
+                canonical_product_name = self._canonical_product_name(product)
                 final_reason = self._sanitize_reason_text(
                     self._prefer_chinese_text(
                         composition.product_reason_overrides.get(product.sku_id),
@@ -1062,7 +1064,7 @@ class RecommendationService:
                 recommended_items.append(
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
-                        display_name=self._canonical_product_name(product),
+                        display_name=canonical_product_name,
                         **dosage_payload,
                         reason=final_reason,
                         evidence_ids=evidence_ids,
@@ -1094,6 +1096,12 @@ class RecommendationService:
                                 ]
                             )
                         )[:6],
+                        current_supplement_overlap_notice=product_overlap_notice(
+                            product=product,
+                            canonical_name=canonical_product_name,
+                            dosage_mapping=self.product_dosage_mapping.get(product.sku_id, {}),
+                            current_supplements=case.current_supplements,
+                        ),
                         primary_system_id=primary_system_id,
                         covered_system_ids=covered_system_ids,
                         matched_finding_ids=list(dict.fromkeys(matched_finding_ids)),
@@ -4413,7 +4421,10 @@ class RecommendationService:
 
     def _build_existing_supplement_adjustments(self, case) -> list[str]:
         questionnaire = case.questionnaire
-        supplement_use = (getattr(questionnaire, "supplement_use", None) or "").strip() if questionnaire else ""
+        current_names = [item.name for item in case.current_supplements if item.name.strip()]
+        supplement_use = "、".join(current_names)
+        if not supplement_use and questionnaire:
+            supplement_use = (getattr(questionnaire, "supplement_use", None) or "").strip()
         if not supplement_use:
             return [
                 "暂未识别到正在使用的补充剂；首月开始前建议补充确认现有保健品、药物、剂量和服用时间，避免重复补充或相互作用。",

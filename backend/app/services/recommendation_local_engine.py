@@ -52,6 +52,7 @@ from app.services.report_content import (
 )
 from app.services.report_closing import build_report_closing_sections
 from app.services.current_supplements import product_overlap_notice
+from app.services.health_portrait import build_core_health_portrait_result
 
 
 @dataclass
@@ -256,7 +257,7 @@ class RecommendationService:
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v5-priority-referral",
-        rule_version: str = "local-rules-v7-current-supplement-overlap",
+        rule_version: str = "local-rules-v8-three-layer-health-portrait",
     ) -> None:
         self.repository = repository
         self.case_service = case_service
@@ -1148,14 +1149,6 @@ class RecommendationService:
             knowledge_by_id=knowledge_by_id,
             clinician_rule_by_id=clinician_rule_by_id,
         )
-        health_portrait = self._build_health_portrait(
-            case,
-            context,
-            key_lab_highlights,
-            risk_notices,
-            report_guidance,
-            anti_aging_findings=anti_aging_findings,
-        )
         system_analysis = self._build_system_analysis(
             case,
             context,
@@ -1175,6 +1168,27 @@ class RecommendationService:
             )
             for finding in priority_findings
         ]
+        portrait_result = build_core_health_portrait_result(
+            structured_system_findings,
+            confirmed_findings=context.clinical_findings,
+            abnormal_findings=(
+                list(
+                    latest_analysis.reviewed_abnormal_findings
+                    or latest_analysis.abnormal_findings
+                    or []
+                )
+                if latest_analysis is not None
+                else []
+            ),
+            objective_evidence_items=key_lab_highlights,
+            risk_notices=risk_notices,
+            age=context.age,
+            medication_count=len(context.medications),
+            current_supplement_count=len(case.current_supplements),
+            recommended_items=recommended_items,
+            lifestyle_plan=lifestyle_plan,
+        )
+        health_portrait = [portrait_result.text]
         finding_names_by_id = {
             finding.finding_id: finding.finding_name
             for finding in context.clinical_findings
@@ -1272,6 +1286,7 @@ class RecommendationService:
             abstain_reason=effective_abstain_reason,
             manual_review_required=True,
             red_flags=risk_notices,
+            core_health_portrait=portrait_result,
             structured_system_findings=structured_system_findings,
             uncovered_system_ids=uncovered_system_ids,
             uncovered_system_reasons=uncovered_system_reasons,
@@ -1302,6 +1317,7 @@ class RecommendationService:
                     ],
                     "missing_info": list(lifestyle_plan.missing_info),
                 },
+                "core_health_portrait": portrait_result.model_dump(mode="json"),
             },
             model_version=self.model_version,
             prompt_version=self.prompt_version,

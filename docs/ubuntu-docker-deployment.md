@@ -48,7 +48,7 @@ docker run --rm hello-world
 ```bash
 sudo mkdir -p /opt/functional-medicine-ai
 sudo chown "$USER":"$USER" /opt/functional-medicine-ai
-git clone --branch dev1 https://github.com/111qaz1/functional-medicine-ai.git /opt/functional-medicine-ai
+git clone --branch main https://github.com/111qaz1/functional-medicine-ai.git /opt/functional-medicine-ai
 cd /opt/functional-medicine-ai
 ```
 
@@ -85,6 +85,13 @@ FM_MAX_PDF_PAGES=50
 FM_EXTERNAL_TRUST_SHARED_SECRET=替换为随机高强度字符串
 ```
 
+浏览器请求统一发送到 Next.js 的同源路径，再由前端容器转发至 FastAPI。不要设置 `NEXT_PUBLIC_API_BASE_URL`，也不要把后端端口写入浏览器端配置。
+
+- `INTERNAL_API_BASE_URL` 是 Next.js 服务端变量。Compose 默认设置为 `http://backend:8000`，通常不要在 `.env` 中覆盖。
+- `FM_PUBLIC_BASE_URL` 只用于外部 API 生成绝对下载地址。使用域名和 HTTPS 时应填写完整公网地址，例如 `https://fm.example.com`。
+- 当前示例使用 HTTP，因此 `FM_SESSION_COOKIE_SECURE=0`。启用 HTTPS 后必须改为 `1`，并建议设置 `FM_CORS_ALLOW_ORIGINS=https://fm.example.com`。
+- `BACKEND_PORT=7800` 仅绑定服务器回环地址用于排障；防火墙和云安全组不应对公网开放该端口。
+
 没有 `bge-m3` 模型时设置：
 
 ```env
@@ -119,6 +126,7 @@ docker compose ps
 ```bash
 curl http://127.0.0.1:7800/health
 curl -I http://127.0.0.1:3100
+curl http://127.0.0.1:3100/health
 ```
 
 健康检查应返回：
@@ -126,6 +134,8 @@ curl -I http://127.0.0.1:3100
 ```json
 {"status":"ok"}
 ```
+
+`7800/health` 验证 FastAPI 本机排障入口，`3100/health` 验证实际的 `Next.js -> backend:8000` 转发链路。
 
 ## 5. 配置 Nginx
 
@@ -200,6 +210,8 @@ docker compose down
 git pull --ff-only
 docker compose up -d --build
 ```
+
+仅修改 `.env` 时可执行 `docker compose up -d --force-recreate`；修改代码、Dockerfile 或依赖时必须使用带 `--build` 的命令。
 
 ## 7. 数据备份
 

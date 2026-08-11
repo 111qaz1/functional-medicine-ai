@@ -51,6 +51,8 @@ from app.services.report_content import (
     group_abnormal_items,
 )
 from app.services.report_closing import build_report_closing_sections
+from app.services.current_supplements import product_overlap_notice
+from app.services.health_portrait import build_core_health_portrait_result
 
 
 @dataclass
@@ -255,7 +257,7 @@ class RecommendationService:
         rag_retriever=None,
         model_version: str = "local-structured-v1",
         prompt_version: str = "local-report-v5-priority-referral",
-        rule_version: str = "local-rules-v6-liver-evidence",
+        rule_version: str = "local-rules-v8-three-layer-health-portrait",
     ) -> None:
         self.repository = repository
         self.case_service = case_service
@@ -842,76 +844,6 @@ class RecommendationService:
             if evidence_id.startswith("finding:")
         ]
 
-    def build_total_advice_items(
-        self,
-        recommended_items: list[DraftRecommendationItem],
-        *,
-        structured_system_findings: list[StructuredSystemFinding] | None = None,
-        finding_names_by_id: dict[str, str] | None = None,
-    ) -> list[str]:
-        systems = {item.system_id: item for item in structured_system_findings or []}
-        finding_names = finding_names_by_id or {}
-        products = {product.sku_id: product for product in self._list_products(enabled_only=False)}
-        advice_items: list[str] = []
-        for item in recommended_items:
-            system = systems.get(item.primary_system_id or "")
-            system_name = system.system_name if system else SYSTEM_NAMES.get(item.primary_system_id or "", "相关身体系统")
-            matched_names = [finding_names[finding_id] for finding_id in item.matched_finding_ids if finding_id in finding_names]
-            evidence = "、".join(list(dict.fromkeys(matched_names))[:2])
-            if not evidence:
-                evidence = f"已确认的{system_name}异常"
-            product = products.get(item.sku_id)
-            target = self._product_support_target(product, item.primary_system_id)
-            reason = self._fit_total_advice_reason(evidence=evidence, system_name=system_name, target=target)
-            if 15 <= self._han_count(reason) <= 80:
-                advice_items.append(f"{item.display_name}：{reason}")
-        return advice_items
-
-    def _product_support_target(self, product: ProductRule | None, system_id: str | None) -> str:
-        profile = self.product_tag_profiles.get(product.sku_id) if product else None
-        axis_labels = {
-            "gut_bile": "肝胆与脂肪消化支持",
-            "gut_microbiome": "菌群结构与肠道生态支持",
-            "gut_mucosa": "胃肠黏膜与屏障支持",
-            "gastric_acid": "胃酸分泌支持",
-            "digestive_enzyme": "消化酶与营养吸收支持",
-            "liver_detox": "肝胆代谢与抗氧化支持",
-            "immune": "免疫调节支持",
-            "inflammation": "炎症平衡支持",
-            "antioxidant": "抗氧化与恢复支持",
-            "thyroid_axis": "甲状腺营养与代谢支持",
-            "glycemic_balance": "血糖稳定与代谢支持",
-            "weight_metabolism": "体重与脂肪代谢支持",
-            "nutrition_repletion": "体重过轻与营养恢复支持",
-            "vitamin_d_repletion": "维生素D与骨骼免疫支持",
-            "cardiovascular": "心血管与循环支持",
-            "lipid_balance": "血脂代谢支持",
-            "sleep_stress": "睡眠与压力恢复支持",
-            "neuro_cognitive": "神经认知支持",
-            "energy_mitochondria": "细胞能量与疲劳恢复支持",
-            "bone_metabolism": "骨代谢支持",
-            "iron_repletion": "铁利用与营养恢复支持",
-            "female_hormone": "女性激素节律支持",
-            "hormone_axis": "内分泌节律支持",
-        }
-        for axis in (profile.primary_axes if profile else ()):
-            if axis in axis_labels:
-                return axis_labels[axis]
-        if product and product.candidate_use_cases:
-            return f"{product.candidate_use_cases[0]}相关营养支持"
-        return f"{SYSTEM_NAMES.get(system_id or '', '整体')}功能支持"
-
-    @staticmethod
-    def _han_count(value: str) -> int:
-        return len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", value or ""))
-
-    def _fit_total_advice_reason(self, *, evidence: str, system_name: str, target: str) -> str:
-        candidate = f"针对{evidence}等已确认问题，本阶段用于支持{system_name}的{target}。"
-        if 15 <= self._han_count(candidate) <= 80:
-            return candidate
-        compact_evidence = re.split(r"[、，；]", evidence)[0][:12]
-        return f"针对{compact_evidence}等已确认问题，本阶段用于支持{system_name}相关功能与整体恢复。"
-
     def generate(
         self,
         case_id: str,
@@ -1045,6 +977,7 @@ class RecommendationService:
                         if evidence.ref.startswith("finding:"):
                             matched_finding_ids.append(evidence.ref.split(":", 1)[1])
                 default_reason = self._build_product_reason(product, evidence_ids, context=context)
+                canonical_product_name = self._canonical_product_name(product)
                 final_reason = self._sanitize_reason_text(
                     self._prefer_chinese_text(
                         composition.product_reason_overrides.get(product.sku_id),
@@ -1062,7 +995,7 @@ class RecommendationService:
                 recommended_items.append(
                     DraftRecommendationItem(
                         sku_id=product.sku_id,
-                        display_name=self._canonical_product_name(product),
+                        display_name=canonical_product_name,
                         **dosage_payload,
                         reason=final_reason,
                         evidence_ids=evidence_ids,
@@ -1094,6 +1027,12 @@ class RecommendationService:
                                 ]
                             )
                         )[:6],
+                        current_supplement_overlap_notice=product_overlap_notice(
+                            product=product,
+                            canonical_name=canonical_product_name,
+                            dosage_mapping=self.product_dosage_mapping.get(product.sku_id, {}),
+                            current_supplements=case.current_supplements,
+                        ),
                         primary_system_id=primary_system_id,
                         covered_system_ids=covered_system_ids,
                         matched_finding_ids=list(dict.fromkeys(matched_finding_ids)),
@@ -1140,14 +1079,6 @@ class RecommendationService:
             knowledge_by_id=knowledge_by_id,
             clinician_rule_by_id=clinician_rule_by_id,
         )
-        health_portrait = self._build_health_portrait(
-            case,
-            context,
-            key_lab_highlights,
-            risk_notices,
-            report_guidance,
-            anti_aging_findings=anti_aging_findings,
-        )
         system_analysis = self._build_system_analysis(
             case,
             context,
@@ -1167,6 +1098,27 @@ class RecommendationService:
             )
             for finding in priority_findings
         ]
+        portrait_result = build_core_health_portrait_result(
+            structured_system_findings,
+            confirmed_findings=context.clinical_findings,
+            abnormal_findings=(
+                list(
+                    latest_analysis.reviewed_abnormal_findings
+                    or latest_analysis.abnormal_findings
+                    or []
+                )
+                if latest_analysis is not None
+                else []
+            ),
+            objective_evidence_items=key_lab_highlights,
+            risk_notices=risk_notices,
+            age=context.age,
+            medication_count=len(context.medications),
+            current_supplement_count=len(case.current_supplements),
+            recommended_items=recommended_items,
+            lifestyle_plan=lifestyle_plan,
+        )
+        health_portrait = [portrait_result.text]
         finding_names_by_id = {
             finding.finding_id: finding.finding_name
             for finding in context.clinical_findings
@@ -1174,11 +1126,6 @@ class RecommendationService:
         grouped_key_lab_highlights = self._build_grouped_key_lab_highlights(
             case,
             structured_system_findings,
-        )
-        total_advice = self.build_total_advice_items(
-            recommended_items,
-            structured_system_findings=structured_system_findings,
-            finding_names_by_id=finding_names_by_id,
         )
         plan_summary = build_plan_summary(
             structured_system_findings,
@@ -1197,7 +1144,6 @@ class RecommendationService:
             # available in draft.contraindications and safety_decisions, but are
             # not copied into the customer-facing report body.
             "首月营养素干预方案": first_month_protocol,
-            "总医嘱说明": total_advice,
             "生活方式干预处方": lifestyle_focus,
             "现有补充剂调整建议": supplement_adjustments,
             "待确认项": missing_info,
@@ -1264,6 +1210,7 @@ class RecommendationService:
             abstain_reason=effective_abstain_reason,
             manual_review_required=True,
             red_flags=risk_notices,
+            core_health_portrait=portrait_result,
             structured_system_findings=structured_system_findings,
             uncovered_system_ids=uncovered_system_ids,
             uncovered_system_reasons=uncovered_system_reasons,
@@ -1294,6 +1241,7 @@ class RecommendationService:
                     ],
                     "missing_info": list(lifestyle_plan.missing_info),
                 },
+                "core_health_portrait": portrait_result.model_dump(mode="json"),
             },
             model_version=self.model_version,
             prompt_version=self.prompt_version,
@@ -4413,7 +4361,10 @@ class RecommendationService:
 
     def _build_existing_supplement_adjustments(self, case) -> list[str]:
         questionnaire = case.questionnaire
-        supplement_use = (getattr(questionnaire, "supplement_use", None) or "").strip() if questionnaire else ""
+        current_names = [item.name for item in case.current_supplements if item.name.strip()]
+        supplement_use = "、".join(current_names)
+        if not supplement_use and questionnaire:
+            supplement_use = (getattr(questionnaire, "supplement_use", None) or "").strip()
         if not supplement_use:
             return [
                 "暂未识别到正在使用的补充剂；首月开始前建议补充确认现有保健品、药物、剂量和服用时间，避免重复补充或相互作用。",

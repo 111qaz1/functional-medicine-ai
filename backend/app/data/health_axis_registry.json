@@ -1,0 +1,82 @@
+{
+  "version": "health-axis-v1",
+  "chains": [
+    {
+      "id": "gut_liver_inflammation",
+      "axis_name": "肠-肝轴",
+      "system_path": ["digestive_gut", "liver_detox", "immune_inflammation"],
+      "display_path": ["肠道屏障受损", "肝脏代谢解毒负荷", "全身慢性炎症"],
+      "minimum_present_systems": 2,
+      "target_labels": {
+        "digestive_gut": "肠道管理",
+        "liver_detox": "肝脏代谢支持",
+        "immune_inflammation": "炎症负荷管理"
+      },
+      "steps": ["减少触发负荷", "改善消化基础", "清理异常生态", "重建菌群生态", "修复黏膜屏障", "支持肝脏代谢"]
+    },
+    {
+      "id": "gut_immune",
+      "axis_name": "肠-免疫轴",
+      "system_path": ["digestive_gut", "immune_inflammation"],
+      "display_path": ["肠道屏障与微生态失衡", "免疫炎症负荷"],
+      "minimum_present_systems": 2,
+      "target_labels": {
+        "digestive_gut": "肠道屏障与微生态管理",
+        "immune_inflammation": "免疫炎症调节"
+      },
+      "steps": ["减少触发负荷", "改善消化基础", "重建菌群生态", "修复黏膜屏障", "调节免疫炎症"]
+    },
+    {
+      "id": "inflammation_endothelium",
+      "axis_name": "炎症-内皮-凝血轴",
+      "system_path": ["immune_inflammation", "cardiovascular"],
+      "display_path": ["慢性炎症负荷", "血管内皮与循环代谢压力"],
+      "minimum_present_systems": 2,
+      "target_labels": {
+        "immune_inflammation": "炎症负荷管理",
+        "cardiovascular": "心血管代谢支持"
+      },
+      "steps": ["降低炎症触发", "稳定血糖与餐后波动", "改善脂质代谢", "支持血管内皮", "复查循环风险指标"]
+    },
+    {
+      "id": "hpa_axis",
+      "axis_name": "HPA轴",
+      "system_path": ["neuro_sleep", "endocrine_metabolic", "immune_inflammation"],
+      "display_path": ["睡眠与压力节律紊乱", "内分泌代谢压力", "慢性炎症负荷"],
+      "minimum_present_systems": 2,
+      "required_present_systems": ["neuro_sleep"],
+      "required_objective_systems": ["endocrine_metabolic", "immune_inflammation"],
+      "target_labels": {
+        "neuro_sleep": "睡眠压力节律管理",
+        "endocrine_metabolic": "内分泌代谢支持",
+        "immune_inflammation": "炎症负荷管理"
+      },
+      "steps": ["固定睡眠窗口", "降低持续压力暴露", "稳定进餐节律", "增加规律活动", "调节炎症负荷", "复查代谢指标"]
+    },
+    {
+      "id": "thyroid_metabolic",
+      "axis_name": "甲状腺-代谢轴",
+      "system_path": ["endocrine_metabolic", "cardiovascular"],
+      "display_path": ["甲状腺调节异常", "代谢与循环负荷"],
+      "minimum_present_systems": 2,
+      "required_terms_any": ["甲状腺", "TSH", "FT3", "FT4", "TPOAb", "TgAb"],
+      "target_labels": {
+        "endocrine_metabolic": "甲状腺与代谢支持",
+        "cardiovascular": "循环代谢管理"
+      },
+      "steps": ["稳定进餐节律", "补足基础营养", "支持甲状腺调节", "改善糖脂代谢", "增加规律活动", "复查甲状腺与代谢指标"]
+    },
+    {
+      "id": "gut_brain",
+      "axis_name": "肠-脑轴",
+      "system_path": ["digestive_gut", "neuro_sleep"],
+      "display_path": ["肠道屏障与微生态失衡", "睡眠压力与神经调节负荷"],
+      "minimum_present_systems": 2,
+      "target_labels": {
+        "digestive_gut": "肠道屏障与微生态管理",
+        "neuro_sleep": "睡眠压力节律管理"
+      },
+      "steps": ["减少肠道触发负荷", "改善消化基础", "重建菌群生态", "固定睡眠窗口", "降低压力暴露"]
+    }
+  ]
+}

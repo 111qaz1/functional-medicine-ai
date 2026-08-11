@@ -13,7 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from app.domain.models import DoctorAccount, UploadedFile, WorkspaceScope
-from app.services.prescription_advice import PrescriptionAdviceService
+from app.services.report_content import build_plan_summary, normalize_plan_summary_items
 
 
 router = APIRouter(prefix="/api/v1", tags=["external-api"])
@@ -87,12 +87,11 @@ class ExternalNutritionRecommendationResponse(BaseModel):
     missing_info: list[str] = Field(default_factory=list)
 
 
-class ExternalPrescriptionItemsResponse(BaseModel):
+class ExternalPlanSummaryResponse(BaseModel):
     case_id: str
     draft_id: str
     status: str
-    medical_advice: str
-    advice_source: Literal["llm", "local_fallback"]
+    plan_summary: list[str] = Field(default_factory=list)
 
 
 class ExternalReportDownloadResponse(BaseModel):
@@ -206,18 +205,27 @@ def _nutrition_response(container, draft) -> ExternalNutritionRecommendationResp
     )
 
 
-def _prescription_items_response(container, draft) -> ExternalPrescriptionItemsResponse:
-    draft = _effective_external_draft(container, draft)
-    advice = PrescriptionAdviceService(
-        container.settings,
-        request_controller=container.llm_request_controller,
-    ).build_advice(draft)
-    return ExternalPrescriptionItemsResponse(
-        case_id=draft.case_id,
-        draft_id=draft.id,
-        status=getattr(draft.status, "value", str(draft.status)),
-        medical_advice=advice.medical_advice,
-        advice_source=advice.advice_source,
+def _final_plan_summary_response(container, case, draft) -> ExternalPlanSummaryResponse:
+    effective_draft = _effective_external_draft(container, draft)
+    finding_names_by_id = {
+        finding.finding_id: finding.finding_name
+        for finding in (getattr(case, "confirmed_clinical_findings", []) or [])
+    }
+    plan_summary = build_plan_summary(
+        getattr(effective_draft, "structured_system_findings", []) or [],
+        getattr(effective_draft, "recommended_skus", []) or [],
+        finding_names_by_id,
+    )
+    if not plan_summary:
+        plan_summary = (getattr(effective_draft, "report_sections", {}) or {}).get(
+            "方案总结",
+            [],
+        )
+    return ExternalPlanSummaryResponse(
+        case_id=effective_draft.case_id,
+        draft_id=effective_draft.id,
+        status=getattr(effective_draft.status, "value", str(effective_draft.status)),
+        plan_summary=normalize_plan_summary_items(plan_summary),
     )
 
 
@@ -414,15 +422,17 @@ def get_latest_external_nutrition_recommendations(
     return _nutrition_response(container, draft)
 
 
-@router.get("/drafts/{draft_id}/prescription-items", response_model=ExternalPrescriptionItemsResponse)
-def get_external_prescription_items(
+@router.get("/drafts/{draft_id}/plan-summary", response_model=ExternalPlanSummaryResponse)
+def get_external_plan_summary(
     draft_id: str,
     request: Request,
     doctor: DoctorAccount = Depends(_require_external_doctor),
 ):
     container = _container(request)
-    _, draft = _require_owned_draft(container, draft_id, doctor)
-    return _prescription_items_response(container, draft)
+    case, draft = _require_owned_draft(container, draft_id, doctor)
+    if not container.repository.get_review_decision(draft_id):
+        raise HTTPException(status_code=409, detail="Report is not approved yet")
+    return _final_plan_summary_response(container, case, draft)
 
 
 @router.get("/drafts/{draft_id}/report-download", response_model=ExternalReportDownloadResponse)

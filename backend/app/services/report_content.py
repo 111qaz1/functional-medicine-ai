@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_to_system_ids
+from app.services.health_portrait import build_core_health_portrait_result
 
 
 @dataclass(frozen=True)
@@ -236,115 +237,14 @@ def build_core_health_portrait(
     risk_notices: Iterable[str] | None = None,
 ) -> list[str]:
     """Build one evidence-grounded, three-sentence patient-facing conclusion."""
-    raw_confirmed = list(confirmed_findings or [])
-    raw_abnormal = list(abnormal_findings or [])
-    excluded_finding_ids = {
-        item_id
-        for item in [*raw_confirmed, *raw_abnormal]
-        if _is_food_sensitivity_item(item)
-        and (item_id := _health_item_id(item))
-    }
-    eligible_finding_ids = {
-        item_id
-        for item in [*raw_confirmed, *raw_abnormal]
-        if not _is_food_sensitivity_item(item)
-        and (item_id := _health_item_id(item))
-    }
-    confirmed = [item for item in raw_confirmed if not _is_food_sensitivity_item(item)]
-    abnormal = [item for item in raw_abnormal if not _is_food_sensitivity_item(item)]
-    structured = _ordered_health_findings(
-        list(structured_system_findings or []),
-        confirmed_findings=confirmed,
+    result = build_core_health_portrait_result(
+        structured_system_findings,
+        confirmed_findings=confirmed_findings,
+        abnormal_findings=abnormal_findings,
+        objective_evidence_items=objective_evidence_items,
+        risk_notices=risk_notices,
     )
-    if not structured:
-        return [
-            "当前资料尚不足以形成明确的交叉主线。"
-            "现有证据不足以确定单一核心干预枢纽。"
-            "首月先完善必要检查与症状记录，生活方式基础调整优先于营养素补充。"
-        ]
-
-    selected: list[tuple[Any, str, str]] = []
-    selected_system_ids: set[str] = set()
-    selected_label_signatures: set[str] = set()
-    for finding in structured:
-        system_id = str(getattr(finding, "system_id", "") or "")
-        if not system_id or system_id in selected_system_ids:
-            continue
-        if _is_food_sensitivity_only_structured_finding(
-            finding,
-            excluded_finding_ids=excluded_finding_ids,
-            eligible_finding_ids=eligible_finding_ids,
-        ):
-            continue
-        label = _health_mainline_label(
-            finding,
-            system_id=system_id,
-            confirmed_findings=confirmed,
-            abnormal_findings=abnormal,
-        )
-        label_signature = _compact(label)
-        if label_signature in selected_label_signatures:
-            label = _HEALTH_SYSTEM_FALLBACKS.get(
-                system_id,
-                f"{SYSTEM_NAMES.get(system_id, '相关身体系统')}功能异常",
-            )
-            label_signature = _compact(label)
-        if not label_signature or label_signature in selected_label_signatures:
-            continue
-        selected.append((finding, label, system_id))
-        selected_system_ids.add(system_id)
-        selected_label_signatures.add(label_signature)
-        if len(selected) >= _HEALTH_PORTRAIT_MAX_MAINLINES:
-            break
-
-    if not selected:
-        return [
-            "当前资料尚不足以形成明确的交叉主线。"
-            "现有证据不足以确定单一核心干预枢纽。"
-            "首月先完善必要检查与症状记录，生活方式基础调整优先于营养素补充。"
-        ]
-
-    labels = [label for _, label, _ in selected]
-    count_label = "一二三四五"[len(labels) - 1]
-    has_risk = any(
-        _clean_text(item)
-        for item in risk_notices or []
-        if not _is_food_sensitivity_text(item)
-    ) or _has_explicit_serious_abnormality(abnormal)
-    timing_clause = (
-        "应优先完成医学评估与风险控制"
-        if has_risk
-        else "当前是集中开展生活方式干预的重要窗口期"
-    )
-    first_sentence = (
-        f"存在「{'—'.join(labels)}」{count_label}条主线的交叉联动，{timing_clause}。"
-    )
-
-    evidence = _health_objective_evidence(
-        abnormal,
-        selected=selected,
-        fallback_items=list(objective_evidence_items or []),
-    )
-    evidence_text = "/".join(evidence) if evidence else "现有临床结论与症状证据"
-    primary_label = labels[0]
-    if len(labels) > 1:
-        related = "、".join(labels[1:3])
-        second_sentence = (
-            f"{evidence_text}提示「{primary_label}」是当前核心干预枢纽，"
-            f"并可能牵动{related}。"
-        )
-    else:
-        second_sentence = f"{evidence_text}提示「{primary_label}」是当前核心干预重点。"
-
-    primary_system_id = selected[0][2]
-    target, lifestyle_priority = _HEALTH_INTERVENTION_TARGETS.get(
-        primary_system_id,
-        ("整体功能恢复", "饮食、睡眠与活动节律调整"),
-    )
-    third_sentence = (
-        f"首月以「{target}」为核心，{lifestyle_priority}优先于营养素补充。"
-    )
-    return [first_sentence + second_sentence + third_sentence]
+    return [result.text]
 
 
 def _ordered_health_findings(

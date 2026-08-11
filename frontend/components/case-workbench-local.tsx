@@ -20,7 +20,10 @@ import {
   AbnormalFinding,
   CaseAnalysis,
   CaseDetailResponse,
+  ChronicFoodSensitivityResult,
+  CurrentSupplement,
   DraftRecommendationItem,
+  FoodSensitivityItem,
   RecommendationDraft
 } from "../lib/types";
 import { SectionCard } from "./section-card";
@@ -102,7 +105,6 @@ const SOURCE_REPORT_ORDER = [
   "功能医学系统失衡分析",
   "生活方式干预",
   "首月营养素干预方案",
-  "总医嘱说明",
   "方案总结",
   "复查与随访计划",
   "安全警示"
@@ -114,13 +116,19 @@ const STANDARD_REPORT_ORDER = [
   "功能医学系统失衡分析",
   "生活方式干预处方",
   "首月营养素干预方案",
-  "总医嘱说明",
   "现有补充剂调整建议",
   "待确认项",
   "方案总结",
   "复查与随访计划",
   "安全警示"
 ];
+
+function formatWarningList(warnings: string[]) {
+  return warnings
+    .map((warning) => warning.trim().replace(/[。；;，,\s]+$/u, ""))
+    .filter(Boolean)
+    .join("；");
+}
 
 function chineseChapterNumber(value: number) {
   const digits = "零一二三四五六七八九";
@@ -142,9 +150,7 @@ function reportText(draft: RecommendationDraft | null | undefined) {
     const raw = draft.report_sections[title];
     const items = (Array.isArray(raw) ? raw : [raw]).filter(Boolean);
     if (!items.length) return [];
-    const heading = title === "总医嘱说明"
-      ? "### 总医嘱说明"
-      : `## ${chineseChapterNumber(++chapterIndex)}、${title}`;
+    const heading = `## ${chineseChapterNumber(++chapterIndex)}、${title}`;
     const renderedItems = items.map((item) => {
       const text = String(item).trim();
       if (text.startsWith("### ")) return text;
@@ -198,6 +204,172 @@ function cloneFindings(items: AbnormalFinding[]) {
     support_goals: [...(item.support_goals ?? [])],
     standardization_notes: [...(item.standardization_notes ?? [])]
   }));
+}
+
+function cloneFoodSensitivity(value?: ChronicFoodSensitivityResult | null) {
+  if (!value) return null;
+  return {
+    ...value,
+    mild_foods: [...(value.mild_foods ?? [])],
+    moderate_foods: [...(value.moderate_foods ?? [])],
+    high_foods: [...(value.high_foods ?? [])],
+    items: [...(value.items ?? [])].map((item) => ({ ...item })),
+    interpretations: [...(value.interpretations ?? [])]
+  };
+}
+
+const FOOD_SENSITIVITY_GROUPS = [
+  { severity: "mild", label: "轻度", tone: "mild" },
+  { severity: "moderate", label: "中度", tone: "moderate" },
+  { severity: "high", label: "重度", tone: "high" }
+] as const;
+
+function foodSensitivityResultLabel(item: FoodSensitivityItem) {
+  const value = (item.raw_value ?? "").trim();
+  const unit = (item.unit ?? "").trim();
+  if (!value) return "结果待确认";
+  return unit && !value.toLowerCase().includes(unit.toLowerCase())
+    ? `${value} ${unit}`
+    : value;
+}
+
+function FoodSensitivityReviewItem({
+  item,
+  disabled,
+  onChange,
+  onDelete
+}: {
+  item: FoodSensitivityItem;
+  disabled: boolean;
+  onChange: (changes: Partial<FoodSensitivityItem>) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <details className="food-sensitivity-item">
+      <summary className="food-sensitivity-item__summary">
+        <span className="food-sensitivity-item__identity">
+          <strong>{item.name || "未命名项目"}</strong>
+          <span>{foodSensitivityResultLabel(item)}</span>
+        </span>
+        <span className="food-sensitivity-item__action">展开校对</span>
+      </summary>
+      <div className="food-sensitivity-item__editor">
+        <div className="grid-two abnormal-finding-card__editor-body">
+          <label className="field">
+            <span>食物/项目名称</span>
+            <input
+              value={item.name}
+              maxLength={120}
+              disabled={disabled}
+              onChange={(event) => onChange({ name: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>检测结果</span>
+            <input
+              value={item.raw_value ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ raw_value: event.target.value || null })}
+            />
+          </label>
+          <label className="field">
+            <span>单位</span>
+            <input
+              value={item.unit ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ unit: event.target.value || null })}
+            />
+          </label>
+          <label className="field">
+            <span>统一等级</span>
+            <select
+              value={item.severity}
+              disabled={disabled}
+              onChange={(event) => onChange({
+                severity: event.target.value as FoodSensitivityItem["severity"]
+              })}
+            >
+              <option value="mild">轻度</option>
+              <option value="moderate">中度</option>
+              <option value="high">重度</option>
+              <option value="ungraded">待确认</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>原报告等级</span>
+            <input
+              value={item.reported_grade ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ reported_grade: event.target.value || null })}
+            />
+          </label>
+          <label className="field">
+            <span>原等级含义</span>
+            <input
+              value={item.reported_grade_meaning ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ reported_grade_meaning: event.target.value || null })}
+            />
+          </label>
+          <label className="field">
+            <span>报告状态</span>
+            <select
+              value={item.abnormal_flag}
+              disabled={disabled}
+              onChange={(event) => onChange({ abnormal_flag: event.target.value })}
+            >
+              <option value="high">偏高</option>
+              <option value="positive">阳性</option>
+              <option value="unknown">异常/待确认</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>来源页码</span>
+            <input
+              type="number"
+              min={1}
+              value={item.source_page}
+              disabled={disabled}
+              onChange={(event) => onChange({ source_page: Number(event.target.value) || 1 })}
+            />
+          </label>
+          <label className="field">
+            <span>参考/分级范围</span>
+            <input
+              value={item.reference_range ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ reference_range: event.target.value || null })}
+            />
+          </label>
+          <label className="field">
+            <span>分级依据</span>
+            <input
+              value={item.grading_basis ?? ""}
+              disabled={disabled}
+              onChange={(event) => onChange({ grading_basis: event.target.value || null })}
+            />
+          </label>
+        </div>
+        <label className="field food-sensitivity-item__evidence">
+          <span>原文证据</span>
+          <textarea
+            rows={3}
+            value={item.source_text}
+            disabled={disabled}
+            onChange={(event) => onChange({ source_text: event.target.value })}
+          />
+        </label>
+        <button
+          type="button"
+          className="secondary-button secondary-button--danger"
+          disabled={disabled}
+          onClick={onDelete}
+        >
+          删除此项
+        </button>
+      </div>
+    </details>
+  );
 }
 
 function evidenceLabel(status: AbnormalFinding["evidence_status"]) {
@@ -280,6 +452,8 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
   const [payload, setPayload] = useState<CaseDetailResponse | null>(null);
   const [analysis, setAnalysis] = useState<CaseAnalysis | null>(null);
   const [findings, setFindings] = useState<AbnormalFinding[]>([]);
+  const [currentSupplements, setCurrentSupplements] = useState<CurrentSupplement[]>([]);
+  const [foodSensitivity, setFoodSensitivity] = useState<ChronicFoodSensitivityResult | null>(null);
   const [reviewerId, setReviewerId] = useState("reviewer-01");
   const [clinicalSummary, setClinicalSummary] = useState("");
   const [publishableSummary, setPublishableSummary] = useState("");
@@ -341,11 +515,19 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         ? next.reviewed_abnormal_findings
         : next.abnormal_findings;
       setFindings(cloneFindings(source));
+      setCurrentSupplements((next.current_supplements ?? []).map((item) => ({
+        ...item,
+        source_file_ids: [...item.source_file_ids],
+        source_file_names: [...item.source_file_names]
+      })));
+      setFoodSensitivity(cloneFoodSensitivity(next.food_sensitivity));
       return next;
     } catch (err) {
       if (!options?.quiet404) throw err;
       setAnalysis(null);
       setFindings([]);
+      setCurrentSupplements([]);
+      setFoodSensitivity(null);
       return null;
     }
   }
@@ -668,6 +850,20 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
       setReviewActionNotice(null);
       return;
     }
+    if (currentSupplements.some((item) => !item.name.trim())) {
+      const message = "当前服用营养素名称不能为空。";
+      setError(message);
+      setReviewActionError(message);
+      setReviewActionNotice(null);
+      return;
+    }
+    if (foodSensitivity?.items.some((item) => !item.name.trim() || item.source_page < 1)) {
+      const message = "每条慢性食物敏感结果都需要食物名称和有效页码。";
+      setError(message);
+      setReviewActionError(message);
+      setReviewActionNotice(null);
+      return;
+    }
     try {
       setBusy(true);
       setOperation({ placement: "draft", title: "生成结构化草案", stage: "保存医生校对", percent: 3, status: "running" });
@@ -678,9 +874,13 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
         analysis.id,
         reviewerId,
         analysis.revision,
-        findings
+        findings,
+        currentSupplements,
+        foodSensitivity
       );
       setAnalysis(result.analysis);
+      setCurrentSupplements(result.analysis.current_supplements ?? []);
+      setFoodSensitivity(cloneFoodSensitivity(result.analysis.food_sensitivity));
       const message = "异常校对已保存，草案生成任务已进入后台队列。可以刷新页面或离开后再回来查看进度。";
       setNotice(message);
       setReviewActionNotice(message);
@@ -936,6 +1136,171 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                     <p className="muted">MSQ 由固定模板结构化提取；扫描版由模型单次视觉识别兜底，不进入异常指标校对区。</p>
                   </section>
                 ) : null}
+                <section className="synthesis-block synthesis-block--supplements">
+                  <div className="synthesis-block__head">
+                    <h3>当前正在服用的营养素</h3>
+                    <span>医生可编辑</span>
+                  </div>
+                  {currentSupplements.length ? (
+                    <div className="current-supplement-list">
+                      {currentSupplements.map((item, index) => (
+                        <div className="current-supplement-row" key={item.id}>
+                          <div>
+                            <input
+                              value={item.name}
+                              maxLength={120}
+                              disabled={busy || Boolean(payload.review_decision)}
+                              aria-label={`当前服用营养素 ${index + 1}`}
+                              onChange={(event) => setCurrentSupplements((current) => current.map((candidate) => (
+                                candidate.id === item.id ? { ...candidate, name: event.target.value } : candidate
+                              )))}
+                            />
+                            <p className="muted">
+                              {item.doctor_added
+                                ? "医生补充"
+                                : `来源：${item.source_file_names.join("、") || "上传资料"}`}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--danger"
+                            disabled={busy || Boolean(payload.review_decision)}
+                            onClick={() => setCurrentSupplements((current) => current.filter((candidate) => candidate.id !== item.id))}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="muted">未从当前上传资料中识别到正在服用的营养素，可由医生手动补充。</p>}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy || Boolean(payload.review_decision) || currentSupplements.length >= 50}
+                    onClick={() => setCurrentSupplements((current) => [
+                      ...current,
+                      {
+                        id: `supplement_manual_${Date.now()}`,
+                        name: "",
+                        source_file_ids: [],
+                        source_file_names: [],
+                        doctor_added: true
+                      }
+                    ])}
+                  >
+                    添加营养素
+                  </button>
+                </section>
+                {foodSensitivity ? (
+                  <section className="synthesis-block synthesis-block--food-sensitivity">
+                    <div className="synthesis-block__head">
+                      <h3>慢性食物敏感结果</h3>
+                      <span>独立校对，不进入普通异常</span>
+                    </div>
+                    <div className="food-sensitivity-groups">
+                      {FOOD_SENSITIVITY_GROUPS.map((group) => {
+                        const items = foodSensitivity.items.filter((item) => item.severity === group.severity);
+                        return (
+                          <section
+                            className={`food-sensitivity-group food-sensitivity-group--${group.tone}`}
+                            key={group.severity}
+                            aria-labelledby={`food-sensitivity-${group.severity}`}
+                          >
+                            <header className="food-sensitivity-group__header">
+                              <h4 id={`food-sensitivity-${group.severity}`}>{group.label}</h4>
+                              <span>{items.length} 项</span>
+                            </header>
+                            <div className="food-sensitivity-group__items">
+                              {items.length ? items.map((item) => (
+                                <FoodSensitivityReviewItem
+                                  key={item.id}
+                                  item={item}
+                                  disabled={busy || Boolean(payload.review_decision)}
+                                  onChange={(changes) => setFoodSensitivity((current) => current ? {
+                                    ...current,
+                                    items: current.items.map((candidate) => candidate.id === item.id ? {
+                                      ...candidate,
+                                      ...changes
+                                    } : candidate)
+                                  } : current)}
+                                  onDelete={() => setFoodSensitivity((current) => current ? {
+                                    ...current,
+                                    items: current.items.filter((candidate) => candidate.id !== item.id)
+                                  } : current)}
+                                />
+                              )) : <p className="food-sensitivity-group__empty">暂无项目</p>}
+                            </div>
+                          </section>
+                        );
+                      })}
+                    </div>
+                    {foodSensitivity.items.some((item) => item.severity === "ungraded") ? (
+                      <section className="food-sensitivity-pending" aria-labelledby="food-sensitivity-pending">
+                        <header className="food-sensitivity-group__header">
+                          <div>
+                            <h4 id="food-sensitivity-pending">待确认</h4>
+                            <p>原报告缺少可安全核对的等级对应关系，请展开后由医生确认。</p>
+                          </div>
+                          <span>{foodSensitivity.items.filter((item) => item.severity === "ungraded").length} 项</span>
+                        </header>
+                        <div className="food-sensitivity-group__items">
+                          {foodSensitivity.items
+                            .filter((item) => item.severity === "ungraded")
+                            .map((item) => (
+                              <FoodSensitivityReviewItem
+                                key={item.id}
+                                item={item}
+                                disabled={busy || Boolean(payload.review_decision)}
+                                onChange={(changes) => setFoodSensitivity((current) => current ? {
+                                  ...current,
+                                  items: current.items.map((candidate) => candidate.id === item.id ? {
+                                    ...candidate,
+                                    ...changes
+                                  } : candidate)
+                                } : current)}
+                                onDelete={() => setFoodSensitivity((current) => current ? {
+                                  ...current,
+                                  items: current.items.filter((candidate) => candidate.id !== item.id)
+                                } : current)}
+                              />
+                            ))}
+                        </div>
+                      </section>
+                    ) : null}
+                    {!foodSensitivity.items.length ? (
+                      <p className="muted">尚未识别到患者食敏项目，可由医生人工补充；不会阻塞草案生成。</p>
+                    ) : null}
+                    {foodSensitivity.warning ? <p className="muted">⚠ {foodSensitivity.warning}</p> : null}
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy || Boolean(payload.review_decision) || foodSensitivity.items.length >= 200}
+                      onClick={() => setFoodSensitivity((current) => current ? {
+                        ...current,
+                        items: [
+                          ...current.items,
+                          {
+                            id: `food_manual_${Date.now()}`,
+                            name: "",
+                            raw_value: null,
+                            unit: null,
+                            abnormal_flag: "unknown",
+                            severity: "ungraded",
+                            reported_grade: null,
+                            reported_grade_meaning: null,
+                            reference_range: null,
+                            grading_basis: null,
+                            source_page: current.source_page || 1,
+                            source_text: "医生人工补充",
+                            evidence_status: "needs_review"
+                          }
+                        ]
+                      } : current)}
+                    >
+                      添加食敏项目
+                    </button>
+                  </section>
+                ) : null}
               </div>
             </SectionCard>
 
@@ -1137,7 +1502,12 @@ export function CaseWorkbenchLocal({ caseId }: { caseId: string }) {
                           </p>
                         ) : null}
                         {item.evidence_details.length ? <p className="muted">{item.evidence_details.join("；")}</p> : null}
-                        {item.warnings.length ? <p className="error-text">{item.warnings.join("；")}</p> : null}
+                        {item.warnings.length ? <p className="error-text">{formatWarningList(item.warnings)}</p> : null}
+                        {item.current_supplement_overlap_notice ? (
+                          <p className="current-supplement-overlap-notice">
+                            <strong>可能重复服用：</strong>{item.current_supplement_overlap_notice}
+                          </p>
+                        ) : null}
                       </div>
                       <label>
                         <input

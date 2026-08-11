@@ -575,6 +575,8 @@ def review_analysis_and_generate(
             reviewer_id=payload.reviewer_id,
             expected_revision=payload.expected_revision,
             abnormal_findings=payload.abnormal_findings,
+            current_supplements=payload.current_supplements,
+            food_sensitivity=payload.food_sensitivity,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -304,34 +304,23 @@ GET /api/v1/cases/{case_id}/nutrition-recommendations/latest
 Authorization: Bearer <access_token>
 ```
 
-### 7.6 获取处方信息
+### 7.6 获取最终方案总结
 
 ```http
-GET /api/v1/drafts/{draft_id}/prescription-items
+GET /api/v1/drafts/{draft_id}/plan-summary
 Authorization: Bearer <access_token>
 ```
 
-该接口基于已生成推荐草案返回草案级总医嘱说明，不改变现有 `nutrition-recommendations` 响应。
-
-返回示例：
+仅在草案审核发布后返回最终方案总结，未审核草案返回 `409`。响应示例：
 
 ```json
 {
   "case_id": "case_xxx",
   "draft_id": "draft_xxx",
-  "status": "pending_review",
-  "medical_advice": "处方级营养素用于补充身体当下所需营养，予以肝脏解毒代谢支持、免疫调节支持等方向的营养支持，帮助平衡免疫、抗炎、抗氧化及代谢调节。",
-  "advice_source": "local_fallback"
+  "status": "approved",
+  "plan_summary": ["本方案针对……分别配合生活方式调整、复查与医生评估。"]
 }
 ```
-
-说明：
-- `medical_advice` 是整张营养素方案的总医嘱说明，长度约 50-100 字。
-- 文案基于推荐理由、异常指标和功能医学系统失衡分析生成；LLM 可用时润色，不可用或返回不合格时使用本地兜底。
-- 文案采用“对症支持 / 营养支持 / 营养干预”表达，不使用“治疗、治愈、疗效”等疾病治疗承诺。
-- `advice_source` 用于标识医嘱说明来源：`llm` 或 `local_fallback`。
-- 最终审核报告和 PDF 会在“首月营养素干预方案”之后展示“总医嘱说明”。
-- 医生只能读取自己病例下的草案。
 
 ### 7.7 获取报告下载地址
 

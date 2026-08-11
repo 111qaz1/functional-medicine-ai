@@ -217,6 +217,7 @@ class ConfirmedClinicalFinding(StrictModel):
     abnormal_flag: str = "positive"
     confidence: float = 0.0
     source_span: SourceSpan
+    observed_at: datetime | None = None
 
 
 class PageText(StrictModel):
@@ -254,6 +255,23 @@ class AbnormalFinding(StrictModel):
     support_goals: list[str] = Field(default_factory=list)
     standardization_status: FindingStandardizationStatus = FindingStandardizationStatus.unprocessed
     standardization_notes: list[str] = Field(default_factory=list)
+    observed_at: datetime | None = None
+
+
+class FoodSensitivityItem(StrictModel):
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    raw_value: str | None = None
+    unit: str | None = None
+    abnormal_flag: str = "unknown"
+    severity: Literal["mild", "moderate", "high", "ungraded"] = "ungraded"
+    reported_grade: str | None = None
+    reported_grade_meaning: str | None = None
+    reference_range: str | None = None
+    grading_basis: str | None = None
+    source_page: int = Field(default=1, ge=1)
+    source_text: str
+    evidence_status: EvidenceStatus = EvidenceStatus.needs_review
 
 
 class ChronicFoodSensitivityResult(StrictModel):
@@ -263,9 +281,18 @@ class ChronicFoodSensitivityResult(StrictModel):
     mild_foods: list[str] = Field(default_factory=list)
     moderate_foods: list[str] = Field(default_factory=list)
     high_foods: list[str] = Field(default_factory=list)
+    items: list[FoodSensitivityItem] = Field(default_factory=list)
     interpretations: list[str] = Field(default_factory=list)
     valid: bool = False
     warning: str | None = None
+
+
+class CurrentSupplement(StrictModel):
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    source_file_ids: list[str] = Field(default_factory=list)
+    source_file_names: list[str] = Field(default_factory=list)
+    doctor_added: bool = False
 
 
 class DocumentAnalysisResult(StrictModel):
@@ -276,6 +303,7 @@ class DocumentAnalysisResult(StrictModel):
     summary: str | None = None
     abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
     system_findings: list[str] = Field(default_factory=list)
+    current_supplements: list[str] = Field(default_factory=list)
     questionnaire: dict[str, Any] | None = None
     food_sensitivity: ChronicFoodSensitivityResult | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -322,6 +350,7 @@ class CaseAnalysis(StrictModel):
     reviewed_system_findings: list[str] = Field(default_factory=list)
     abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
     reviewed_abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
+    current_supplements: list[CurrentSupplement] = Field(default_factory=list)
     questionnaire: Questionnaire | None = None
     food_sensitivity: ChronicFoodSensitivityResult | None = None
     ignored_files: list[str] = Field(default_factory=list)
@@ -422,6 +451,7 @@ class CaseRecord(StrictModel):
     consent: ConsentRecord | None = None
     files: list[UploadedFile] = Field(default_factory=list)
     questionnaire: Questionnaire | None = None
+    current_supplements: list[CurrentSupplement] = Field(default_factory=list)
     extracted_lab_items: list[ExtractedLabItem] = Field(default_factory=list)
     manual_indicators: list[CaseIndicator] = Field(default_factory=list)
     confirmed_clinical_findings: list[ConfirmedClinicalFinding] = Field(default_factory=list)
@@ -549,6 +579,7 @@ class DraftRecommendationItem(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_details: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    current_supplement_overlap_notice: str | None = None
     primary_system_id: str | None = None
     covered_system_ids: list[str] = Field(default_factory=list)
     matched_finding_ids: list[str] = Field(default_factory=list)
@@ -609,6 +640,77 @@ class LifestylePlan(StrictModel):
     clinician_review_required: bool = False
 
 
+class HealthPortraitFinding(StrictModel):
+    finding_id: str
+    name: str
+    system_ids: list[str] = Field(default_factory=list)
+    evidence_level: Literal[
+        "objective_lab",
+        "imaging_pathology",
+        "symptom_cluster",
+        "patient_reported",
+    ]
+    display_value: str | None = None
+    deviation_tier: Literal["P0", "T2", "T1", "unknown"] = "unknown"
+    trend: Literal["worsening", "improving", "stable", "unknown"] = "unknown"
+    food_sensitivity: bool = False
+    intervenable: bool = True
+    objective: bool = False
+    organ_damage_signal: bool = False
+
+
+class HealthPortraitRiskAssessment(StrictModel):
+    p0_referral: list[str] = Field(default_factory=list)
+    review_required: list[str] = Field(default_factory=list)
+    dose_caution: list[str] = Field(default_factory=list)
+
+
+class HealthMechanismChain(StrictModel):
+    chain_id: str
+    axis_name: str
+    system_path: list[str] = Field(default_factory=list)
+    display_path: list[str] = Field(default_factory=list)
+    supporting_finding_ids: list[str] = Field(default_factory=list)
+    auxiliary_food_sensitivity_ids: list[str] = Field(default_factory=list)
+    objective_support_count: int = 0
+
+
+class HealthInterventionHub(StrictModel):
+    system_id: str
+    label: str
+    supporting_finding_ids: list[str] = Field(default_factory=list)
+    chain_intersection_count: int = 0
+    upstream_score: int = 0
+    evidence_score: int = 0
+    downstream_reach: int = 0
+
+
+class HealthInterventionStep(StrictModel):
+    order: int
+    label: str
+    target_system_ids: list[str] = Field(default_factory=list)
+    linked_recommendation_ids: list[str] = Field(default_factory=list)
+    linked_lifestyle_action_ids: list[str] = Field(default_factory=list)
+
+
+class CoreHealthPortraitDecision(StrictModel):
+    findings: list[HealthPortraitFinding] = Field(default_factory=list)
+    risks: HealthPortraitRiskAssessment = Field(default_factory=HealthPortraitRiskAssessment)
+    mechanism_chains: list[HealthMechanismChain] = Field(default_factory=list)
+    intervention_hubs: list[HealthInterventionHub] = Field(default_factory=list)
+    intervention_steps: list[HealthInterventionStep] = Field(default_factory=list)
+    steady_state_axis: str | None = None
+
+
+class CoreHealthPortraitResult(StrictModel):
+    text: str
+    status: Literal["ready", "degraded", "referral_only"] = "degraded"
+    manual_review_required: bool = False
+    validation_violations: list[str] = Field(default_factory=list)
+    decision: CoreHealthPortraitDecision = Field(default_factory=CoreHealthPortraitDecision)
+    rule_version: str = "health-portrait-v1-three-layer"
+
+
 class RecommendationDraft(StrictModel):
     id: str
     case_id: str
@@ -628,6 +730,7 @@ class RecommendationDraft(StrictModel):
     abstain_reason: str | None = None
     manual_review_required: bool = True
     red_flags: list[str] = Field(default_factory=list)
+    core_health_portrait: CoreHealthPortraitResult | None = None
     structured_system_findings: list[StructuredSystemFinding] = Field(default_factory=list)
     uncovered_system_ids: list[str] = Field(default_factory=list)
     uncovered_system_reasons: dict[

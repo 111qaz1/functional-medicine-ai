@@ -899,7 +899,6 @@ class OpenAICompatibleRagReportFusion:
     """Optional remote helper for naturalizing already-filtered RAG snippets into report sections."""
 
     allowed_sections = (
-        "核心结论与健康画像",
         "异常指标汇总",
         "生活方式干预处方",
     )
@@ -1025,7 +1024,7 @@ class OpenAICompatibleRagReportFusion:
         return (
             "你是功能医学项目的内部医学编辑，只负责把已经通过本地安全过滤的 RAG 参考内容，"
             "自然融入客户可见报告的指定区块。必须严格遵守："
-            "1. 只能处理 target_sections 中实际提供的区块：核心结论与健康画像、异常指标汇总、生活方式干预处方。"
+            "1. 只能处理 target_sections 中实际提供的区块：异常指标汇总、生活方式干预处方；核心结论与健康画像由本地三层规则锁定，禁止改写。"
             "2. 不得改动或新增产品、营养素方案、剂量、禁忌、风险提示、医生规则或人工审核要求。"
             "3. 不得新增目录外产品、药物、处方、治疗承诺、诊断结论。"
             "4. 不得输出教材来源、文件名、页码、chunk id、RAG 字样、功能医学知识库（仅供参考）等内部标记。"
@@ -1038,11 +1037,9 @@ class OpenAICompatibleRagReportFusion:
             "10. 使用简体中文报告标点：中文逗号、顿号、冒号、分号、句号和中文括号；每条以自然完整的中文句子结束。"
             "11. explanation 只解释目标行已有异常的健康管理意义，不得增加其他系统归类、检查结果或患者事实。"
             "只返回 JSON，不要 Markdown。index 使用从 0 开始的条目下标。JSON 格式必须为："
-            "{\"section_patches\":{\"核心结论与健康画像\":[{\"index\":0,\"text\":\"...\"}],"
-            "\"异常指标汇总\":[{\"index\":1,\"explanation\":\"...\"}],"
+            "{\"section_patches\":{\"异常指标汇总\":[{\"index\":1,\"explanation\":\"...\"}],"
             "\"生活方式干预处方\":[]},"
-            "\"used_rag_refs\":{\"核心结论与健康画像\":[\"health_1\"],"
-            "\"异常指标汇总\":[\"indicator_1\"]}}。"
+            "\"used_rag_refs\":{\"异常指标汇总\":[\"indicator_1\"]}}。"
         )
 
     def _compact_rag_items(self, items: list[dict[str, str]]) -> list[dict[str, str]]:

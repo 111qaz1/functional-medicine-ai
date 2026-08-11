@@ -225,28 +225,15 @@
       "response": []
     },
     {
-      "name": "5. Get prescription advice",
+      "name": "5. Plan summary blocked before approval",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('prescription advice returned', function () {",
-              "  pm.response.to.have.status(200);",
-              "});",
-              "const payload = pm.response.json();",
-              "pm.expect(payload.case_id).to.eql(pm.environment.get('case_id'));",
-              "pm.expect(payload.draft_id).to.eql(pm.environment.get('draft_id'));",
-              "pm.expect(payload).to.not.have.property('course_period_default');",
-              "pm.expect(payload).to.not.have.property('items');",
-              "pm.expect(payload).to.not.have.property('dosage');",
-              "pm.expect(payload.medical_advice).to.be.a('string').and.not.empty;",
-              "pm.expect(payload.medical_advice.length).to.be.within(50, 100);",
-              "pm.expect(['llm', 'local_fallback']).to.include(payload.advice_source);",
-              "const serialized = JSON.stringify(payload);",
-              "['关联度', '命中产品标签', 'RAG内部审查', 'product:', 'statement_', '?????', 'API Key', '治疗', '治愈', '疗效'].forEach(function (term) {",
-              "  pm.expect(serialized).to.not.include(term);",
+              "pm.test('unapproved plan summary is blocked', function () {",
+              "  pm.response.to.have.status(409);",
               "});"
             ]
           }
@@ -261,7 +248,7 @@
           }
         ],
         "url": {
-          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/prescription-items",
+          "raw": "{{base_url}}/api/v1/drafts/{{draft_id}}/plan-summary",
           "host": [
             "{{base_url}}"
           ],
@@ -270,7 +257,7 @@
             "v1",
             "drafts",
             "{{draft_id}}",
-            "prescription-items"
+            "plan-summary"
           ]
         }
       },

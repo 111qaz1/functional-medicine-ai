@@ -97,29 +97,15 @@ class PdfReportExporter:
             Spacer(1, 12),
         ]
 
-        skip_section_indexes: set[int] = set()
-        for index, (section_title, items) in enumerate(sections):
-            if index in skip_section_indexes:
-                continue
+        for section_title, items in sections:
             story.append(Paragraph(escape(section_title), self._section_style(section_title, styles)))
             story.append(Spacer(1, 5))
             canonical_title = self._canonical_section_title(section_title)
             if canonical_title in self.nutrition_sections and recommended_skus:
-                prescription_advice_items = self._subsection_items(items, "总医嘱说明")
-                if (
-                    not prescription_advice_items
-                    and index + 1 < len(sections)
-                    and self._canonical_section_title(sections[index + 1][0]) == "总医嘱说明"
-                ):
-                    prescription_advice_items = [
-                        item.text for item in sections[index + 1][1] if item.kind != "subsection"
-                    ]
-                    skip_section_indexes.add(index + 1)
                 story.extend(
                     self._build_nutrition_table_flowables(
                         recommended_skus,
                         styles,
-                        prescription_advice_items=prescription_advice_items,
                     )
                 )
             else:
@@ -366,17 +352,6 @@ class PdfReportExporter:
             sections.append((current_title, current_items))
         return title, sections
 
-    def _subsection_items(self, items: list[PdfReportItem], title: str) -> list[str]:
-        collecting = False
-        collected: list[str] = []
-        for item in items:
-            if item.kind == "subsection":
-                collecting = self._canonical_section_title(item.text) == title
-                continue
-            if collecting:
-                collected.append(item.text)
-        return collected
-
     def _is_hidden_customer_section(self, section_title: str) -> bool:
         return (
             section_title.startswith("RAG")
@@ -399,8 +374,6 @@ class PdfReportExporter:
         self,
         recommended_skus: list[Any],
         styles: dict[str, ParagraphStyle],
-        *,
-        prescription_advice_items: list[str] | None = None,
     ) -> list[Any]:
         rows = self._nutrition_table_rows(recommended_skus)
         if not rows:
@@ -415,12 +388,6 @@ class PdfReportExporter:
 
         for row in rows:
             dosage_html = escape(row["dosage"])
-            if row["warnings"]:
-                dosage_html += (
-                    "<br/><font color='#b04a34'><b>注意/禁忌：</b>"
-                    + escape(self._format_warning_text(row["warnings"]))
-                    + "</font>"
-                )
             data.append(
                 [
                     Paragraph(escape(row["sequence"]), styles["table-cell"]),
@@ -452,26 +419,6 @@ class PdfReportExporter:
             )
         )
         flowables.append(table)
-        flowables.extend(self._build_prescription_advice_flowables(prescription_advice_items or [], styles))
-        return flowables
-
-    def _build_prescription_advice_flowables(
-        self,
-        items: list[str],
-        styles: dict[str, ParagraphStyle],
-    ) -> list[Any]:
-        cleaned_items = [self._clean_customer_text(item) for item in items if self._clean_customer_text(item)]
-        if not cleaned_items:
-            return []
-
-        flowables: list[Any] = [
-            Spacer(1, 9),
-            Paragraph("总医嘱说明", styles["subsection"]),
-            Spacer(1, 4),
-        ]
-        for item in cleaned_items:
-            flowables.append(Paragraph(self._format_item("总医嘱说明", item), styles["body-paragraph"]))
-            flowables.append(Spacer(1, 4))
         return flowables
 
     def _nutrition_table_rows(self, recommended_skus: list[Any]) -> list[dict[str, Any]]:
@@ -488,9 +435,8 @@ class PdfReportExporter:
             product_profile = products.get(sku_id, {}) if sku_id else {}
             product_name = self._clean_customer_text(product_profile.get("product_name") or display_name or "营养素")
             sequence = self._clean_customer_text(product_profile.get("sequence") or "待确认")
-            dosage = self._clean_customer_text(self._sku_value(sku, "dosage") or "请按顾问建议使用")
+            dosage = self._public_dosage(self._sku_value(sku, "dosage"))
             reason = self._clean_customer_text(self._sku_value(sku, "reason"))
-            warnings = self._public_warnings(self._sku_list_value(sku, "warnings"))
             description = self._full_product_description(product_profile.get("description", ""))
             effect = self._clean_customer_text(description or "用于本次个性化营养支持，具体适用性已结合当前报告结果筛选。")
 
@@ -501,7 +447,6 @@ class PdfReportExporter:
                     "effect": effect,
                     "dosage": dosage,
                     "reason": reason,
-                    "warnings": warnings,
                 }
             )
         return rows
@@ -549,32 +494,14 @@ class PdfReportExporter:
             text = text.replace(source, target)
         return re.sub(r"\s+", " ", text).strip()
 
-    def _public_warnings(self, warnings: list[Any], *, limit: int = 2) -> list[str]:
-        public_warnings: list[str] = []
-        for warning in warnings:
-            cleaned = self._clean_customer_text(str(warning))
-            if not cleaned or "sku" in cleaned.lower() or "规格" in cleaned:
-                continue
-            public_warnings.append(self._strip_trailing_sentence_punctuation(cleaned))
-        return list(dict.fromkeys(public_warnings))[:limit]
-
-    def _format_warning_text(self, warnings: list[str]) -> str:
-        normalized = [self._strip_trailing_sentence_punctuation(item) for item in warnings]
-        normalized = [item for item in normalized if item]
-        if not normalized:
-            return ""
-        return "；".join(normalized) + "。"
-
-    def _strip_trailing_sentence_punctuation(self, value: str) -> str:
-        return re.sub(r"[。；;，,\s]+$", "", self._clean_customer_text(value))
+    def _public_dosage(self, value: Any) -> str:
+        dosage = self._clean_customer_text(str(value or ""))
+        dosage = re.sub(r"^医生复核剂量\s*[；;：:,，]?\s*", "", dosage)
+        return dosage or "请按顾问建议使用"
 
     def _sku_value(self, sku: Any, field: str) -> str:
         value = sku.get(field, "") if isinstance(sku, dict) else getattr(sku, field, "")
         return str(value).strip() if value is not None else ""
-
-    def _sku_list_value(self, sku: Any, field: str) -> list[Any]:
-        value = sku.get(field, []) if isinstance(sku, dict) else getattr(sku, field, [])
-        return value if isinstance(value, list) else []
 
     def _format_item(self, section_title: str, item: str) -> str:
         item = self._clean_customer_text(item)

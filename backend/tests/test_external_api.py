@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 import sys
 import tempfile
 import time
 import unittest
-from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -139,24 +137,6 @@ class ExternalApiTests(unittest.TestCase):
         self.assertTrue(payload["draft_id"].startswith("draft_"))
         self.assertTrue(payload["recommendations"])
         return token, case_id, payload
-
-    def _pollute_draft_reasons(self, draft_id: str) -> None:
-        draft = self.container.repository.get_draft(draft_id)
-        self.assertIsNotNone(draft)
-        unsafe_reason = (
-            "命中产品标签：肝胆；关联度 95%；RAG内部审查 product:sku_demo statement_abc "
-            "内部知识证据 evidence_001 D:\\medical\\secret API Key ?????；支持肝胆代谢和营养恢复"
-        )
-        updated_items = [
-            item.model_copy(
-                update={
-                    "reason": unsafe_reason,
-                    "warnings": [*item.warnings, "如正在用药、孕哺或肝肾功能异常，请先咨询医生"],
-                }
-            )
-            for item in draft.recommended_skus
-        ]
-        self.container.repository.save_draft(draft.model_copy(update={"recommended_skus": updated_items}))
 
     def test_external_bearer_token_isolates_owned_cases(self) -> None:
         token_a = self._external_token(self.client, "doctor-a", "甲方医生A")
@@ -315,55 +295,17 @@ class ExternalApiTests(unittest.TestCase):
             self.assertNotIn("medical_advice", item)
             self.assertNotIn("advice_source", item)
 
-        self._pollute_draft_reasons(payload["draft_id"])
         prescription = self.client.get(
             f"/api/v1/drafts/{payload['draft_id']}/prescription-items",
             headers={"Authorization": f"Bearer {token}"},
         )
+        self.assertEqual(prescription.status_code, 404, prescription.text)
 
-        self.assertEqual(prescription.status_code, 200, prescription.text)
-        prescription_payload = prescription.json()
-        self.assertEqual(prescription_payload["case_id"], case_id)
-        self.assertEqual(prescription_payload["draft_id"], payload["draft_id"])
-        self.assertNotIn("manual_review_required", prescription_payload)
-        self.assertNotIn("course_period_default", prescription_payload)
-        self.assertNotIn("items", prescription_payload)
-        self.assertNotIn("dosage", prescription_payload)
-        self.assertEqual(prescription_payload["advice_source"], "local_fallback")
-        self.assertIsInstance(prescription_payload["medical_advice"], str)
-        self.assertGreaterEqual(len(prescription_payload["medical_advice"]), 50)
-        self.assertLessEqual(len(prescription_payload["medical_advice"]), 100)
-        self.assertTrue(
-            any(term in prescription_payload["medical_advice"] for term in ("处方级营养素", "身体当下所需营养"))
+        plan_summary = self.client.get(
+            f"/api/v1/drafts/{payload['draft_id']}/plan-summary",
+            headers={"Authorization": f"Bearer {token}"},
         )
-        self.assertTrue(
-            any(
-                term in prescription_payload["medical_advice"]
-                for term in ("肝脏解毒代谢支持", "免疫调节支持", "抗炎", "抗氧化", "代谢调节")
-            )
-        )
-        serialized = json.dumps(prescription_payload, ensure_ascii=False)
-        for forbidden in (
-            "关联度",
-            "命中产品标签",
-            "RAG内部审查",
-            "product:",
-            "statement_",
-            "内部知识证据",
-            "evidence",
-            "?????",
-            "API Key",
-            "治疗",
-            "治愈",
-            "疗效",
-        ):
-            self.assertNotIn(forbidden, serialized)
-
-        denied_prescription = self.other_client.get(
-            f"/api/v1/drafts/{payload['draft_id']}/prescription-items",
-            headers={"Authorization": f"Bearer {self._external_token(self.other_client, 'doctor-other', 'Other Doctor')}"},
-        )
-        self.assertEqual(denied_prescription.status_code, 403, denied_prescription.text)
+        self.assertEqual(plan_summary.status_code, 409, plan_summary.text)
 
         report_url = self.client.get(
             f"/api/v1/drafts/{payload['draft_id']}/report-download",
@@ -371,85 +313,31 @@ class ExternalApiTests(unittest.TestCase):
         )
         self.assertEqual(report_url.status_code, 409, report_url.text)
 
-    def test_external_prescription_items_uses_llm_json_when_available(self) -> None:
-        token, _, payload = self._external_case_with_draft(doctor_id="doctor-llm", doctor_name="LLM 医生")
-        self.container.settings = replace(
-            self.container.settings,
-            llm_base_url="http://mock-llm",
-            llm_api_key="mock-key",
-            llm_model="mock-model",
-            llm_api_style="chat",
+    def test_external_plan_summary_returns_final_approved_section(self) -> None:
+        token, case_id, payload = self._external_case_with_draft(
+            doctor_id="doctor-plan-summary",
+            doctor_name="方案总结医生",
         )
-        remote_advice = "处方级营养素用于补充身体当下所需营养，予以血糖代谢支持、免疫调节支持等方向的营养支持，帮助平衡免疫、抗炎、抗氧化及代谢调节。"
+        self.container.review_service.approve(
+            payload["draft_id"],
+            reviewer_id="doctor-plan-summary",
+            publishable_summary=None,
+            edits={},
+        )
 
-        class DummyResponse:
-            def raise_for_status(self) -> None:
-                return None
-
-            def json(self) -> dict:
-                return {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": json.dumps({"medical_advice": remote_advice}, ensure_ascii=False),
-                            }
-                        }
-                    ]
-                }
-
-        with patch("app.services.prescription_advice.httpx.Client") as client_factory:
-            client_factory.return_value.__enter__.return_value.post.return_value = DummyResponse()
-            response = self.client.get(
-                f"/api/v1/drafts/{payload['draft_id']}/prescription-items",
-                headers={"Authorization": f"Bearer {token}"},
-            )
+        response = self.client.get(
+            f"/api/v1/drafts/{payload['draft_id']}/plan-summary",
+            headers={"Authorization": f"Bearer {token}"},
+        )
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(body["advice_source"], "llm")
-        self.assertEqual(body["medical_advice"], remote_advice)
-        self.assertNotIn("items", body)
-
-    def test_external_prescription_items_falls_back_when_llm_output_is_unsafe(self) -> None:
-        token, _, payload = self._external_case_with_draft(doctor_id="doctor-unsafe-llm", doctor_name="LLM 医生")
-        self.container.settings = replace(
-            self.container.settings,
-            llm_base_url="http://mock-llm",
-            llm_api_key="mock-key",
-            llm_model="mock-model",
-            llm_api_style="chat",
-        )
-        remote_advice = "RAG内部审查显示 product:sku 命中产品标签，关联度 95%，建议对症治疗。"
-
-        class DummyResponse:
-            def raise_for_status(self) -> None:
-                return None
-
-            def json(self) -> dict:
-                return {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": json.dumps({"medical_advice": remote_advice}, ensure_ascii=False),
-                            }
-                        }
-                    ]
-                }
-
-        with patch("app.services.prescription_advice.httpx.Client") as client_factory:
-            client_factory.return_value.__enter__.return_value.post.return_value = DummyResponse()
-            response = self.client.get(
-                f"/api/v1/drafts/{payload['draft_id']}/prescription-items",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        self.assertEqual(response.status_code, 200, response.text)
-        body = response.json()
-        self.assertEqual(body["advice_source"], "local_fallback")
-        serialized = json.dumps(body, ensure_ascii=False)
-        for forbidden in ("关联度", "命中产品标签", "RAG内部审查", "product:", "治疗", "治愈", "疗效"):
-            self.assertNotIn(forbidden, serialized)
-
+        self.assertEqual(body["case_id"], case_id)
+        self.assertEqual(body["draft_id"], payload["draft_id"])
+        self.assertEqual(body["status"], "approved")
+        self.assertIsInstance(body["plan_summary"], list)
+        self.assertTrue(body["plan_summary"])
+        self.assertTrue(all(isinstance(item, str) and item.strip() for item in body["plan_summary"]))
 
 if __name__ == "__main__":
     unittest.main()

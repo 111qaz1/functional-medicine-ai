@@ -20,7 +20,6 @@ from app.providers.remote import (
     OpenAICompatibleRagReportFusion,
 )
 from app.repositories.in_memory import LocalRepository
-from app.services.prescription_advice import PrescriptionAdviceService
 
 
 class AllLLMPathsAccountingTests(unittest.TestCase):
@@ -126,17 +125,11 @@ class AllLLMPathsAccountingTests(unittest.TestCase):
                     )
                     fusion._call_remote_model({})
 
-                    prescription = PrescriptionAdviceService(
-                        settings,
-                        request_controller=controller,
-                        http_client=client,
-                    )
-                    prescription._call_remote_model({})
             finally:
                 client.close()
 
             saved = repository.list_llm_request_usage(case_id="case-all")
-            self.assertEqual(len(saved), 5)
+            self.assertEqual(len(saved), 4)
             self.assertEqual(
                 {item.operation for item in saved},
                 {
@@ -144,7 +137,6 @@ class AllLLMPathsAccountingTests(unittest.TestCase):
                     "case_assistant",
                     "grounded_composer",
                     "rag_report_fusion",
-                    "prescription_advice",
                 },
             )
             self.assertTrue(all(item.total_tokens == 120 for item in saved))
@@ -152,7 +144,7 @@ class AllLLMPathsAccountingTests(unittest.TestCase):
             self.assertTrue(all(item.analysis_id == "analysis-all" for item in saved))
             self.assertTrue(all(item.draft_id == "draft-all" for item in saved))
             self.assertEqual(limiter.snapshot()["inflight"], 0)
-            self.assertEqual(limiter.snapshot()["requests_in_window"], 5)
+            self.assertEqual(limiter.snapshot()["requests_in_window"], 4)
             self.assertTrue(
                 all(
                     "max_tokens" not in payload

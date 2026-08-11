@@ -258,6 +258,22 @@ class AbnormalFinding(StrictModel):
     observed_at: datetime | None = None
 
 
+class FoodSensitivityItem(StrictModel):
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    raw_value: str | None = None
+    unit: str | None = None
+    abnormal_flag: str = "unknown"
+    severity: Literal["mild", "moderate", "high", "ungraded"] = "ungraded"
+    reported_grade: str | None = None
+    reported_grade_meaning: str | None = None
+    reference_range: str | None = None
+    grading_basis: str | None = None
+    source_page: int = Field(default=1, ge=1)
+    source_text: str
+    evidence_status: EvidenceStatus = EvidenceStatus.needs_review
+
+
 class ChronicFoodSensitivityResult(StrictModel):
     source_file_id: str
     source_file_name: str
@@ -265,6 +281,7 @@ class ChronicFoodSensitivityResult(StrictModel):
     mild_foods: list[str] = Field(default_factory=list)
     moderate_foods: list[str] = Field(default_factory=list)
     high_foods: list[str] = Field(default_factory=list)
+    items: list[FoodSensitivityItem] = Field(default_factory=list)
     interpretations: list[str] = Field(default_factory=list)
     valid: bool = False
     warning: str | None = None

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.domain.models import (
     AbnormalFinding,
+    ChronicFoodSensitivityResult,
     AuditLog,
     CaseIndicator,
     CaseRecord,
@@ -83,6 +84,7 @@ class ReviewAndGenerateRequest(BaseModel):
     expected_revision: int = Field(ge=1)
     abnormal_findings: list[AbnormalFinding] = Field(default_factory=list)
     current_supplements: list[CurrentSupplement] | None = None
+    food_sensitivity: ChronicFoodSensitivityResult | None = None
 
 
 class ReviewAndGenerateResponse(BaseModel):

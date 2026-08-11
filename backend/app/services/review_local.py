@@ -13,7 +13,6 @@ from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.pdf_export import PdfReportExporter
-from app.services.prescription_advice import PrescriptionAdviceService
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
 from app.services.report_content import (
     build_core_health_portrait,
@@ -52,14 +51,12 @@ class ReviewService:
         indicator_service: CaseIndicatorService,
         pdf_exporter: PdfReportExporter,
         rag_fusion_provider: Any | None = None,
-        prescription_advice_service: PrescriptionAdviceService | None = None,
     ) -> None:
         self.repository = repository
         self.case_service = case_service
         self.indicator_service = indicator_service
         self.pdf_exporter = pdf_exporter
         self.rag_fusion_provider = rag_fusion_provider
-        self.prescription_advice_service = prescription_advice_service
 
     def approve(
         self,
@@ -81,14 +78,6 @@ class ReviewService:
         report = self._select_publishable_report(effective_draft, case, publishable_summary)
         report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, edits)
-        report = self._ensure_prescription_advice_section(
-            report,
-            effective_draft,
-            replace_existing=(
-                self._is_manual_publishable_summary(publishable_summary)
-                and not effective_draft.source_analysis_id
-            ),
-        )
         report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._remove_lifestyle_confirmation_clauses(report)
@@ -149,7 +138,6 @@ class ReviewService:
             report = self._render_report(effective_draft, case)
         report = self._replace_overridden_dosages(report, draft, effective_draft)
         report = self._remove_excluded_nutrition_lines(report, draft, review.edits)
-        report = self._ensure_prescription_advice_section(report, effective_draft)
         report = self._ensure_core_health_portrait_section(report, effective_draft, case)
         report = self._ensure_plan_summary_section(report, effective_draft, case)
         report = self._remove_lifestyle_confirmation_clauses(report)
@@ -318,73 +306,6 @@ class ReviewService:
                 return self._ensure_report_nutrition_safety(report, draft)
         return self._render_report(draft, case)
 
-    def _is_manual_publishable_summary(self, publishable_summary: str | None) -> bool:
-        if not publishable_summary or not publishable_summary.strip():
-            return False
-        return (
-            not self._looks_like_internal_generated_report(publishable_summary)
-            and not self._looks_like_corrupted_publishable_report(publishable_summary)
-        )
-
-    def _prescription_medical_advice(self, draft) -> str:
-        if not self.prescription_advice_service:
-            return ""
-        return self.prescription_advice_service.build_advice(draft).medical_advice
-
-    def _ensure_prescription_advice_section(
-        self,
-        report_text: str,
-        draft,
-        *,
-        replace_existing: bool = False,
-    ) -> str:
-        lines = (report_text or "").strip().splitlines()
-        if not lines:
-            return report_text
-
-        section_title = "总医嘱说明"
-        existing_start = self._heading_start_index(lines, section_title, levels=(2, 3))
-        if getattr(draft, "source_analysis_id", None):
-            if existing_start is not None and not replace_existing:
-                return report_text
-            local_items = self._as_list((getattr(draft, "report_sections", {}) or {}).get(section_title))
-            if not local_items:
-                return report_text
-            if existing_start is not None:
-                existing_end = self._heading_block_end_index(lines, existing_start)
-                lines = lines[:existing_start] + lines[existing_end:]
-            section_lines = ["", f"### {section_title}", *local_items, ""]
-            nutrition_start = self._first_section_start_index(
-                lines,
-                ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
-            )
-            insert_at = self._section_end_index(lines, nutrition_start) if nutrition_start is not None else len(lines)
-            return "\n".join(lines[:insert_at] + section_lines + lines[insert_at:]).strip()
-
-        advice = self._prescription_medical_advice(draft)
-        if not advice:
-            return report_text
-
-        if existing_start is not None and not replace_existing:
-            return report_text
-        if existing_start is not None:
-            existing_end = self._heading_block_end_index(lines, existing_start)
-            lines = lines[:existing_start] + lines[existing_end:]
-
-        section_lines = ["", f"### {section_title}", advice, ""]
-        nutrition_start = self._first_section_start_index(
-            lines,
-            ("首月营养素干预方案", "个性化营养素方案", "营养素推荐"),
-        )
-        if nutrition_start is not None:
-            insert_at = self._section_end_index(lines, nutrition_start)
-            lines = lines[:insert_at] + section_lines + lines[insert_at:]
-        else:
-            notice_start = self._section_start_index(lines, "重要提醒")
-            insert_at = notice_start if notice_start is not None else len(lines)
-            lines = lines[:insert_at] + section_lines + lines[insert_at:]
-        return "\n".join(lines).strip()
-
     def _section_start_index(self, lines: list[str], title: str) -> int | None:
         return self._heading_start_index(lines, title, levels=(2,))
 
@@ -523,9 +444,6 @@ class ReviewService:
             stripped = raw_line.strip()
             if stripped.startswith("## "):
                 title = self._canonical_section_title(stripped[3:])
-                if title == "总医嘱说明":
-                    lines.append("### 总医嘱说明")
-                    continue
                 chapter_index += 1
                 lines.append(f"## {self._chinese_chapter_number(chapter_index)}、{title}")
                 continue
@@ -1357,7 +1275,6 @@ class ReviewService:
                 draft,
                 sections.get("首月营养素干预方案"),
             )
-            total_advice = self._as_list(sections.get("总医嘱说明"))
             ordered_sections = [
                 ("核心结论与健康画像", sections.get("核心结论与健康画像")),
                 ("异常指标汇总", sections.get("异常指标汇总")),
@@ -1365,7 +1282,6 @@ class ReviewService:
                 ("功能医学系统失衡分析", sections.get("功能医学系统失衡分析")),
                 ("生活方式干预", sections.get("生活方式干预")),
                 ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
-                ("总医嘱说明", total_advice),
                 ("方案总结", sections.get("方案总结")),
                 ("复查与随访计划", sections.get("复查与随访计划")),
                 ("安全警示", sections.get("安全警示")),
@@ -1397,15 +1313,12 @@ class ReviewService:
         )
         system_analysis = self._structure_system_analysis(system_analysis)
         supplement_adjustments = self._customerize_items(sections.get("现有补充剂调整建议", []))
-        prescription_advice = self._prescription_medical_advice(draft)
-
         ordered_sections = [
             ("核心结论与健康画像", health_portrait),
             ("异常指标汇总", key_indicators),
             ("功能医学系统失衡分析", system_analysis),
             ("生活方式干预处方", self._customer_lifestyle_focus(case, draft, abnormal_indicators)),
             ("首月营养素干预方案", self._customerize_items(nutrition_plan)),
-            ("总医嘱说明", [prescription_advice] if prescription_advice else []),
             ("现有补充剂调整建议", supplement_adjustments),
             ("需要补充确认", missing_info),
             ("方案总结", sections.get("方案总结")),
@@ -1432,7 +1345,7 @@ class ReviewService:
             items = self._as_list(content)
             if not items:
                 continue
-            lines.append(f"### {title}" if title == "总医嘱说明" else f"## {title}")
+            lines.append(f"## {title}")
             for item in items:
                 if self._is_report_subheading(item):
                     lines.append(self._normalize_report_line(item))

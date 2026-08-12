@@ -28,7 +28,7 @@ Docker Desktop 建议分配不少于 8 GB 内存。
 ```powershell
 New-Item -ItemType Directory -Force C:\apps | Out-Null
 Set-Location C:\apps
-git clone --branch dev1 https://github.com/111qaz1/functional-medicine-ai.git
+git clone --branch main https://github.com/111qaz1/functional-medicine-ai.git
 Set-Location .\functional-medicine-ai
 ```
 
@@ -44,9 +44,9 @@ notepad .env
 确认以下配置：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:7800
 BACKEND_PORT=7800
 FRONTEND_PORT=3100
+FM_PUBLIC_BASE_URL=http://localhost:3100
 FM_SESSION_COOKIE_SECURE=0
 
 LLM_BASE_URL=https://api.moonshot.cn/v1
@@ -64,6 +64,13 @@ FM_MAX_UPLOAD_MB=50
 FM_MAX_PDF_PAGES=50
 FM_EXTERNAL_TRUST_SHARED_SECRET=替换为随机高强度字符串
 ```
+
+浏览器请求统一发送到 Next.js 的同源路径，再由前端容器转发至 FastAPI。不要再设置 `NEXT_PUBLIC_API_BASE_URL`，也不要把 `7800` 端口写入浏览器端配置。
+
+- `INTERNAL_API_BASE_URL` 是 Next.js 服务端变量。Compose 默认设置为 `http://backend:8000`，通常不要在 `.env` 中覆盖。
+- `FM_PUBLIC_BASE_URL` 只用于外部 API 生成绝对下载地址。本机部署填写 `http://localhost:3100`；通过 HTTPS 域名访问时填写正式域名，例如 `https://fm.example.com`。
+- 通过 HTTPS 部署时设置 `FM_SESSION_COOKIE_SECURE=1`；仅在本机 HTTP 或临时局域网 HTTP 环境使用 `0`。
+- `BACKEND_PORT=7800` 只开放在宿主机回环地址，供本机排障使用，不应映射到公网。
 
 如果没有 `bge-m3` 模型文件，在 `.env` 中设置：
 
@@ -96,10 +103,23 @@ docker compose ps
 
 首次构建需要下载 Python、Node.js、PyTorch 等依赖。
 
+如果只修改 `.env`，使用下面的命令重建容器即可，不需要删除镜像或数据：
+
+```powershell
+docker compose up -d --force-recreate
+```
+
+如果修改了代码、Dockerfile 或依赖，则必须带 `--build`：
+
+```powershell
+docker compose up -d --build --remove-orphans
+```
+
 ## 5. 验证部署
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:7800/health
+Invoke-RestMethod http://127.0.0.1:3100/health
 Start-Process http://localhost:3100
 ```
 
@@ -110,6 +130,8 @@ Start-Process http://localhost:3100
 ```
 
 浏览器访问：`http://localhost:3100`。
+
+第一个健康检查用于验证宿主机到 FastAPI 的本地排障链路；第二个用于验证实际的 `Next.js -> backend:8000` 转发链路。对外部署时只公开 Next.js/Nginx 入口，不公开 `7800`。
 
 ## 6. 常用命令
 
@@ -161,9 +183,29 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-- 前端无法调用后端：检查 `NEXT_PUBLIC_API_BASE_URL`，修改后必须重新构建前端镜像。
+### Docker Desktop 拉取镜像超时或残留代理
+
+如果日志包含 `Docker Desktop has no HTTPS proxy`、`registry-1.docker.io:443` 超时，或之前使用的本机代理端口（例如 `7897`）已经关闭：
+
+1. 打开 Docker Desktop 的 `Settings -> Resources -> Proxies`。
+2. 不需要代理时，将 `Docker Desktop proxy` 和 `Containers proxy` 都设置为 `No proxy`；需要代理时选择 `System proxy`，或在 `Manual configuration` 中填写当前确实可用的 HTTP/HTTPS 代理地址。
+3. 不要保留已经停止监听的旧代理端口。应用设置并重启 Docker Desktop。
+4. 分别验证基础镜像拉取和 Compose 构建：
+
+```powershell
+docker pull node:22-alpine
+docker pull python:3.12-slim
+docker compose build
+docker compose up -d
+```
+
+`Docker Desktop proxy` 负责 Desktop/CLI 等宿主侧流量；`Containers proxy` 会用于镜像拉取，因此两处配置不一致时仍可能出现 `docker compose build` 超时。
+
+代理模式的含义和界面位置以 [Docker Desktop 代理设置文档](https://docs.docker.com/desktop/settings-and-maintenance/settings/#proxies) 为准。
+
+- 前端无法调用后端：检查 `docker compose logs frontend`，并确认前端容器中的 `INTERNAL_API_BASE_URL` 为 `http://backend:8000`。
 - Kimi 请求失败：检查 API Key、账户额度和服务器网络。
 - RAG 模型缺失：复制完整模型到 `bge-m3`，或关闭 `FM_RAG_ENABLED`。
-- 端口冲突：修改 `.env` 中的 `BACKEND_PORT`、`FRONTEND_PORT`，同时修改 `NEXT_PUBLIC_API_BASE_URL`。
+- 端口冲突：修改 `.env` 中的 `BACKEND_PORT`、`FRONTEND_PORT`；如使用外部报告下载地址，同时更新 `FM_PUBLIC_BASE_URL`。
 
 Docker Desktop 安装要求以 [Docker 官方文档](https://docs.docker.com/desktop/setup/install/windows-install/) 为准。

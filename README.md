@@ -65,9 +65,9 @@ Copy-Item .env.example .env
 至少设置模型 API Key 和外部接口共享密钥：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:7800
 BACKEND_PORT=7800
 FRONTEND_PORT=3100
+FM_PUBLIC_BASE_URL=http://localhost:3100
 
 LLM_BASE_URL=https://api.moonshot.cn/v1
 LLM_API_KEY=替换为实际_API_Key
@@ -126,7 +126,8 @@ docker compose ps
 
 完整配置以 `.env.example` 为准，常用项目包括：
 
-- `NEXT_PUBLIC_API_BASE_URL`：浏览器访问的后端地址；修改后需要重新构建前端镜像。
+- `INTERNAL_API_BASE_URL`：Next.js 服务端访问后端的地址；Docker Compose 默认使用 `http://backend:8000`，通常无需手动设置。
+- `FM_PUBLIC_BASE_URL`：外部接口返回绝对下载地址时使用的公网地址；正式环境建议设置为 HTTPS 域名。
 - `BACKEND_PORT`、`FRONTEND_PORT`：宿主机端口。
 - `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_API_STYLE`：模型服务配置。
 - `LLM_TIMEOUT_SECONDS`、`LLM_THINKING_TIMEOUT_SECONDS`：普通请求和思考请求超时。

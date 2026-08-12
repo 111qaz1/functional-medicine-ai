@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -312,6 +313,34 @@ class ExternalApiTests(unittest.TestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(report_url.status_code, 409, report_url.text)
+
+    def test_external_report_download_uses_configured_public_base_url(self) -> None:
+        token, _, payload = self._external_case_with_draft(
+            doctor_id="doctor-public-url",
+            doctor_name="公网链接医生",
+        )
+        draft_id = payload["draft_id"]
+        self.container.review_service.approve(
+            draft_id,
+            reviewer_id="doctor-public-url",
+            publishable_summary=None,
+            edits={},
+        )
+        self.container.settings = replace(
+            self.container.settings,
+            public_base_url="https://fm.example.com",
+        )
+
+        report_url = self.client.get(
+            f"/api/v1/drafts/{draft_id}/report-download",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(report_url.status_code, 200, report_url.text)
+        self.assertEqual(
+            report_url.json()["download_url"],
+            f"https://fm.example.com/api/v1/drafts/{draft_id}/report.pdf",
+        )
 
     def test_external_plan_summary_returns_final_approved_section(self) -> None:
         token, case_id, payload = self._external_case_with_draft(

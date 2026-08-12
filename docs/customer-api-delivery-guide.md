@@ -76,7 +76,7 @@ bge-m3/
 ```text
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+FM_PUBLIC_BASE_URL=http://localhost:3000
 ```
 
 ## 4. 环境变量配置
@@ -96,7 +96,7 @@ cp .env.example .env
 部署前确认以下配置：
 
 ```text
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+FM_PUBLIC_BASE_URL=http://localhost:3000
 FM_EXTERNAL_TRUST_SHARED_SECRET=replace-with-strong-shared-secret
 FM_RAG_MODEL_HOST_DIR=./bge-m3
 FM_RAG_MODEL_PATH=/models/bge-m3
@@ -394,8 +394,8 @@ npx newman run postman/external_api.postman_collection.json -e postman/external_
 
 处理：
 
-- 确认 `.env` 中 `NEXT_PUBLIC_API_BASE_URL` 是浏览器可访问的后端地址。
-- 修改该变量后重新构建前端镜像。
+- 确认前端容器中的 `INTERNAL_API_BASE_URL` 为 `http://backend:8000`。
+- 确认后端容器健康，并查看 `docker compose logs frontend backend`。
 
 ### 大模型不可用
 

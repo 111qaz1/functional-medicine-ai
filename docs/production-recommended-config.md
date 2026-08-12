@@ -12,9 +12,9 @@
         | HTTPS 443
         v
 Nginx
-        |-- 前端页面 -> 127.0.0.1:3000
-        |-- 后端接口 -> 127.0.0.1:8000
-        |-- /api/v1 外部接口 -> 127.0.0.1:8000
+        |-- 所有请求 -> 127.0.0.1:3000 (Next.js)
+                              |
+                              `-> backend:8000 (FastAPI)
 ```
 
 对外只开放 `80/443`。`3000/8000` 只允许服务器本机访问，不直接暴露到公网。
@@ -63,9 +63,8 @@ Nginx
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
 
-# 正式域名。修改后必须重新构建前端镜像
-NEXT_PUBLIC_API_BASE_URL=https://fm.example.com
-FM_CORS_ALLOW_ORIGINS=https://fm.example.com
+# 正式域名，用于外部接口生成绝对下载地址
+FM_PUBLIC_BASE_URL=https://fm.example.com
 
 # HTTPS 环境建议开启安全 Cookie
 FM_SESSION_COOKIE_SECURE=1
@@ -100,8 +99,7 @@ FM_SQLITE_PATH=/app/.runtime/app.sqlite3
 
 ```env
 FM_SESSION_COOKIE_SECURE=0
-NEXT_PUBLIC_API_BASE_URL=http://服务器IP或域名
-FM_CORS_ALLOW_ORIGINS=http://服务器IP或域名
+FM_PUBLIC_BASE_URL=http://服务器IP或域名
 ```
 
 正式 HTTPS 上线时再改回 `FM_SESSION_COOKIE_SECURE=1`。
@@ -155,11 +153,7 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:3000
 ```
 
-如果修改了 `NEXT_PUBLIC_API_BASE_URL`，必须重新构建前端：
-
-```bash
-docker compose up --build -d frontend
-```
+前端通过同源 `/api/internal/*` 访问 API，Docker Compose 会把请求转发到 `http://backend:8000`，不再需要浏览器端后端地址。
 
 ## 7. Nginx 配置
 
@@ -274,9 +268,9 @@ curl https://fm.example.com/openapi.json
 
 如果前端能打开但接口失败：
 
-- 检查 `NEXT_PUBLIC_API_BASE_URL` 是否为正式域名。
-- 检查修改后是否重新构建前端。
-- 检查 `FM_CORS_ALLOW_ORIGINS` 是否包含正式域名。
+- 检查前端容器日志。
+- 检查前端容器的 `INTERNAL_API_BASE_URL` 是否为 `http://backend:8000`。
+- 检查 `backend` 服务是否健康。
 
 如果登录后刷新丢失会话：
 

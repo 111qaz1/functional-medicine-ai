@@ -134,13 +134,13 @@ docker compose down
 
 ### 前端能打开但请求后端失败
 
-检查 `.env` 里的配置：
+检查前端容器的内部后端地址：
 
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```bash
+docker compose exec frontend printenv INTERNAL_API_BASE_URL
 ```
 
-本地 Docker 启动时一般保持这个默认值即可。
+Docker Compose 默认应输出 `http://backend:8000`，同时确认 `docker compose ps` 中后端为 healthy。
 
 ### 图片识别或模型增强不可用
 

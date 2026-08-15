@@ -81,6 +81,10 @@ from app.services.questionnaire_import import (
     QuestionnaireSemanticFragment,
 )
 from app.services.health_portrait import build_core_health_portrait_result
+from app.services.food_sensitivity import (
+    dedupe_food_sensitivity_items,
+    normalize_food_sensitivity_name,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -128,7 +132,6 @@ _FOOD_REPORT_TITLE_TERMS = (
     "慢性食物敏感分析",
     "慢性食物敏感报告",
     "慢性食物过敏",
-    "食物肠道过敏",
     "食物过敏检测",
     "食物特异性igg",
     "食物不耐受",
@@ -204,24 +207,36 @@ def is_chronic_food_sensitivity_filename(filename: str) -> bool:
     )
 
 
-def _document_identity_text(
-    filename: str,
+def _has_food_sensitivity_report_title(
     page_texts: list[Any] | None,
     *,
-    page_limit: int | None = None,
-) -> str:
-    selected_pages = list(page_texts or [])
-    if page_limit is not None:
-        selected_pages = selected_pages[:page_limit]
-    return unicodedata.normalize(
-        "NFKC",
-        "\n".join(
-            [
-                filename or "",
-                *(str(getattr(page, "text", "") or "") for page in selected_pages),
-            ]
-        ),
-    ).lower()
+    line_limit: int = 20,
+) -> bool:
+    first_page = list(page_texts or [])[:1]
+    if not first_page:
+        return False
+    leading_text = str(getattr(first_page[0], "text", "") or "")[:800]
+    title_lines = [line.strip()[:160] for line in leading_text.splitlines() if line.strip()][
+        :line_limit
+    ]
+    identity_markers = ("报告", "检测", "分析", "igg", "profile")
+    for raw_line in title_lines:
+        normalized_line = unicodedata.normalize("NFKC", raw_line).strip().lower()
+        compact_line = re.sub(r"[\s：:—_\-（）()\[\]【】]+", "", normalized_line)
+        for term in _FOOD_REPORT_TITLE_TERMS:
+            normalized_term = unicodedata.normalize("NFKC", term).strip().lower()
+            compact_term = re.sub(
+                r"[\s：:—_\-（）()\[\]【】]+",
+                "",
+                normalized_term,
+            )
+            if compact_line == compact_term:
+                return True
+            if normalized_term in normalized_line and any(
+                marker in normalized_line for marker in identity_markers
+            ):
+                return True
+    return False
 
 
 def is_gut_microbiome_report(
@@ -311,6 +326,26 @@ _FOOD_SENSITIVITY_REPORT_TYPES = {
 }
 
 
+def _is_msq_report_type(report_type: str) -> bool:
+    normalized_type = re.sub(
+        r"[\s-]+",
+        "_",
+        unicodedata.normalize("NFKC", report_type or "").strip().lower(),
+    )
+    return (
+        normalized_type == "msq"
+        or normalized_type.startswith("msq_")
+        or normalized_type.endswith("_msq")
+    )
+
+
+def is_confirmed_msq_result(result: Any) -> bool:
+    return bool(
+        _is_msq_report_type(str(getattr(result, "report_type", "") or ""))
+        and getattr(result, "questionnaire", None)
+    )
+
+
 def is_chronic_food_sensitivity_report(
     *,
     filename: str = "",
@@ -330,15 +365,13 @@ def is_chronic_food_sensitivity_report(
         "_",
         unicodedata.normalize("NFKC", report_type or "").strip().lower(),
     )
-    if not page_texts:
-        return normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
-    identity = _document_identity_text(filename, page_texts, page_limit=1)
-    has_report_title = any(term in identity for term in _FOOD_REPORT_TITLE_TERMS)
-    return has_report_title and (
-        normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
-        or "igg" in identity
-        or "食物" in identity
+    has_usable_text = any(
+        str(getattr(page, "text", "") or "").strip()
+        for page in page_texts or []
     )
+    if not has_usable_text:
+        return normalized_type in _FOOD_SENSITIVITY_REPORT_TYPES
+    return _has_food_sensitivity_report_title(page_texts)
 
 
 def has_chronic_food_sensitivity_content(
@@ -2849,7 +2882,9 @@ class OpenAICompatibleCaseAnalysisProvider:
         food = None
         report_type = "unknown_medical"
         medical_content = False
+        confirmed_msq = False
         for payload in payloads:
+            confirmed_msq = confirmed_msq or is_confirmed_msq_result(payload)
             if payload.report_type != "unknown_medical":
                 report_type = (
                     "medical_questionnaire"
@@ -2976,7 +3011,13 @@ class OpenAICompatibleCaseAnalysisProvider:
                 and not system_findings
             )
         )
-        if is_chronic_food_sensitivity_report(
+        if confirmed_msq and merged_questionnaire is not None:
+            report_type = "msq"
+            medical_content = True
+            food = None
+        elif has_chronic_food_sensitivity_content(
+            food
+        ) or is_chronic_food_sensitivity_report(
             filename=uploaded_file.filename,
             report_type=report_type,
             page_texts=uploaded_file.page_texts,
@@ -3006,6 +3047,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 
         if (
             model_claimed_questionnaire
+            and not confirmed_msq
             and not self._is_medical_questionnaire_type(report_type)
         ):
             merged_questionnaire = None
@@ -3763,7 +3805,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     MSQ_SEMANTIC_RETRY_MARKER = "__MSQ_SEMANTIC_RETRY__"
-    DOCUMENT_ANALYSIS_CACHE_VERSION = "document-analysis-v14-msq-targeted-semantic"
+    DOCUMENT_ANALYSIS_CACHE_VERSION = "document-analysis-v15-msq-food-classification"
     _MSQ_SEMANTIC_LIST_FIELDS = {
         "known_conditions",
         "chief_concerns",
@@ -4247,21 +4289,16 @@ class CaseAnalysisService:
                 raise ValueError("慢性食物敏感结果引用了分析快照以外的文件。")
             if len(food_sensitivity.items) > 200:
                 raise ValueError("慢性食物敏感结果最多保留200项。")
-            reviewed_food_items: list[FoodSensitivityItem] = []
-            seen_food_items: set[str] = set()
+            review_candidates: list[FoodSensitivityItem] = []
             source_file = files_by_id[food_sensitivity.source_file_id]
             for item in food_sensitivity.items:
-                name = re.sub(r"\s+", " ", item.name).strip()
+                name = normalize_food_sensitivity_name(item.name)
                 if not name:
                     raise ValueError("慢性食物敏感项目名称不能为空。")
                 source_page = logical_source_page(source_file, item.source_page)
                 if source_page < 1 or source_page > max(source_file.page_count, 1):
                     raise ValueError(f"慢性食物敏感项目页码超出文件范围：{source_file.filename}")
-                signature = re.sub(r"[\s_\-（）()\[\]【】]+", "", name).lower()
-                if signature in seen_food_items:
-                    continue
-                seen_food_items.add(signature)
-                reviewed_food_items.append(
+                review_candidates.append(
                     item.model_copy(
                         update={
                             "name": name,
@@ -4269,6 +4306,9 @@ class CaseAnalysisService:
                         }
                     )
                 )
+            reviewed_food_items, duplicate_warnings = dedupe_food_sensitivity_items(
+                review_candidates
+            )
             grouped_food_names = {
                 severity: list(
                     dict.fromkeys(
@@ -4291,7 +4331,23 @@ class CaseAnalysisService:
                     "moderate_foods": grouped_food_names["moderate"],
                     "high_foods": grouped_food_names["high"],
                     "valid": bool(reviewed_food_items),
-                    "warning": None if reviewed_food_items else food_sensitivity.warning,
+                    "warning": (
+                        "；".join(
+                            dict.fromkeys(
+                                [
+                                    *(
+                                        [food_sensitivity.warning]
+                                        if food_sensitivity.warning
+                                        and self.FOOD_SENSITIVITY_EXTRACTION_FAILURE
+                                        not in food_sensitivity.warning
+                                        else []
+                                    ),
+                                    *duplicate_warnings,
+                                ]
+                            )
+                        )
+                        or None
+                    ),
                 }
             )
         analysis.food_sensitivity = food_sensitivity
@@ -5283,6 +5339,19 @@ class CaseAnalysisService:
         uploaded_file,
         result: DocumentAnalysisResult,
     ) -> DocumentAnalysisResult:
+        if is_confirmed_msq_result(result):
+            return result.model_copy(
+                update={
+                    "report_type": "msq",
+                    "medical_content": True,
+                    "food_sensitivity": None,
+                    "warnings": [
+                        warning
+                        for warning in result.warnings
+                        if "慢性食物敏感结果提取失败" not in warning
+                    ],
+                }
+            )
         if is_gut_microbiome_report(
             filename=uploaded_file.filename,
             page_texts=uploaded_file.page_texts,
@@ -5305,11 +5374,14 @@ class CaseAnalysisService:
                     "food_sensitivity": None,
                 }
             )
-        if not is_chronic_food_sensitivity_report(
+        is_food_sensitivity = has_chronic_food_sensitivity_content(
+            result.food_sensitivity
+        ) or is_chronic_food_sensitivity_report(
             filename=result.file_name,
             report_type=result.report_type,
             page_texts=uploaded_file.page_texts,
-        ):
+        )
+        if not is_food_sensitivity:
             normalized_type = re.sub(
                 r"[\s\-]+",
                 "_",
@@ -5386,7 +5458,7 @@ class CaseAnalysisService:
             )
 
         candidates = [*source_items, *food.items, *finding_items, *legacy_items]
-        normalized_items: dict[str, FoodSensitivityItem] = {}
+        normalized_candidates: list[FoodSensitivityItem] = []
         for candidate in candidates:
             if str(candidate.abnormal_flag or "").strip().lower() in {
                 "normal",
@@ -5396,7 +5468,7 @@ class CaseAnalysisService:
                 "未检出",
             }:
                 continue
-            name = re.sub(r"\s+", " ", candidate.name).strip()
+            name = normalize_food_sensitivity_name(candidate.name)
             if not name:
                 continue
             normalized_candidate = candidate.model_copy(
@@ -5409,39 +5481,11 @@ class CaseAnalysisService:
                 normalized_candidate,
                 grading_rules,
             )
-            key = re.sub(r"[\s_\-（）()\[\]【】]+", "", name).lower()
-            existing = normalized_items.get(key)
-            if existing is None:
-                normalized_items[key] = normalized_candidate
-                continue
-            existing_score = sum(
-                bool(value)
-                for value in (
-                    existing.raw_value,
-                    existing.unit,
-                    existing.reference_range,
-                    existing.grading_basis,
-                    existing.reported_grade,
-                    existing.reported_grade_meaning,
-                    existing.severity != "ungraded",
-                )
-            )
-            candidate_score = sum(
-                bool(value)
-                for value in (
-                    normalized_candidate.raw_value,
-                    normalized_candidate.unit,
-                    normalized_candidate.reference_range,
-                    normalized_candidate.grading_basis,
-                    normalized_candidate.reported_grade,
-                    normalized_candidate.reported_grade_meaning,
-                    normalized_candidate.severity != "ungraded",
-                )
-            )
-            if candidate_score > existing_score:
-                normalized_items[key] = normalized_candidate
+            normalized_candidates.append(normalized_candidate)
 
-        item_values = list(normalized_items.values())
+        item_values, duplicate_warnings = dedupe_food_sensitivity_items(
+            normalized_candidates
+        )
         normalized_lists = {
             severity: list(
                 dict.fromkeys(
@@ -5458,6 +5502,7 @@ class CaseAnalysisService:
             else []
         )
         warnings.extend(source_warnings)
+        warnings.extend(duplicate_warnings)
         if not has_content:
             warnings.append(cls.FOOD_SENSITIVITY_EXTRACTION_FAILURE)
         positive_pages = [item.source_page for item in item_values]
@@ -6398,16 +6443,9 @@ class CaseAnalysisService:
 
     @staticmethod
     def _is_msq_result(result: DocumentAnalysisResult) -> bool:
-        report_type = re.sub(
-            r"[\s-]+",
-            "_",
-            (result.report_type or "").strip().lower(),
-        )
         file_name = (result.file_name or "").lower()
         return (
-            report_type == "msq"
-            or report_type.startswith("msq_")
-            or report_type.endswith("_msq")
+            _is_msq_report_type(result.report_type)
             or "msq" in file_name
         )
 

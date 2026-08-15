@@ -8,6 +8,34 @@
     "default_range": {"lower": 30, "upper": 100}
   },
   {
+    "code": "vitamin_e",
+    "display_name": "维生素E",
+    "synonyms": ["维生素E", "Vitamin E", "Vit E", "VE", "α-生育酚", "α生育酚", "Alpha-tocopherol", "Alpha tocopherol"],
+    "normalized_unit": "μg/mL",
+    "unit_factors": {"μg/mL": 1, "µg/mL": 1, "ug/mL": 1, "mg/L": 1}
+  },
+  {
+    "code": "selenium",
+    "display_name": "硒",
+    "synonyms": ["硒", "血硒", "Selenium", "Se"],
+    "normalized_unit": "μmol/L",
+    "unit_factors": {"μmol/L": 1, "µmol/L": 1, "umol/L": 1, "μg/L": 0.01266, "µg/L": 0.01266, "ug/L": 0.01266}
+  },
+  {
+    "code": "cortisol",
+    "display_name": "皮质醇",
+    "synonyms": ["皮质醇", "血皮质醇", "Cortisol"],
+    "normalized_unit": "nmol/L",
+    "unit_factors": {"nmol/L": 1, "μg/dL": 27.59, "µg/dL": 27.59, "ug/dL": 27.59}
+  },
+  {
+    "code": "urine_oxalate",
+    "display_name": "尿草酸",
+    "synonyms": ["尿草酸", "尿液草酸", "24小时尿草酸", "Urine Oxalate", "Urinary Oxalate"],
+    "normalized_unit": "mg/24h",
+    "unit_factors": {"mg/24h": 1, "mg/24 h": 1}
+  },
+  {
     "code": "fasting_glucose",
     "display_name": "空腹血糖",
     "synonyms": ["空腹血糖", "葡萄糖", "GLU", "FPG", "Fasting Glucose"],

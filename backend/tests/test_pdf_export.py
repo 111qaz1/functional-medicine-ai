@@ -10,6 +10,7 @@ from pypdf import PdfReader
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from app.domain.models import ChronicFoodSensitivityResult, FoodSensitivityItem
 from app.services.pdf_export import PdfReportExporter
 
 
@@ -171,6 +172,60 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertNotIn("总医嘱说明", paragraph_text)
         self.assertNotIn("推荐搭配说明", paragraph_text)
 
+    def test_food_sensitivity_table_uses_fixed_groups_and_guidance(self) -> None:
+        flowables = self.exporter._build_food_sensitivity_flowables(
+            ChronicFoodSensitivityResult(
+                source_file_id="file-food",
+                source_file_name="慢性食物敏感.pdf",
+                items=[
+                    FoodSensitivityItem(
+                        id="food-milk",
+                        name="牛奶 IgG",
+                        severity="mild",
+                        source_page=1,
+                        source_text="牛奶 IgG 轻度",
+                    ),
+                    FoodSensitivityItem(
+                        id="food-yeast",
+                        name="酵母",
+                        severity="high",
+                        source_page=1,
+                        source_text="酵母 重度",
+                    ),
+                    FoodSensitivityItem(
+                        id="food-corn",
+                        name="玉米",
+                        severity="ungraded",
+                        source_page=1,
+                        source_text="玉米 阳性",
+                    ),
+                ],
+                valid=True,
+            ),
+            self.exporter._styles(),
+        )
+
+        table_text = [row[0].getPlainText() for row in flowables[0]._cellvalues]
+        paragraph_text = [
+            item.getPlainText()
+            for item in flowables[1:]
+            if hasattr(item, "getPlainText")
+        ]
+
+        self.assertEqual(
+            table_text,
+            [
+                "轻度(Mild)：牛奶",
+                "中度(Moderate)：无",
+                "重度(High)：酵母",
+                "待确认/未分级异常：玉米",
+            ],
+        )
+        self.assertIn("停止摄食6周", paragraph_text[0])
+        self.assertIn("停止摄食3个月", paragraph_text[1])
+        self.assertIn("停止摄食6个月", paragraph_text[2])
+        self.assertFalse(any("检验报告解读" in item for item in paragraph_text))
+
     def test_export_generates_pdf_with_structured_nutrition_table(self) -> None:
         pdf_path = self.exporter.export(
             draft_id="draft_demo",
@@ -207,6 +262,34 @@ class PdfReportExporterTests(unittest.TestCase):
         self.assertNotIn("医生复核剂量", pdf_text)
         self.assertNotIn("注意/禁忌", pdf_text)
         self.assertNotIn("抗凝药物使用者需人工复核", pdf_text)
+        self.assertNotIn("延迟性过敏反应IgG", pdf_text)
+
+    def test_export_food_sensitivity_section_as_table_with_guidance(self) -> None:
+        pdf_path = self.exporter.export(
+            draft_id="draft_food",
+            customer_name="食敏测试客户",
+            report_text="\n".join(
+                [
+                    "# 客户报告",
+                    "## 慢性食物敏感检测结果",
+                    "- 轻度：牛奶：83.9 U/mL（偏高）",
+                ]
+            ),
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id="file-food",
+                source_file_name="慢性食物敏感.pdf",
+                mild_foods=["牛奶", "牛奶 IgG慢性敏感"],
+                valid=True,
+            ),
+        )
+
+        reader = PdfReader(str(pdf_path))
+        pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        self.assertEqual(pdf_text.count("牛奶"), 1)
+        self.assertIn("中度(Moderate)：无", pdf_text)
+        self.assertIn("重度(High)：无", pdf_text)
+        self.assertIn("停止摄食6周", pdf_text)
+        self.assertNotIn("检验报告解读", pdf_text)
 
 
 if __name__ == "__main__":

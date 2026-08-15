@@ -27,6 +27,7 @@ from app.domain.models import (
     DocumentAnalysisResult,
     DraftRecommendationItem,
     EvidenceStatus,
+    FoodSensitivityItem,
     FileIntakeStatus,
     FinalGenerationStatus,
     FindingStandardizationStatus,
@@ -449,6 +450,95 @@ class DocumentTypeClassificationTests(unittest.TestCase):
         self.assertEqual(normalized.food_sensitivity.moderate_foods, [])
         self.assertEqual(normalized.food_sensitivity.high_foods, [])
         self.assertEqual(normalized.food_sensitivity.source_page, 3)
+
+    def test_food_items_dedupe_plain_and_igg_names(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=["慢性食物敏感分析 IgG"],
+            file_id="file-food-duplicate",
+        )
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="food_sensitivity",
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                items=[
+                    FoodSensitivityItem(
+                        id="food-milk-summary",
+                        name="牛奶",
+                        severity="mild",
+                        source_page=1,
+                        source_text="轻度：牛奶",
+                    ),
+                    FoodSensitivityItem(
+                        id="food-milk-result",
+                        name="牛奶 IgG慢性敏感",
+                        raw_value="83.9",
+                        unit="U/mL",
+                        abnormal_flag="high",
+                        severity="mild",
+                        source_page=1,
+                        source_text="牛奶 IgG 83.9 U/mL ↑",
+                        evidence_status=EvidenceStatus.verified_text,
+                    ),
+                ],
+                valid=True,
+            ),
+        )
+
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            result,
+        )
+
+        self.assertEqual(len(normalized.food_sensitivity.items), 1)
+        self.assertEqual(normalized.food_sensitivity.items[0].name, "牛奶")
+        self.assertEqual(normalized.food_sensitivity.items[0].raw_value, "83.9")
+        self.assertEqual(normalized.food_sensitivity.mild_foods, ["牛奶"])
+
+    def test_food_duplicate_severity_conflict_requires_review(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=["慢性食物敏感分析 IgG"],
+            file_id="file-food-conflict",
+        )
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            report_type="food_sensitivity",
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                items=[
+                    FoodSensitivityItem(
+                        id="food-egg-mild",
+                        name="鸡蛋",
+                        severity="mild",
+                        source_page=1,
+                        source_text="鸡蛋 轻度",
+                    ),
+                    FoodSensitivityItem(
+                        id="food-egg-high",
+                        name="鸡蛋 IgG",
+                        severity="high",
+                        source_page=1,
+                        source_text="鸡蛋 IgG 重度",
+                    ),
+                ],
+                valid=True,
+            ),
+        )
+
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            result,
+        )
+
+        self.assertEqual(len(normalized.food_sensitivity.items), 1)
+        self.assertEqual(normalized.food_sensitivity.items[0].severity, "ungraded")
+        self.assertIn("等级不一致", normalized.food_sensitivity.warning)
 
     def test_food_education_does_not_reclassify_a_general_report(self) -> None:
         uploaded = self._uploaded_file(

@@ -658,5 +658,47 @@
     "normalized_unit": "%",
     "unit_factors": {"%": 1},
     "default_range": {"lower": 0.108, "upper": 0.282}
+  },
+  {
+    "code": "blood_lead",
+    "display_name": "血铅",
+    "synonyms": ["血铅", "全血铅", "Blood Lead"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
+  },
+  {
+    "code": "urine_lead",
+    "display_name": "尿铅",
+    "synonyms": ["尿铅", "Urine Lead"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
+  },
+  {
+    "code": "blood_mercury",
+    "display_name": "血汞",
+    "synonyms": ["血汞", "全血汞", "Blood Mercury"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
+  },
+  {
+    "code": "urine_mercury",
+    "display_name": "尿汞",
+    "synonyms": ["尿汞", "Urine Mercury"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
+  },
+  {
+    "code": "blood_arsenic",
+    "display_name": "血砷",
+    "synonyms": ["血砷", "全血砷", "Blood Arsenic"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
+  },
+  {
+    "code": "urine_arsenic",
+    "display_name": "尿砷",
+    "synonyms": ["尿砷", "Urine Arsenic"],
+    "normalized_unit": "ug/L",
+    "unit_factors": {"ug/L": 1, "μg/L": 1}
   }
 ]

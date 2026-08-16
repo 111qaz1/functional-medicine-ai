@@ -69,7 +69,7 @@ from app.services.current_supplements import (
     parse_supplement_use,
 )
 from app.services.evidence_policy import classify_finding_evidence, system_evidence_score
-from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
+from app.services.lifestyle_planning import LifestylePlanningService, remove_generic_lifestyle_confirmation
 from app.services.report_content import (
     ReportAbnormalItem,
     build_plan_summary,
@@ -7045,7 +7045,10 @@ class CaseAnalysisService:
                 sections["慢性食物敏感检测结果"] = food_lines
         if system_lines:
             sections["功能医学系统失衡分析"] = system_lines
-        lifestyle_values = existing.get("生活方式干预处方", draft.lifestyle_actions)
+        if getattr(draft, "lifestyle_plan", None):
+            lifestyle_values = LifestylePlanningService.report_items(draft.lifestyle_plan)
+        else:
+            lifestyle_values = existing.get("生活方式干预处方", draft.lifestyle_actions)
         if isinstance(lifestyle_values, str):
             lifestyle_values = [lifestyle_values]
         sections["生活方式干预"] = [

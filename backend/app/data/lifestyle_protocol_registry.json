@@ -1,5 +1,5 @@
 {
-  "version": "lifestyle-v2.0.0",
+  "version": "lifestyle-v2.2.0",
   "max_parallel_protocols": 3,
   "forbidden_output_terms": [
     "肾上腺疲劳",
@@ -18,6 +18,7 @@
       "title": "抗炎饮食",
       "admission": "direct",
       "priority": 84,
+      "declared_domains": ["diet"],
       "triggers": {"markers": ["hs_crp:high"], "terms": ["慢性炎症", "炎症负担", "湿疹", "银屑病"], "lifestyle_tags": []},
       "contraindications": ["进食障碍", "急性胰腺炎"],
       "actions": {
@@ -34,6 +35,7 @@
       "title": "症状导向排除与再引入",
       "admission": "review",
       "priority": 70,
+      "declared_domains": ["diet"],
       "min_trigger_matches": 1,
       "triggers": {"markers": [], "terms": ["进食后反复不适", "明确食物诱发", "慢性荨麻疹", "食物激发试验"], "lifestyle_tags": []},
       "contraindications": ["进食障碍", "严重营养不良", "妊娠", "哺乳"],
@@ -51,7 +53,8 @@
       "title": "低FODMAP短期试验",
       "admission": "review",
       "priority": 78,
-      "min_trigger_matches": 2,
+      "declared_domains": ["diet"],
+      "min_trigger_matches": 1,
       "triggers": {"markers": [], "terms": ["IBS", "肠易激", "SIBO", "功能性腹胀"], "lifestyle_tags": ["gut_support"]},
       "contraindications": ["进食障碍", "严重体重下降", "活动性炎症性肠病"],
       "actions": {
@@ -68,12 +71,14 @@
       "title": "限时进食",
       "admission": "review",
       "priority": 55,
-      "triggers": {"markers": ["bmi:high", "fasting_glucose:high", "hba1c:high"], "terms": ["胰岛素抵抗", "脂肪肝"], "lifestyle_tags": ["metabolic_support"]},
+      "declared_domains": ["diet"],
+      "triggers": {"markers": ["bmi:high", "fasting_glucose:high", "hba1c:high"], "terms": ["胰岛素抵抗", "脂肪肝"], "lifestyle_tags": ["glucose_support"]},
       "contraindications": ["未成年", "妊娠", "哺乳", "进食障碍", "体重过轻", "频发低血糖", "胰岛素治疗"],
       "actions": {
         "diet": [
-          {"category": "limit", "text": "仅在医生确认适用后，从连续2周的12小时夜间进食间隔开始，不直接采用16:8或更长禁食。", "quantity": "12小时；2周"},
-          {"category": "execution", "text": "试行期间每日记录饥饿、头晕、睡眠和血糖反应；出现低血糖表现立即停止并联系医生。", "quantity": "每日记录"}
+          {"category": "limit", "text": "仅在医生确认适用后，从连续2周的12小时夜间进食间隔开始，不直接采用16:8或更长禁食。", "quantity": "12小时；2周", "requires": ["pregnancy_status"]},
+          {"category": "execution", "text": "试行期间每日记录饥饿、头晕、睡眠和血糖反应；出现低血糖表现立即停止并联系医生。", "quantity": "每日记录", "requires": ["pregnancy_status"]},
+          {"category": "recommend", "text": "进食窗口内保持2–3餐规律进食，首餐安排至少30克蛋白质，避免用零食补偿性进食。", "quantity": "2–3餐/日；首餐蛋白≥30克", "requires": ["pregnancy_status", "known_conditions"]}
         ]
       },
       "monitoring": ["2周评估耐受；4–8周结合血糖、体重及睡眠趋势复核。"]
@@ -83,10 +88,17 @@
       "title": "皮质醇节律支持",
       "admission": "review",
       "priority": 58,
-      "min_trigger_matches": 2,
+      "declared_domains": ["diet", "movement"],
+      "min_trigger_matches": 1,
       "triggers": {"markers": [], "terms": ["皮质醇节律异常", "慢性疲劳", "午后疲劳", "咖啡因依赖"], "lifestyle_tags": ["stress_support", "sleep_recovery"]},
       "contraindications": ["库欣综合征", "嗜铬细胞瘤", "躁狂", "精神病性症状"],
       "actions": {
+        "diet": [
+          {"category": "recommend", "text": "连续4周固定每日进餐时间，早餐安排优质蛋白和健康脂肪，并避免夜间进食。", "quantity": "每日；连续4周"}
+        ],
+        "movement": [
+          {"category": "plan", "text": "避免晨间空腹进行高强度有氧；优先在午后安排散步或经评估允许的力量训练。", "quantity": "午后1次/日", "requires": ["exercise_baseline", "known_conditions"]}
+        ],
         "sleep": [
           {"category": "rhythm", "text": "固定每日起床时间，起床后30分钟内接触自然光15–30分钟，连续执行4周。", "quantity": "15–30分钟/日；4周"},
           {"category": "execution", "text": "午休控制在20分钟以内，并记录晨起精力和午后疲劳变化。", "quantity": "≤20分钟/日"}
@@ -102,9 +114,13 @@
       "title": "睡眠修复",
       "admission": "direct",
       "priority": 92,
+      "declared_domains": ["diet"],
       "triggers": {"markers": [], "terms": ["失眠", "入睡困难", "早醒", "日间嗜睡", "睡眠障碍", "OSAHS", "睡眠呼吸暂停"], "lifestyle_tags": ["sleep_recovery"]},
       "contraindications": [],
       "actions": {
+        "diet": [
+          {"category": "limit", "text": "连续4周将末餐安排在睡前至少3小时完成，并避免睡前高糖、高脂或辛辣食物。", "quantity": "睡前≥3小时；连续4周"}
+        ],
         "sleep": [
           {"category": "rhythm", "text": "固定每日起床时间，工作日与休息日误差控制在30分钟以内，连续执行4周。", "quantity": "误差≤30分钟；4周"},
           {"category": "behavior", "text": "卧床清醒超过20分钟时离床进行低刺激活动，困倦后再返回床上。", "quantity": "20分钟阈值"},
@@ -118,6 +134,7 @@
       "title": "肝脏与暴露源管理",
       "admission": "review",
       "priority": 66,
+      "declared_domains": ["diet"],
       "triggers": {"markers": ["alt:high", "ast:high", "ggt:high"], "terms": ["脂肪肝", "酒精摄入", "化学敏感"], "lifestyle_tags": ["chemical_sensitivity"]},
       "contraindications": ["肝衰竭", "胆道梗阻", "妊娠", "哺乳"],
       "actions": {
@@ -134,13 +151,15 @@
       "title": "肠道分阶段支持",
       "admission": "review",
       "priority": 74,
-      "min_trigger_matches": 2,
+      "declared_domains": ["diet"],
+      "min_trigger_matches": 1,
       "triggers": {"markers": ["fecal_calprotectin:high"], "findings": ["gut_dysbiosis", "intestinal_barrier_dysfunction"], "terms": ["肠道菌群失衡", "反复腹胀"], "lifestyle_tags": ["gut_support"]},
       "contraindications": ["活动性炎症性肠病", "短肠综合征", "严重免疫抑制"],
       "actions": {
         "diet": [
           {"category": "recommend", "text": "首月每周只新增1类可耐受的全谷、豆类或发酵食物，并从小份开始观察腹胀和排便。", "quantity": "1类/周"},
-          {"category": "execution", "text": "连续4周记录排便次数、Bristol分型、腹胀和新食物耐受，不同时启动多套限制饮食。", "quantity": "每日记录；4周"}
+          {"category": "execution", "text": "连续4周记录排便次数、Bristol分型、腹胀和新食物耐受，不同时启动多套限制饮食。", "quantity": "每日记录；4周"},
+          {"category": "recommend", "text": "从第3周起按耐受少量增加可溶性纤维，每周只调整1次用量。", "quantity": "第3周起；1次/周"}
         ]
       },
       "monitoring": ["第2周和第4周根据症状决定是否继续、降级或转胃肠专科。"]
@@ -150,13 +169,20 @@
       "title": "能量与运动耐受支持",
       "admission": "review",
       "priority": 54,
-      "min_trigger_matches": 2,
-      "triggers": {"markers": [], "terms": ["慢性疲劳", "运动不耐受", "脑雾", "线粒体"], "lifestyle_tags": ["energy_support"]},
-      "contraindications": ["严重心功能不全", "未控制甲亢"],
+      "declared_domains": ["diet", "movement"],
+      "min_trigger_matches": 1,
+      "triggers": {"markers": [], "terms": ["慢性疲劳", "疲劳", "能量下降", "运动不耐受", "脑雾", "线粒体"], "lifestyle_tags": ["energy_support"]},
+      "contraindications": [],
       "actions": {
+        "diet": [
+          {"category": "limit", "text": "将每日果糖摄入控制在25克以内，优先减少含果糖饮料、糖浆和集中大量果汁。", "quantity": "果糖<25克/日"},
+          {"category": "recommend", "text": "仅在BMI、用药、特殊状态和疾病安全信息齐全且医生确认适用后，才考虑碳水低于50克/日的生酮变体。", "quantity": "碳水<50克/日", "requires": ["bmi", "medications", "pregnancy_status", "known_conditions"], "blocked_by_terms": ["严重心功能不全", "未控制甲亢", "进食障碍", "频发低血糖", "胰岛素治疗"]},
+          {"category": "execution", "text": "仅在上述安全信息齐全且医生确认适用后，才考虑16:8进食窗口，并每日记录疲劳、头晕和睡眠反应。", "quantity": "16:8；每日记录", "requires": ["bmi", "medications", "pregnancy_status", "known_conditions"], "blocked_by_terms": ["严重心功能不全", "未控制甲亢", "进食障碍", "频发低血糖", "胰岛素治疗"]}
+        ],
         "movement": [
-          {"category": "plan", "text": "第1–2周从每日10–20分钟低强度步行开始，每周总量增加不超过10%。", "quantity": "10–20分钟/日；增量≤10%/周"},
-          {"category": "safety", "text": "活动后疲劳持续超过24小时或出现胸闷、头晕时暂停进阶并联系医生。", "quantity": "24小时停止阈值"}
+          {"category": "plan", "text": "第1–2周从每日10–20分钟低强度步行开始，每周总量增加不超过10%。", "quantity": "10–20分钟/日；增量≤10%/周", "blocked_by_terms": ["严重心功能不全", "未控制甲亢"]},
+          {"category": "safety", "text": "活动后疲劳持续超过24小时或出现胸闷、头晕时暂停进阶并联系医生。", "quantity": "24小时停止阈值", "blocked_by_terms": ["严重心功能不全", "未控制甲亢"]},
+          {"category": "plan", "text": "完成运动耐受评估后，可将低至中等强度有氧逐步安排为每周3–4次，每次不超过45分钟。", "quantity": "3–4次/周；≤45分钟/次", "requires": ["age", "exercise_baseline", "known_conditions"], "blocked_by_terms": ["严重心功能不全", "未控制甲亢"]}
         ],
         "sleep": [
           {"category": "rhythm", "text": "连续2周固定起床时间并记录晨起精力，避免用延长禁食或高强度训练追求快速改善。", "quantity": "每日记录；2周"}
@@ -169,12 +195,17 @@
       "title": "女性激素相关生活方式支持",
       "admission": "review",
       "priority": 48,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["经前综合征", "子宫内膜异位", "乳腺增生", "子宫肌瘤"], "lifestyle_tags": []},
       "contraindications": ["激素敏感性肿瘤活动期", "妊娠"],
       "actions": {
         "diet": [
           {"category": "recommend", "text": "每日安排300–500克蔬菜和25–30克膳食纤维，并用食物记录观察经期相关症状。", "quantity": "300–500克/日；25–30克/日"},
-          {"category": "limit", "text": "连续1个月经周期减少酒精和高糖深加工食品，记录乳房胀痛或经前症状变化。", "quantity": "1个月经周期"}
+          {"category": "limit", "text": "连续1个月经周期减少酒精和高糖深加工食品，记录乳房胀痛或经前症状变化。", "quantity": "1个月经周期"},
+          {"category": "recommend", "text": "每日将200–300克十字花科蔬菜分散到不同餐次，甲状腺功能偏低者优先熟食。", "quantity": "200–300克/日"}
+        ],
+        "movement": [
+          {"category": "plan", "text": "在无运动禁忌时每周安排3次中等强度活动，并根据当前基线逐步增加。", "quantity": "3次/周", "requires": ["age", "exercise_baseline", "known_conditions"]}
         ]
       },
       "monitoring": ["按月经周期记录症状；异常出血、肿块变化或持续疼痛需专科评估。"]
@@ -184,12 +215,16 @@
       "title": "甲状腺相关生活方式支持",
       "admission": "review",
       "priority": 69,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": ["tsh:high", "thyroid_peroxidase_antibody:high", "thyroglobulin_antibody:high"], "findings": ["thyroid_nodule"], "terms": ["桥本", "甲状腺功能减退"], "lifestyle_tags": []},
       "contraindications": ["未控制甲亢"],
       "actions": {
         "diet": [
           {"category": "limit", "text": "在甲状腺功能和用药未确认前，不自行增加海带、紫菜或其他高碘食物的频率。", "quantity": "确认前暂缓"},
           {"category": "execution", "text": "连续4周保持规律三餐并记录精力、畏寒、心悸和排便变化，不默认执行无麸质或无乳饮食。", "quantity": "每日记录；4周"}
+        ],
+        "movement": [
+          {"category": "plan", "text": "在甲状腺功能稳定且运动评估允许后，每周安排3次中等强度活动，每次20–30分钟，避免突然增加训练量。", "quantity": "3次/周；20–30分钟/次", "requires": ["age", "exercise_baseline", "known_conditions"], "blocked_by_terms": ["未控制甲亢"]}
         ],
         "sleep": [
           {"category": "rhythm", "text": "固定起床时间并保证稳定睡眠窗口，连续2周记录晨起精力和心悸情况。", "quantity": "每日记录；2周"}
@@ -202,7 +237,8 @@
       "title": "血糖稳态",
       "admission": "direct",
       "priority": 90,
-      "triggers": {"markers": ["fasting_glucose:high", "hba1c:high"], "terms": ["胰岛素抵抗", "糖代谢异常"], "lifestyle_tags": ["metabolic_support"]},
+      "declared_domains": ["diet", "movement"],
+      "triggers": {"markers": ["fasting_glucose:high", "hba1c:high"], "terms": ["胰岛素抵抗", "糖代谢异常"], "lifestyle_tags": ["glucose_support"]},
       "contraindications": ["频发低血糖"],
       "actions": {
         "diet": [
@@ -221,12 +257,14 @@
       "title": "心血管代谢",
       "admission": "direct",
       "priority": 96,
-      "triggers": {"markers": ["systolic_bp:high", "diastolic_bp:high", "ldl_c:high", "triglycerides:high", "homocysteine:high"], "findings": ["hypertension"], "terms": ["冠心病", "冠状动脉钙化", "动脉粥样硬化", "高血压"], "lifestyle_tags": []},
+      "declared_domains": ["diet", "movement"],
+      "triggers": {"markers": ["systolic_bp:high", "diastolic_bp:high", "ldl_c:high", "triglycerides:high", "homocysteine:high"], "findings": ["hypertension"], "terms": ["冠心病", "冠状动脉钙化", "动脉粥样硬化", "高血压", "高血脂"], "lifestyle_tags": ["lipid_support", "cardiovascular_support"]},
       "contraindications": ["近期心肌梗死", "近期卒中", "严重主动脉狭窄"],
       "actions": {
         "diet": [
           {"category": "limit", "text": "连续4周减少加工肉、油炸食品和高盐外食，食盐目标以医生结合血压和用药确认。", "quantity": "4周"},
-          {"category": "recommend", "text": "每周安排2次鱼类、3次豆类和每日1小份无盐坚果；存在抗凝用药时先由医生确认。", "quantity": "鱼2次/周；豆类3次/周；坚果1份/日"}
+          {"category": "recommend", "text": "每周安排2次鱼类、3次豆类和每日1小份无盐坚果；存在抗凝用药时先由医生确认。", "quantity": "鱼2次/周；豆类3次/周；坚果1份/日"},
+          {"category": "recommend", "text": "每日使用约30毫升橄榄油替代动物油和反式脂肪来源，并记录高盐外食次数。", "quantity": "约30毫升/日"}
         ],
         "movement": [
           {"category": "principle", "text": "在心内科或心脏康复评估后确定运动强度，优先使用谈话测试或医生给出的RPE范围，不写死统一目标心率。", "quantity": "运动前评估"},
@@ -241,9 +279,14 @@
       "title": "认知与神经保护",
       "admission": "review",
       "priority": 52,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": ["homocysteine:high", "vitamin_b12:low"], "terms": ["脑雾", "记忆力下降", "注意力下降"], "lifestyle_tags": []},
       "contraindications": ["急性脑卒中", "严重抑郁伴认知下降"],
       "actions": {
+        "diet": [
+          {"category": "recommend", "text": "采用MIND饮食组合，每日安排绿叶菜和无盐坚果，每周安排2次浆果和2次鱼类。", "quantity": "绿叶菜1份/日；坚果1份/日；浆果2次/周；鱼2次/周"},
+          {"category": "limit", "text": "连续4周减少过量酒精，并记录饮酒次数与睡眠、注意力变化。", "quantity": "连续4周；每周记录"}
+        ],
         "movement": [
           {"category": "plan", "text": "在安全评估允许后每周安排3次、每次20–30分钟的步行或协调性活动。", "quantity": "3次/周；20–30分钟/次"}
         ],
@@ -261,12 +304,17 @@
       "title": "免疫与恢复",
       "admission": "review",
       "priority": 50,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": ["vitamin_d:low", "hs_crp:high"], "findings": ["eczema", "allergic_rhinitis"], "terms": ["反复感染", "免疫低下"], "lifestyle_tags": []},
       "contraindications": ["粒细胞缺乏", "活动性结核", "移植后"],
       "actions": {
         "diet": [
           {"category": "recommend", "text": "每日保证3餐均有蛋白质来源，并安排至少300克不同颜色蔬菜。", "quantity": "3餐/日；蔬菜≥300克/日"},
-          {"category": "execution", "text": "连续4周记录感染次数、过敏症状、睡眠和饮食执行，不以单一补充剂替代医学评估。", "quantity": "每日记录；4周"}
+          {"category": "execution", "text": "连续4周记录感染次数、过敏症状、睡眠和饮食执行，不以单一补充剂替代医学评估。", "quantity": "每日记录；4周"},
+          {"category": "recommend", "text": "每日安排1份可耐受的发酵食物，并将膳食纤维逐步调整至每日不少于35克。", "quantity": "发酵食物1份/日；纤维≥35克/日"}
+        ],
+        "movement": [
+          {"category": "safety", "text": "恢复期避免单次超过90分钟的高强度运动；出现发热、明显乏力或感染症状时暂停训练并联系医生。", "quantity": "高强度<90分钟/次；出现症状立即暂停"}
         ],
         "sleep": [
           {"category": "rhythm", "text": "固定每日起床时间，连续2周记录总睡眠时长和晨起恢复感。", "quantity": "每日记录；2周"}
@@ -279,6 +327,7 @@
       "title": "健康老化支持",
       "admission": "review",
       "priority": 35,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["健康老化", "抗衰老", "氧化应激"], "lifestyle_tags": []},
       "contraindications": ["进食障碍", "急性感染", "肿瘤治疗中"],
       "actions": {
@@ -297,6 +346,7 @@
       "title": "备孕生活方式支持",
       "admission": "review",
       "priority": 61,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["备孕", "不孕", "精子质量", "反复流产"], "lifestyle_tags": []},
       "contraindications": ["已妊娠"],
       "actions": {
@@ -318,12 +368,20 @@
       "title": "重金属暴露管理",
       "admission": "referral",
       "priority": 100,
-      "triggers": {"markers": [], "terms": ["血铅升高", "血汞升高", "尿砷升高", "重金属暴露", "职业性铅暴露", "职业性汞暴露"], "lifestyle_tags": []},
+      "declared_domains": ["diet", "movement"],
+      "evidence_gate": "confirmed_heavy_metal",
+      "triggers": {"markers": ["blood_lead:high", "urine_lead:high", "blood_mercury:high", "urine_mercury:high", "blood_arsenic:high", "urine_arsenic:high"], "terms": ["血铅升高", "尿铅升高", "血汞升高", "尿汞升高", "血砷升高", "尿砷升高"], "lifestyle_tags": []},
       "contraindications": [],
       "actions": {
         "diet": [
           {"category": "execution", "text": "优先由职业病、毒理或相关专科确认暴露类型，并在7天内完成可能暴露源清单。", "quantity": "7天内"},
-          {"category": "limit", "text": "在专业评估前停止继续接触已确认的暴露源，不自行进行螯合、桑拿或所谓排重金属方案。", "quantity": "立即停止持续暴露"}
+          {"category": "limit", "text": "在专业评估前停止继续接触已确认的暴露源，仅执行专科确认的暴露源处理。", "quantity": "立即停止持续暴露"},
+          {"category": "limit", "text": "评估期间避免金枪鱼、剑鱼、鲨鱼等大型掠食鱼，改选来源清楚的小型鱼类。", "quantity": "大型掠食鱼0次/周", "omit_in_acute_heavy_metal": true}
+        ],
+        "movement": [
+          {"category": "principle", "text": "运动仅用于维持一般活动能力，不能替代暴露源处理和专科治疗。", "quantity": "第1–2周", "blocked_during_pregnancy": true},
+          {"category": "plan", "text": "从每日15–20分钟低强度步行开始，每周总量增加不超过10%。", "quantity": "15–20分钟/日；增量≤10%/周", "blocked_during_pregnancy": true},
+          {"category": "safety", "text": "出现明显乏力、胸闷、头晕、神经系统症状或急性中毒表现时立即停止活动并就医。", "quantity": "出现症状立即停止", "blocked_during_pregnancy": true}
         ]
       },
       "monitoring": ["按专科要求使用同一种血或尿检测方法复查；急性中毒症状立即急诊。"]
@@ -333,13 +391,16 @@
       "title": "个体化运动处方",
       "admission": "direct",
       "priority": 82,
+      "declared_domains": ["movement"],
       "triggers": {"markers": ["bmi:high", "waist_circumference:high"], "terms": ["肌少", "骨量减少", "骨质疏松", "运动不足"], "lifestyle_tags": ["movement", "sedentary_risk", "metabolic_support"]},
       "contraindications": ["急性心肌梗死", "急性深静脉血栓", "未控制高血压"],
       "actions": {
         "movement": [
           {"category": "principle", "text": "从当前运动基线开始，第1–2周以低冲击活动和久坐打断为主，不直接跳到终态运动量。", "quantity": "第1–2周"},
           {"category": "plan", "text": "每久坐60分钟起身活动5分钟，并从每日15–20分钟步行开始，每周增量不超过10%。", "quantity": "5分钟/60分钟；15–20分钟/日；增量≤10%/周"},
-          {"category": "safety", "text": "出现胸闷、胸痛、明显气促、头晕或急性关节疼痛时立即停止并联系医生。", "quantity": "出现症状立即停止"}
+          {"category": "safety", "text": "出现胸闷、胸痛、明显气促、头晕或急性关节疼痛时立即停止并联系医生。", "quantity": "出现症状立即停止"},
+          {"category": "plan", "text": "每周安排2次覆盖主要肌群的抗阻训练，每个动作完成8–12次，并根据脊柱或关节限制替换动作。", "quantity": "2次/周；8–12次/动作", "requires": ["age", "known_conditions"]},
+          {"category": "plan", "text": "每日安排10分钟动态拉伸或瑜伽，并保留每周1–2天休息或主动恢复。", "quantity": "10分钟/日；休息1–2天/周"}
         ]
       },
       "monitoring": ["2周评估活动耐受；4–8周结合体能、腰围或体成分趋势调整。"]
@@ -349,6 +410,9 @@
       "title": "压力调节",
       "admission": "direct",
       "priority": 86,
+      "selection_family": "stress_emotion",
+      "family_priority": 10,
+      "declared_domains": [],
       "triggers": {"markers": [], "terms": ["焦虑", "压力大", "慢性疼痛", "紧张"], "lifestyle_tags": ["stress_support"]},
       "contraindications": ["急性精神病"],
       "actions": {
@@ -365,6 +429,7 @@
       "title": "皮肤健康生活方式",
       "admission": "direct",
       "priority": 57,
+      "declared_domains": ["diet"],
       "triggers": {"markers": [], "findings": ["eczema"], "terms": ["痤疮", "湿疹", "银屑病", "玫瑰痤疮", "脱发"], "lifestyle_tags": []},
       "contraindications": ["皮肤癌", "银屑病关节炎"],
       "actions": {
@@ -383,6 +448,7 @@
       "title": "旅行与跨时区维护",
       "admission": "direct",
       "priority": 43,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["频繁出差", "跨时区", "长途飞行", "倒时差"], "lifestyle_tags": []},
       "contraindications": ["近期深静脉血栓", "近期肺栓塞", "孕晚期"],
       "actions": {
@@ -403,6 +469,7 @@
       "title": "术后或创伤恢复",
       "admission": "review",
       "priority": 98,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["术后", "骨折恢复", "创伤恢复", "产后恢复", "放化疗后"], "lifestyle_tags": []},
       "contraindications": ["活动性出血", "未控制感染"],
       "actions": {
@@ -422,19 +489,27 @@
       "title": "情绪与心理健康支持",
       "admission": "review",
       "priority": 88,
+      "selection_family": "stress_emotion",
+      "family_priority": 20,
+      "declared_domains": ["diet", "movement"],
       "triggers": {"markers": [], "terms": ["抑郁", "情绪低落", "焦虑", "压力性失眠", "季节性情绪"], "lifestyle_tags": []},
       "contraindications": ["自杀意念", "躁狂", "精神病性症状", "严重进食障碍"],
       "actions": {
+        "diet": [
+          {"category": "recommend", "text": "采用地中海饮食结构，每餐安排20–30克蛋白质，每日加入1份可耐受的发酵食物。", "quantity": "蛋白质20–30克/餐；发酵食物1份/日", "requires": ["known_conditions"]},
+          {"category": "limit", "text": "连续4周避免酒精，并将咖啡因控制在每日200毫克以内。", "quantity": "酒精0；咖啡因<200毫克/日", "requires": ["pregnancy_status"]}
+        ],
         "stress": [
-          {"category": "support", "text": "每周至少安排2次支持性交流，并每日记录一次情绪评分和主要触发事件。", "quantity": "交流2次/周；每日记录"},
           {"category": "practice", "text": "每日进行10分钟可耐受的正念、呼吸或散步练习；若练习加重不适应立即停止。", "quantity": "10分钟/日"},
+          {"category": "execution", "text": "每连续工作或学习90分钟安排5分钟离屏休息，并每日记录一次情绪或压力评分及主要触发事件。", "quantity": "5分钟/90分钟；每日记录"},
+          {"category": "support", "text": "每周至少安排2次、每次20分钟的自然环境活动或面对面支持性交流。", "quantity": "2次/周；20分钟/次"},
           {"category": "safety", "text": "出现自伤或自杀想法、明显躁狂或现实检验受损时，不以生活方式替代治疗，应立即寻求精神专科或急诊帮助。", "quantity": "出现症状立即求助"}
         ],
         "movement": [
           {"category": "plan", "text": "在安全和耐受前提下每周安排3次、每次20–30分钟的步行或其他喜欢的活动。", "quantity": "3次/周；20–30分钟/次"}
         ]
       },
-      "monitoring": ["2周和4周复核情绪量表、睡眠及安全风险。"]
+      "monitoring": ["2周和4周复核情绪或压力评分、睡眠、身体症状及安全风险。"]
     }
   ]
 }

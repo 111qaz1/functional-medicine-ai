@@ -35,6 +35,19 @@ class ParsingServiceTests(unittest.TestCase):
         self.assertEqual(items[1].marker_code, "fasting_glucose")
         self.assertEqual(items[1].abnormal_flag, AbnormalFlag.high)
 
+    def test_normalizes_sample_specific_heavy_metal_labs(self) -> None:
+        spans = [
+            SourceSpan(file_name="toxicology.pdf", page=1, line_number=1, snippet="血汞 18 μg/L 0-5 ↑"),
+            SourceSpan(file_name="toxicology.pdf", page=1, line_number=2, snippet="尿砷 40 μg/L 0-35 ↑"),
+        ]
+
+        items = self.service.normalize(spans=spans)
+        by_code = {item.marker_code: item for item in items}
+
+        self.assertEqual(set(by_code), {"blood_mercury", "urine_arsenic"})
+        self.assertEqual(by_code["blood_mercury"].abnormal_flag, AbnormalFlag.high)
+        self.assertEqual(by_code["urine_arsenic"].abnormal_flag, AbnormalFlag.high)
+
     def test_normalizes_pdf_exponent_unit_symbols(self) -> None:
         spans = [
             SourceSpan(file_name="report.pdf", page=1, line_number=1, snippet="1 白细胞 WBC 5.50 10∧9/L 3.5-9.5"),

@@ -311,21 +311,42 @@ class RecommendationService:
         if not self.standardization_service:
             return
         valid_codes = set(self.standardization_service.marker_codes)
-        invalid: list[str] = []
-        for product in self._list_products(enabled_only=False):
+        products = self._list_products(enabled_only=False)
+        valid_skus = {product.sku_id for product in products}
+        invalid_markers: list[str] = []
+        invalid_skus: list[str] = []
+        for product in products:
             for rule in [*product.indications, *product.exclusions]:
                 if not rule.startswith("marker:"):
                     continue
                 marker_code = rule.split(":", 2)[1]
                 if marker_code not in valid_codes:
-                    invalid.append(f"{product.sku_id}:{marker_code}")
+                    invalid_markers.append(f"{product.sku_id}:{marker_code}")
         for profile in self.product_tag_profiles.values():
             for marker_tag in profile.marker_tags:
                 marker_code = marker_tag.split(":", 1)[0]
                 if marker_code and marker_code not in valid_codes:
-                    invalid.append(f"{profile.sku_id}:{marker_code}")
-        if invalid:
-            raise ValueError("产品规则引用了不存在的标准指标代码：" + "、".join(sorted(set(invalid))))
+                    invalid_markers.append(f"{profile.sku_id}:{marker_code}")
+        for rule in self.unified_safety_rules:
+            for sku_id in rule.sku_ids:
+                if sku_id != "*" and sku_id not in valid_skus:
+                    invalid_skus.append(f"{rule.rule_id}:{sku_id}")
+            for condition in [*rule.all_conditions, *rule.any_conditions]:
+                if not condition.startswith("marker:"):
+                    continue
+                marker_code = condition.split(":", 2)[1]
+                if marker_code not in valid_codes:
+                    invalid_markers.append(f"{rule.rule_id}:{marker_code}")
+        if invalid_skus:
+            raise ValueError(
+                "产品安全规则引用了不存在的SKU："
+                + "、".join(sorted(set(invalid_skus)))
+            )
+        if invalid_markers:
+            raise ValueError(
+                "产品规则引用了不存在的标准指标代码："
+                + "、".join(sorted(set(invalid_markers)))
+            )
 
     def _load_product_dosage_mapping(self) -> dict[str, dict]:
         """Load the versioned Excel import once when the service starts."""

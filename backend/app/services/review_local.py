@@ -5,7 +5,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.domain.models import AuditLog, DraftStatus, ReviewDecision
+from app.domain.models import (
+    AuditLog,
+    ChronicFoodSensitivityResult,
+    DraftStatus,
+    ReviewDecision,
+)
 from app.core.llm_request_control import llm_request_context
 from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
@@ -13,6 +18,7 @@ from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_
 from app.services.indicator_extraction import CaseIndicatorService
 from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
 from app.services.pdf_export import PdfReportExporter
+from app.services.food_sensitivity import normalize_chronic_food_sensitivity_result
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
 from app.services.report_content import (
     build_core_health_portrait,
@@ -91,6 +97,7 @@ class ReviewService:
             customer_name=self._customer_display_name(case),
             report_text=report,
             recommended_skus=effective_draft.recommended_skus,
+            food_sensitivity=self._food_sensitivity_for_draft(effective_draft),
         )
 
         audit_log = self.repository.add_audit_log(
@@ -150,11 +157,26 @@ class ReviewService:
             customer_name=self._customer_display_name(case),
             report_text=report,
             recommended_skus=effective_draft.recommended_skus,
+            food_sensitivity=self._food_sensitivity_for_draft(effective_draft),
         )
         review.pdf_report_path = str(pdf_path)
         review.pdf_report_filename = pdf_path.name
         self.repository.save_review_decision(review)
         return pdf_path, pdf_path.name
+
+    def _food_sensitivity_for_draft(
+        self,
+        draft,
+    ) -> ChronicFoodSensitivityResult | None:
+        analysis_id = str(getattr(draft, "source_analysis_id", "") or "").strip()
+        if not analysis_id:
+            return None
+        analysis = self.repository.get_case_analysis(analysis_id)
+        if not analysis or analysis.food_sensitivity is None:
+            return None
+        return normalize_chronic_food_sensitivity_result(
+            analysis.food_sensitivity
+        )
 
     def _excluded_sku_ids(self, edits: dict[str, Any] | None) -> set[str]:
         if not isinstance(edits, dict):

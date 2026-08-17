@@ -1,12 +1,34 @@
 {
-  "version": "product-safety-matrix-v5-client-v3-2026-07-29",
-  "source_note": "融合既有产品禁忌与甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第四、五节的一次性结构化规则，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关提示。",
+  "version": "product-safety-matrix-v6-nutrient-excess-2026-08-15",
+  "source_note": "融合既有产品禁忌与甲方《患者病情×产品成分禁忌矩阵（V2.0 功能医学全场景版）》第四、五节的一次性结构化规则，并按《功能医学营养干预 AI 训练标准（规则全集）》V1.0 修订冠心病与他汀相关提示；补充营养素偏高与同成分产品的病例级硬排除规则。",
   "severity_policy": {
     "contraindication": "明确禁用/禁忌；若可结构化匹配到病例条件、用药、过敏或孕哺状态，则阻断推荐。",
     "caution": "慎用/注意/需咨询医生/需监测；不阻断推荐，但必须进入医生审核和客户可见安全提示。",
     "interaction_warning": "涉及药物、手术或监测的相互作用提示；不默认阻断，除非 exclusion_rules 命中。"
   },
   "rules": [
+    {
+      "rule_id": "nutrient_excess_vitamin_e_excludes_selenium_vitamin_e",
+      "sku_ids": ["sku_selenium_vitamin_e"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["marker:vitamin_e:high"],
+      "message": "维生素E已高于报告参考范围，当前自动方案排除含维生素E的复合产品。",
+      "source_ref": "病例级营养素过量-产品成分冲突规则",
+      "enabled": true,
+      "version": "1.0.0"
+    },
+    {
+      "rule_id": "nutrient_excess_selenium_excludes_selenium_vitamin_e",
+      "sku_ids": ["sku_selenium_vitamin_e"],
+      "action": "exclude",
+      "all_conditions": [],
+      "any_conditions": ["marker:selenium:high"],
+      "message": "硒已高于报告参考范围，当前自动方案排除含硒的复合产品。",
+      "source_ref": "病例级营养素过量-产品成分冲突规则",
+      "enabled": true,
+      "version": "1.0.0"
+    },
     {
       "rule_id": "case_bmi_low_excludes_weight_support",
       "sku_ids": ["sku_weight_support"],

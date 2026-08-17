@@ -15,6 +15,20 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from app.domain.models import ChronicFoodSensitivityResult
+from app.services.food_sensitivity import (
+    dedupe_food_sensitivity_items,
+    dedupe_food_sensitivity_names,
+)
+
+
+_FOOD_SENSITIVITY_SECTION = "慢性食物敏感检测结果"
+_FOOD_SENSITIVITY_GUIDANCE = (
+    "1.延迟性过敏反应IgG呈现轻度反应:建议停止摄食6周，之后再每隔4天才摄食1次，持续3个月后再正常摄食。",
+    "2.延迟性过敏反应IgG呈现中度反应:建议停止摄食3个月，之后再每隔4天才摄食1次，持续3个月后再正常摄食。",
+    "3.延迟性过敏反应IgG呈现重度反应:建议停止摄食6个月，之后再每隔4天才摄食1次，持续3个月后再正常摄食。",
+)
+
 
 @dataclass(frozen=True)
 class PdfReportItem:
@@ -50,6 +64,7 @@ class PdfReportExporter:
         customer_name: str,
         report_text: str,
         recommended_skus: list[Any] | None = None,
+        food_sensitivity: ChronicFoodSensitivityResult | None = None,
     ) -> Path:
         safe_name = self._sanitize_filename(customer_name)
         # The downloaded report should be recognizable by the case name. A case
@@ -62,6 +77,7 @@ class PdfReportExporter:
             draft_id=draft_id,
             report_text=report_text,
             recommended_skus=recommended_skus or [],
+            food_sensitivity=food_sensitivity,
         )
         return target
 
@@ -73,6 +89,7 @@ class PdfReportExporter:
         draft_id: str,
         report_text: str,
         recommended_skus: list[Any],
+        food_sensitivity: ChronicFoodSensitivityResult | None = None,
     ) -> None:
         title, sections = self._parse_report(report_text)
         document = SimpleDocTemplate(
@@ -101,7 +118,18 @@ class PdfReportExporter:
             story.append(Paragraph(escape(section_title), self._section_style(section_title, styles)))
             story.append(Spacer(1, 5))
             canonical_title = self._canonical_section_title(section_title)
-            if canonical_title in self.nutrition_sections and recommended_skus:
+            if (
+                canonical_title == _FOOD_SENSITIVITY_SECTION
+                and food_sensitivity is not None
+                and self._has_food_sensitivity_content(food_sensitivity)
+            ):
+                story.extend(
+                    self._build_food_sensitivity_flowables(
+                        food_sensitivity,
+                        styles,
+                    )
+                )
+            elif canonical_title in self.nutrition_sections and recommended_skus:
                 story.extend(
                     self._build_nutrition_table_flowables(
                         recommended_skus,
@@ -420,6 +448,82 @@ class PdfReportExporter:
         )
         flowables.append(table)
         return flowables
+
+    def _build_food_sensitivity_flowables(
+        self,
+        food: ChronicFoodSensitivityResult,
+        styles: dict[str, ParagraphStyle],
+    ) -> list[Any]:
+        items, _ = dedupe_food_sensitivity_items(food.items)
+        if items:
+            grouped_names = {
+                severity: dedupe_food_sensitivity_names(
+                    item.name for item in items if item.severity == severity
+                )
+                for severity in ("mild", "moderate", "high", "ungraded")
+            }
+        else:
+            grouped_names = {
+                "mild": dedupe_food_sensitivity_names(food.mild_foods),
+                "moderate": dedupe_food_sensitivity_names(food.moderate_foods),
+                "high": dedupe_food_sensitivity_names(food.high_foods),
+                "ungraded": [],
+            }
+
+        rows = [
+            ("轻度(Mild)", grouped_names["mild"]),
+            ("中度(Moderate)", grouped_names["moderate"]),
+            ("重度(High)", grouped_names["high"]),
+        ]
+        if grouped_names["ungraded"]:
+            rows.append(("待确认/未分级异常", grouped_names["ungraded"]))
+
+        data = [
+            [
+                Paragraph(
+                    (
+                        f"<font color='#b04a34'><b>{escape(label)}：</b></font>"
+                        f"{escape('、'.join(names) if names else '无')}"
+                    ),
+                    styles["table-cell"],
+                )
+            ]
+            for label, names in rows
+        ]
+        table = Table(
+            data,
+            colWidths=[A4[0] - 32 * mm],
+            hAlign="LEFT",
+            splitByRow=1,
+            splitInRow=1,
+        )
+        table.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.65, colors.HexColor("#4c524e")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+
+        flowables: list[Any] = [table, Spacer(1, 9)]
+        for line in _FOOD_SENSITIVITY_GUIDANCE:
+            flowables.append(Paragraph(escape(line), styles["body-paragraph"]))
+            flowables.append(Spacer(1, 3))
+        return flowables
+
+    @staticmethod
+    def _has_food_sensitivity_content(
+        food: ChronicFoodSensitivityResult | None,
+    ) -> bool:
+        return bool(
+            food
+            and (food.items or food.mild_foods or food.moderate_foods or food.high_foods)
+        )
 
     def _nutrition_table_rows(self, recommended_skus: list[Any]) -> list[dict[str, Any]]:
         products = self.product_report_catalog.get("products", {})

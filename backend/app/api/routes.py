@@ -56,6 +56,7 @@ from app.core.settings import (
     save_llm_config,
 )
 from app.services.review_local import InvalidDosageOverrideError
+from app.services.food_sensitivity import normalize_chronic_food_sensitivity_result
 from app.domain.models import (
     AuditLog,
     CaseIndicator,
@@ -552,6 +553,14 @@ def get_latest_case_analysis(case_id: str, request: Request):
     analysis = container.repository.get_latest_case_analysis(case_id)
     if not analysis:
         raise HTTPException(status_code=404, detail="尚未创建综合分析任务。")
+    if analysis.food_sensitivity is not None:
+        analysis = analysis.model_copy(
+            update={
+                "food_sensitivity": normalize_chronic_food_sensitivity_result(
+                    analysis.food_sensitivity
+                )
+            }
+        )
     return analysis
 
 

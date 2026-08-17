@@ -156,7 +156,13 @@ class CaseService:
             case.id,
             "questionnaire_submitted",
             "system",
-            {"form_version": questionnaire.form_version, "has_msq_scores": bool(questionnaire.msq_system_scores)},
+            {
+                "form_version": questionnaire.form_version,
+                "has_msq_scores": bool(
+                    questionnaire.msq_symptom_scores
+                    or questionnaire.msq_system_scores
+                ),
+            },
         )
         return case
 

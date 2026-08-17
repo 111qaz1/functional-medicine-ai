@@ -58,7 +58,7 @@ class QuestionnaireParseResult:
 
 
 class QuestionnaireImportService:
-    PARSER_VERSION = "msq-structured-v6-targeted-semantic-fields"
+    PARSER_VERSION = "msq-structured-v7-symptom-scores"
     _WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     _MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
     _DOCX_SUFFIXES = {".docx"}
@@ -110,6 +110,7 @@ class QuestionnaireImportService:
         "diet_pattern": None,
         "exercise_frequency": None,
         "symptoms": [],
+        "msq_symptom_scores": {},
         "msq_system_scores": {},
     }
 
@@ -348,6 +349,7 @@ class QuestionnaireImportService:
         symptoms: list[str] = []
         emotional_state: list[str] = []
         goals: list[str] = []
+        msq_symptom_scores: dict[str, int] = {}
         msq_system_scores: dict[str, int] = {}
         additional_notes: list[str] = ["由已填写 MSQ PDF 问卷自动导入，建议人工核对后再生成最终报告。"]
 
@@ -471,10 +473,17 @@ class QuestionnaireImportService:
         if self._is_yes_selected(activity_limit_line):
             additional_notes.append("当前体能状况限制部分体能活动")
 
-        pdf_symptoms, pdf_emotions, bowel_markers, pdf_scores = self._extract_pdf_msq_symptoms(full_text)
+        (
+            pdf_symptoms,
+            pdf_emotions,
+            bowel_markers,
+            pdf_symptom_scores,
+            pdf_system_scores,
+        ) = self._extract_pdf_msq_symptoms(full_text)
         symptoms.extend(pdf_symptoms)
         emotional_state.extend(pdf_emotions)
-        msq_system_scores.update(pdf_scores)
+        msq_symptom_scores.update(pdf_symptom_scores)
+        msq_system_scores.update(pdf_system_scores)
 
         goal_block = self._extract_between_text(full_text, "您希望以何种方式来促进健康呢", "第九部分：症状评估")
         if goal_block:
@@ -517,6 +526,7 @@ class QuestionnaireImportService:
             stress_level=None,
             emotional_state=self._dedupe(emotional_state),
             goals=self._dedupe(goals),
+            msq_symptom_scores=msq_symptom_scores,
             msq_system_scores=msq_system_scores,
             additional_notes="；".join(self._dedupe(additional_notes)) or None,
         )
@@ -534,6 +544,7 @@ class QuestionnaireImportService:
         symptoms: list[str] = []
         emotional_state: list[str] = []
         goals: list[str] = []
+        msq_symptom_scores: dict[str, int] = {}
         msq_system_scores: dict[str, int] = {}
         additional_notes: list[str] = []
 
@@ -724,6 +735,10 @@ class QuestionnaireImportService:
                 continue
             if score > 0:
                 symptoms.append(symptom_name)
+                msq_symptom_scores[symptom_name] = max(
+                    msq_symptom_scores.get(symptom_name, 0),
+                    score,
+                )
                 if symptom_name in {"便秘", "腹泻"}:
                     bowel_markers.append(symptom_name)
                 if any(keyword in symptom_name for keyword in ("忧郁", "焦虑", "烦躁", "紧张", "情绪", "暴躁")):
@@ -791,6 +806,7 @@ class QuestionnaireImportService:
             stress_level=None,
             emotional_state=self._dedupe(emotional_state),
             goals=self._dedupe(goals),
+            msq_symptom_scores=msq_symptom_scores,
             msq_system_scores=msq_system_scores,
             additional_notes="；".join(self._dedupe(additional_notes)) or None,
         )
@@ -1475,10 +1491,13 @@ class QuestionnaireImportService:
                 items.append(self._compose_named_frequency(name, match.group(1)))
         return "；".join(self._dedupe(items)) if items else None
 
-    def _extract_pdf_msq_symptoms(self, text: str) -> tuple[list[str], list[str], list[str], dict[str, int]]:
+    def _extract_pdf_msq_symptoms(
+        self,
+        text: str,
+    ) -> tuple[list[str], list[str], list[str], dict[str, int], dict[str, int]]:
         symptom_text = self._extract_between_text(text, "第九部分：症状评估")
         if not symptom_text:
-            return [], [], [], {}
+            return [], [], [], {}, {}
 
         symptom_text = re.sub(r"级别\s+序号\s+症状描述\s+从来没有\s+偶尔\s+轻微\s+中等\s+严重\s+0\s+1\s+2\s+3\s+4", " ", symptom_text)
         row_pattern = re.compile(r"(?<![\d.])(\d{1,2})\s+([^□☑]{2,50}?)\s+((?:[□☑]\s*){5})")
@@ -1487,6 +1506,7 @@ class QuestionnaireImportService:
         symptoms: list[str] = []
         emotional_state: list[str] = []
         bowel_markers: list[str] = []
+        msq_symptom_scores: dict[str, int] = {}
         msq_system_scores: dict[str, int] = {}
         current_section = ""
         previous_end = 0
@@ -1509,6 +1529,10 @@ class QuestionnaireImportService:
             score = self._extract_msq_score(re.findall(r"[□☑]", match.group(3)))
             if symptom_name and score is not None and score > 0:
                 symptoms.append(symptom_name)
+                msq_symptom_scores[symptom_name] = max(
+                    msq_symptom_scores.get(symptom_name, 0),
+                    score,
+                )
                 if symptom_name in {"便秘", "腹泻"}:
                     bowel_markers.append(symptom_name)
                 if any(keyword in symptom_name for keyword in ("忧郁", "焦虑", "烦躁", "紧张", "情绪", "暴躁")):
@@ -1521,7 +1545,13 @@ class QuestionnaireImportService:
                 current_section = section_after
             previous_end = match.end()
 
-        return self._dedupe(symptoms), self._dedupe(emotional_state), self._dedupe(bowel_markers), msq_system_scores
+        return (
+            self._dedupe(symptoms),
+            self._dedupe(emotional_state),
+            self._dedupe(bowel_markers),
+            msq_symptom_scores,
+            msq_system_scores,
+        )
 
     def _inspect_pdf_msq_rows(
         self,

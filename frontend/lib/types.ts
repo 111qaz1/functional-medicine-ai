@@ -249,6 +249,7 @@ export interface Questionnaire {
   stress_level?: "low" | "medium" | "high" | null;
   emotional_state: string[];
   goals: string[];
+  msq_symptom_scores?: Record<string, number>;
   msq_system_scores: Record<string, number>;
   additional_notes?: string | null;
 }

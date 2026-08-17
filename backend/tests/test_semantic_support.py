@@ -10,6 +10,7 @@ from app.domain.models import (
     AbnormalFinding,
     AnalysisStatus,
     CaseAnalysis,
+    FindingStandardizationStatus,
     SemanticEvidenceReference,
     SemanticEvidenceStrength,
     SemanticSupportNeed,
@@ -77,6 +78,25 @@ class ExactFindingStandardizationTests(unittest.TestCase):
         ).model_copy(update={"marker_code_candidate": "vitamin_d", "abnormal_flag": "low"})
         standardized = self.service.standardize(item, doctor_confirmed=True)
         self.assertEqual(standardized.marker_code, "vitamin_d")
+
+    def test_lobar_thyroid_nodule_name_confirms_exact_finding_code(self) -> None:
+        item = finding(
+            finding_id="finding-thyroid-left",
+            name="甲状腺左叶结节",
+        ).model_copy(
+            update={
+                "finding_code_candidate": "thyroid_nodule",
+                "abnormal_flag": "positive",
+            }
+        )
+
+        standardized = self.service.standardize(item, doctor_confirmed=True)
+
+        self.assertEqual(standardized.finding_code, "thyroid_nodule")
+        self.assertEqual(
+            standardized.standardization_status,
+            FindingStandardizationStatus.validated,
+        )
 
 
 class SemanticSupportValidationTests(unittest.TestCase):

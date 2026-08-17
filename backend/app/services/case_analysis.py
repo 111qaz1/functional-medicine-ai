@@ -111,6 +111,17 @@ _EXPLICIT_RESULT_NUMBER_PATTERN = (
 _HIGH_DIRECTION_TERMS = ("↑", "偏高", "升高", "增高", "高于参考范围", "超标")
 _LOW_DIRECTION_TERMS = ("↓", "偏低", "降低", "低于参考范围")
 
+_OBJECTIVE_MEDICAL_REPORT_TYPES = {
+    "health_examination",
+    "health_check",
+    "medical_report",
+    "physical_examination",
+    "lab_report",
+    "laboratory_report",
+    "imaging_report",
+    "diagnostic_report",
+}
+
 _GUT_REPORT_TERMS = (
     "肠道菌群",
     "肠道微生物组",
@@ -346,6 +357,33 @@ def is_confirmed_msq_result(result: Any) -> bool:
     )
 
 
+def _is_structurally_empty_objective_result(result: Any) -> bool:
+    return bool(
+        not str(getattr(result, "summary", "") or "").strip()
+        and not getattr(result, "abnormal_findings", None)
+        and not getattr(result, "system_findings", None)
+        and not getattr(result, "questionnaire", None)
+        and not has_chronic_food_sensitivity_content(
+            getattr(result, "food_sensitivity", None)
+        )
+    )
+
+
+def _is_empty_objective_medical_report(result: Any) -> bool:
+    normalized_type = re.sub(
+        r"[\s-]+",
+        "_",
+        unicodedata.normalize(
+            "NFKC",
+            str(getattr(result, "report_type", "") or ""),
+        ).strip().lower(),
+    )
+    return bool(
+        normalized_type in _OBJECTIVE_MEDICAL_REPORT_TYPES
+        and _is_structurally_empty_objective_result(result)
+    )
+
+
 def is_chronic_food_sensitivity_report(
     *,
     filename: str = "",
@@ -575,15 +613,53 @@ class OpenAICompatibleCaseAnalysisProvider:
             self._MEDICAL_REPORT_RETRY_MARKER in result.warnings
         )
         result = self._without_internal_document_warnings(result)
+        medical_retry_performed = False
         if needs_medical_report_retry:
-            if result.abnormal_findings:
-                return result
-            retry_result = self._analyze_document_once(
-                uploaded_file,
-                questionnaire_content_retry=False,
-                medical_report_retry=True,
+            if not result.abnormal_findings:
+                result = self._without_internal_document_warnings(
+                    self._analyze_document_once(
+                        uploaded_file,
+                        questionnaire_content_retry=False,
+                        medical_report_retry=True,
+                    )
+                )
+                medical_retry_performed = True
+
+        if _is_empty_objective_medical_report(result):
+            original_report_type = result.report_type
+            logger.warning(
+                "Objective medical report extraction returned empty structured "
+                "content file_id=%s report_type=%s retrying=%s",
+                getattr(uploaded_file, "id", None),
+                result.report_type,
+                not medical_retry_performed,
             )
-            return self._without_internal_document_warnings(retry_result)
+            if not medical_retry_performed:
+                result = self._without_internal_document_warnings(
+                    self._analyze_document_once(
+                        uploaded_file,
+                        questionnaire_content_retry=False,
+                        medical_report_retry=True,
+                    )
+                )
+                medical_retry_performed = True
+                logger.warning(
+                    "Objective report extraction retry completed file_id=%s "
+                    "report_type=%s finding_count=%s summary_present=%s "
+                    "system_finding_count=%s",
+                    getattr(uploaded_file, "id", None),
+                    result.report_type,
+                    len(result.abnormal_findings),
+                    bool(str(result.summary or "").strip()),
+                    len(result.system_findings),
+                )
+            if _is_structurally_empty_objective_result(result):
+                # Preserve the original objective report identity so the cache layer
+                # rejects this empty result even if the retry changed report_type.
+                result = result.model_copy(
+                    update={"report_type": original_report_type}
+                )
+
         if not self._is_empty_medical_questionnaire_result(
             uploaded_file,
             result,
@@ -5604,7 +5680,12 @@ class CaseAnalysisService:
                     }
                 )
             logger.warning(
-                "Ignored unusable empty medical questionnaire cache entry"
+                "Ignored unusable document analysis cache entry file_id=%s "
+                "report_type=%s finding_count=%s empty_objective_report=%s",
+                getattr(uploaded_file, "id", None),
+                result.report_type,
+                len(result.abnormal_findings),
+                _is_empty_objective_medical_report(result),
             )
         with self._provider_usage_context(
             case_id=case.id,
@@ -5632,7 +5713,12 @@ class CaseAnalysisService:
         ):
             logger.warning(
                 "Document result was not cached because required structured content "
-                "is empty"
+                "is empty file_id=%s report_type=%s finding_count=%s "
+                "empty_objective_report=%s",
+                getattr(uploaded_file, "id", None),
+                result.report_type,
+                len(result.abnormal_findings),
+                _is_empty_objective_medical_report(result),
             )
         else:
             self.repository.save_document_analysis_cache(
@@ -5687,11 +5773,13 @@ class CaseAnalysisService:
             _is_numeric_finding_without_value(finding)
             for finding in result.abnormal_findings
         )
+        empty_objective_report = _is_empty_objective_medical_report(result)
         return (
             no_model_readable_content
             or empty_questionnaire
             or empty_food_sensitivity
             or incomplete_numeric_findings
+            or empty_objective_report
         )
 
     @staticmethod

@@ -195,7 +195,7 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
         级别 序号 症状描述 从来没有 偶尔 轻微 中等 严重 0 1 2 3 4
         2 犹豫不决、难下决定 □ □ Y □ □ 头/脑力方面 3 记忆力变差 □ Y □ □ □
         2 腹胀/胀气 □ Y □ □ □ 消化功能 5 便秘 □ Y □ □ □ 6 腹泻 □ Y □ □ □
-        6 头发/皮肤 痤疮 (青春痘) □ □ Y □ □ 1 容易疲劳虚弱，没精神 □ □ Y □ □
+        6 头发/皮肤 痤疮 (青春痘) □ □ Y □ □ 1 容易疲劳虚弱，没精神 □ □ □ Y □
         3 全身肌肉无力、肌肉酸痛 □ Y □ □ □ 4 游走性非发炎之关节痛 □ Y □ □ □ 5 睡眠障碍（失眠或嗜睡） □ Y □ □ □
         """
         service._extract_pdf_text = lambda content: pdf_text  # type: ignore[method-assign]
@@ -214,10 +214,12 @@ class QuestionnaireImportServiceTests(unittest.TestCase):
         self.assertIn("鱼油（一日一次）", questionnaire.supplement_use or "")
         self.assertEqual(questionnaire.exercise_frequency, "有运动习惯")
         self.assertIn("便秘", questionnaire.symptoms)
+        self.assertIn("容易疲劳虚弱，没精神", " ".join(questionnaire.symptoms))
         self.assertEqual(questionnaire.bowel_habits, "便秘、腹泻")
         self.assertEqual(questionnaire.msq_system_scores.get("头部"), 2)
         self.assertEqual(questionnaire.msq_system_scores.get("消化道"), 1)
         self.assertEqual(questionnaire.msq_system_scores.get("皮肤"), 2)
+        self.assertEqual(questionnaire.msq_system_scores.get("能量/活动"), 3)
 
 
 if __name__ == "__main__":

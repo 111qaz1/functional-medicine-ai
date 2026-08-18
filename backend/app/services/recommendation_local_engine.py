@@ -1406,6 +1406,17 @@ class RecommendationService:
         latest_analysis = self.repository.get_latest_case_analysis(case.id)
         structured_system_findings: list[StructuredSystemFinding] = []
         if latest_analysis and getattr(latest_analysis.status, "value", latest_analysis.status) == "reviewed":
+            reviewed_food = getattr(latest_analysis, "food_sensitivity", None)
+            if reviewed_food and getattr(reviewed_food, "valid", False):
+                food_sensitivities.update(
+                    self._normalize(item)
+                    for item in [
+                        *(getattr(reviewed_food, "mild_foods", []) or []),
+                        *(getattr(reviewed_food, "moderate_foods", []) or []),
+                        *(getattr(reviewed_food, "high_foods", []) or []),
+                    ]
+                    if str(item).strip()
+                )
             model_summary = (latest_analysis.reviewed_case_summary or "").strip()
             if model_summary:
                 summary_parts.append(f"模型综合病例总结：{model_summary}")
@@ -1469,6 +1480,17 @@ class RecommendationService:
             if msq_system_scores.get("体重", 0) >= 2 or msq_system_scores.get("浣撻噸", 0) >= 2:
                 lifestyle_tags.add("metabolic_support")
 
+        fatigue_terms = tuple(
+            self._normalize(term)
+            for term in ("慢性疲劳", "疲劳", "没精神", "能量下降", "运动不耐受")
+        )
+        if any(
+            fatigue_term in patient_text
+            for patient_text in (*symptoms, *chief_concerns)
+            for fatigue_term in fatigue_terms
+        ):
+            lifestyle_tags.add("energy_support")
+
         if any(
             term in normalized_clinical_summary
             for term in (
@@ -1491,6 +1513,7 @@ class RecommendationService:
                 self._normalize("2型糖尿病"),
             )
         ):
+            lifestyle_tags.add("glucose_support")
             lifestyle_tags.add("metabolic_support")
         if any(
             term in normalized_clinical_summary
@@ -1501,7 +1524,18 @@ class RecommendationService:
                 self._normalize("血脂"),
             )
         ):
+            lifestyle_tags.add("lipid_support")
             lifestyle_tags.add("metabolic_support")
+        if any(
+            term in normalized_clinical_summary
+            for term in (
+                self._normalize("高血压"),
+                self._normalize("血压升高"),
+                self._normalize("冠心病"),
+                self._normalize("动脉粥样硬化"),
+            )
+        ):
+            lifestyle_tags.add("cardiovascular_support")
 
         return RecommendationContext(
             markers_by_code=markers_by_code,

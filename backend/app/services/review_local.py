@@ -16,7 +16,7 @@ from app.repositories.in_memory import LocalRepository
 from app.services.case_service import CaseService
 from app.services.body_systems import BODY_SYSTEMS, SYSTEM_NAMES, classify_text_to_system_ids
 from app.services.indicator_extraction import CaseIndicatorService
-from app.services.lifestyle_planning import remove_generic_lifestyle_confirmation
+from app.services.lifestyle_planning import LifestylePlanningService, remove_generic_lifestyle_confirmation
 from app.services.pdf_export import PdfReportExporter
 from app.services.food_sensitivity import normalize_chronic_food_sensitivity_result
 from app.services.rag_safety import CUSTOMER_RAG_PREFIX, strip_textbook_internal_markers
@@ -1608,10 +1608,7 @@ class ReviewService:
         sections = draft.report_sections or {}
         if getattr(draft, "lifestyle_plan", None):
             structured_items = self._customerize_items(
-                sections.get("生活方式干预处方")
-                or sections.get("生活方式干预")
-                or sections.get("生活方式干预重点")
-                or draft.lifestyle_actions
+                LifestylePlanningService.report_items(draft.lifestyle_plan)
             )
             return structured_items[:32]
 

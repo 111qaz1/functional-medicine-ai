@@ -23,6 +23,7 @@ ENV NODE_ENV=production \
 WORKDIR /app/frontend
 COPY --from=builder /app/frontend/package.json ./package.json
 COPY --from=builder /app/frontend/package-lock.json ./package-lock.json
+COPY --from=builder /app/frontend/next.config.ts ./next.config.ts
 COPY --from=builder /app/frontend/.next ./.next
 COPY --from=builder /app/frontend/public ./public
 COPY --from=builder /app/frontend/node_modules ./node_modules

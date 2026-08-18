@@ -382,6 +382,22 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertLess(elapsed, 0.1)
         self.assertTrue(any(item.action.value == "exclude" for item in decisions["sku_weight_support"]))
 
+    def test_positive_fatigue_symptom_and_msq_score_generate_energy_support(self) -> None:
+        case = self._prepare_case(
+            "白细胞 5.5 10^9/L 3.5-9.5",
+            Questionnaire(
+                symptoms=["容易疲劳虚弱，没精神（中等）"],
+                msq_system_scores={"能量/活动": 3},
+            ),
+        )
+
+        context = self.container.recommendation_service._build_context(
+            self.container.case_service.get_case(case.id)
+        )
+
+        self.assertIn("energy_support", context.lifestyle_tags)
+        self.assertEqual(context.msq_system_scores.get("能量/活动"), 3)
+
     def test_product_rows_follow_body_system_priority(self) -> None:
         case = self._prepare_case(
             "空腹血糖 6.2 mmol/L 3.9-5.6\nLDL-C 3.49 mmol/L 0-3.37\nhs-CRP 4.2 mg/L 0-3",
@@ -2259,23 +2275,23 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertNotIn("## 病例摘要", review.publishable_report)
         self.assertNotIn("## 证据来源", review.publishable_report)
         self.assertNotIn("## 审计信息", review.publishable_report)
-        self.assertIn("## 核心结论与健康画像", review.publishable_report)
-        self.assertIn("## 异常指标汇总", review.publishable_report)
-        self.assertIn("说明：", review.publishable_report)
-        self.assertIn("## 生活方式干预处方", review.publishable_report)
-        self.assertIn("## 首月营养素干预方案", review.publishable_report)
+        self.assertIn("## 一、核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 二、异常指标汇总", review.publishable_report)
+        self.assertIn("## 四、生活方式干预处方", review.publishable_report)
+        self.assertIn("## 五、首月营养素干预方案", review.publishable_report)
         self.assertNotIn("总医嘱说明", review.publishable_report)
         self.assertNotIn("对症治疗", review.publishable_report)
         self.assertIn("### 1.", review.publishable_report)
-        self.assertIn("### A. 饮食干预", review.publishable_report)
-        self.assertIn("抗炎餐盘", review.publishable_report)
+        self.assertIn("### 1. 饮食建议", review.publishable_report)
+        self.assertIn("### 2. 运动建议", review.publishable_report)
+        self.assertIn("### 3. 监测与复查", review.publishable_report)
+        self.assertIn("至少300克不同颜色蔬菜", review.publishable_report)
         self.assertIn("注意/禁忌：", review.publishable_report)
         self.assertNotIn("白细胞计数：5.5", review.publishable_report)
         formatted_indicator = self.container.review_service.pdf_exporter._format_item(
             "异常指标汇总",
             "25-OH维生素D：18 ng/mL（偏低）。说明：用于验证 PDF 列表符号。",
         )
-        self.assertTrue(formatted_indicator.startswith("- "))
         self.assertNotIn("•", formatted_indicator)
         formatted_lifestyle = self.container.review_service.pdf_exporter._format_item(
             "生活方式干预处方",

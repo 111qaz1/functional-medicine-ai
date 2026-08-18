@@ -1,7 +1,7 @@
 [
   {"code":"fatty_liver","display_name":"脂肪肝","synonyms":["脂肪肝","肝脂肪变","肝脏脂肪浸润"]},
   {"code":"liver_calcification","display_name":"肝脏钙化灶","synonyms":["肝脏钙化灶","肝内钙化灶","肝钙化"]},
-  {"code":"thyroid_nodule","display_name":"甲状腺结节","synonyms":["甲状腺结节","甲状腺占位"]},
+  {"code":"thyroid_nodule","display_name":"甲状腺结节","synonyms":["甲状腺结节","甲状腺左叶结节","甲状腺右叶结节","甲状腺双叶结节","甲状腺占位"]},
   {"code":"breast_nodule","display_name":"乳腺结节","synonyms":["乳腺结节","乳腺肿块","BI-RADS"]},
   {"code":"pulmonary_nodule","display_name":"肺结节","synonyms":["肺结节","肺部结节","Lung-RADS"]},
   {"code":"osteopenia","display_name":"骨量减少","synonyms":["骨量减少","低骨量","骨密度降低"]},

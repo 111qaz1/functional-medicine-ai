@@ -52,14 +52,33 @@ ADMISSION_SAFETY_LEVEL = {
     "referral": "referral",
 }
 
+MSQ_SEVERITY_LABELS = {
+    1: "偶尔",
+    2: "轻微",
+    3: "中等",
+    4: "严重",
+}
+
 
 @dataclass(frozen=True)
 class ProtocolMatch:
     protocol: dict[str, Any]
     score: int
+    evidence_tier: int
     reason: str
     anchor_refs: tuple[str, ...]
     anchor_text: str
+    specific_evidence_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EvidenceAnchor:
+    ref: str
+    text: str
+    tier: int
+    source_rank: int
+    raw_value: str = ""
+    generic: bool = False
 
 
 class LifestylePlanningService:
@@ -75,6 +94,25 @@ class LifestylePlanningService:
         expected_ids = [f"LP{index:02d}" for index in range(1, 25)]
         if protocol_ids != expected_ids:
             raise ValueError("Lifestyle protocol registry IDs must be ordered LP01-LP24.")
+        valid_selection_classes = {
+            "physical",
+            "sleep_recovery",
+            "stress_emotion",
+            "contextual",
+        }
+        valid_domains = set(DOMAIN_TITLES)
+        for protocol in protocols:
+            selection_class = str(protocol.get("selection_class") or "")
+            if selection_class not in valid_selection_classes:
+                raise ValueError(
+                    f"{protocol['protocol_id']} has invalid selection_class {selection_class!r}."
+                )
+            primary_domains = set(protocol.get("primary_domains") or [])
+            action_domains = set((protocol.get("actions") or {}).keys())
+            if not primary_domains.issubset(valid_domains) or not primary_domains.issubset(action_domains):
+                raise ValueError(
+                    f"{protocol['protocol_id']} primary_domains must reference runtime action domains."
+                )
         self.version = str(payload.get("version") or "lifestyle-v2")
         self.max_parallel_protocols = int(payload.get("max_parallel_protocols") or 3)
         self.forbidden_output_terms = tuple(
@@ -156,7 +194,10 @@ class LifestylePlanningService:
         self._add_movement_intensity_support(sections_by_domain, case, context)
         self._add_osa_priority_action(sections_by_domain, evidence)
         self._dedupe_sections(sections_by_domain)
-        self._cap_sections(sections_by_domain)
+        self._cap_sections(
+            sections_by_domain,
+            [str(match.protocol.get("protocol_id") or "") for match in selected],
+        )
 
         if not selections and not any(sections_by_domain.values()):
             missing_info.append("现有资料未命中可安全执行的生活方式协议，不生成通用模板。")
@@ -196,16 +237,20 @@ class LifestylePlanningService:
         items: list[str] = []
         section_number = 1
         selections = {item.protocol_id: item for item in plan.selected_protocols}
+        selection_order = {
+            item.protocol_id: index
+            for index, item in enumerate(plan.selected_protocols)
+        }
         displayed_basis_terms: list[str] = []
         for section in plan.sections:
             items.append(f"### {section_number}. {section.title}")
             action_groups: dict[
                 tuple[tuple[str, ...], str],
-                tuple[str, str, list[LifestyleAction]],
+                tuple[int, str, str, list[LifestyleAction]],
             ] = {}
             primary_group_by_refs: dict[
                 tuple[str, ...],
-                tuple[tuple[tuple[str, ...], str], str, str],
+                tuple[tuple[tuple[str, ...], str], int, str, str],
             ] = {}
             for action in section.actions:
                 protocol_id = action.action_id.split("_", 1)[0]
@@ -215,7 +260,10 @@ class LifestylePlanningService:
                 title, basis = cls._problem_group_meta(action, selection)
                 refs = tuple(sorted(action.anchor_refs))
                 group_key = (refs, cls._normalize(basis))
-                primary_group_by_refs.setdefault(refs, (group_key, title, basis))
+                rank = selection_order.get(protocol_id, len(selection_order) + 100)
+                existing_primary = primary_group_by_refs.get(refs)
+                if existing_primary is None or rank < existing_primary[1]:
+                    primary_group_by_refs[refs] = (group_key, rank, title, basis)
             for action in section.actions:
                 protocol_id = action.action_id.split("_", 1)[0]
                 selection = selections.get(protocol_id)
@@ -223,17 +271,20 @@ class LifestylePlanningService:
                 refs = tuple(sorted(action.anchor_refs))
                 if selection is not None:
                     group_key = (refs, cls._normalize(basis))
+                    rank = selection_order.get(protocol_id, len(selection_order) + 100)
                 else:
                     primary_group = primary_group_by_refs.get(refs)
                     if primary_group is not None:
-                        group_key, title, basis = primary_group
+                        group_key, rank, title, basis = primary_group
                     else:
                         group_key = (refs or (protocol_id,), cls._normalize(basis))
+                        rank = -1 if protocol_id == "OSAHS" else len(selection_order) + 100
                 if group_key not in action_groups:
-                    action_groups[group_key] = (title, basis, [])
-                action_groups[group_key][2].append(action)
+                    action_groups[group_key] = (rank, title, basis, [])
+                action_groups[group_key][3].append(action)
 
-            for group_number, (_, (title, basis, actions)) in enumerate(action_groups.items(), start=1):
+            ordered_groups = sorted(action_groups.values(), key=lambda item: item[0])
+            for group_number, (_, title, basis, actions) in enumerate(ordered_groups, start=1):
                 visible_basis, new_terms = cls._unique_visible_basis(basis, displayed_basis_terms)
                 if visible_basis:
                     items.append(f"### {section_number}.{group_number} {title}（依据：{visible_basis}）")
@@ -271,8 +322,13 @@ class LifestylePlanningService:
                 for existing in displayed_terms
             ):
                 continue
+            candidate = "、".join([*visible, term])
+            if visible and len(candidate) > 40:
+                break
             visible.append(term)
             new_normalized.append(normalized)
+            if len(visible) >= 2:
+                break
         return "、".join(visible), new_normalized
 
     def legacy_actions(self, plan: LifestylePlan) -> list[str]:
@@ -281,6 +337,7 @@ class LifestylePlanningService:
     def _evidence(self, case: Any, context: Any) -> dict[str, Any]:
         questionnaire = case.questionnaire
         original_terms: list[tuple[str, str]] = []
+        clinical_finding_classes: dict[str, str] = {}
         if questionnaire:
             field_values = {
                 "chief_concerns": questionnaire.chief_concerns,
@@ -304,7 +361,24 @@ class LifestylePlanningService:
                         original_terms.append((f"questionnaire:{field_name}", cleaned))
         for finding in context.clinical_findings:
             if finding.finding_name:
-                original_terms.append((f"finding:{finding.finding_id}", finding.finding_name))
+                ref = f"finding:{finding.finding_id}"
+                original_terms.append((ref, finding.finding_name))
+                evidence_class = getattr(finding, "evidence_class", "")
+                clinical_finding_classes[ref] = str(
+                    getattr(evidence_class, "value", evidence_class) or ""
+                )
+        if hasattr(context, "manual_clinical_summary_text"):
+            clinical_summary = str(
+                getattr(context, "manual_clinical_summary_text", "") or ""
+            ).strip()
+        else:
+            # Compatibility for lightweight callers created before provenance was
+            # split. Production RecommendationContext always supplies the field.
+            clinical_summary = str(
+                getattr(context, "clinical_summary_text", "") or ""
+            ).strip()
+        if clinical_summary:
+            original_terms.append(("case:clinical_summary", clinical_summary))
         for food in sorted(getattr(context, "food_sensitivities", set()) or set()):
             if str(food).strip():
                 original_terms.append(("case:food_sensitivities", str(food).strip()))
@@ -314,7 +388,17 @@ class LifestylePlanningService:
         return {
             "markers": markers,
             "finding_codes": context.clinical_findings_by_code,
+            "clinical_finding_classes": clinical_finding_classes,
             "original_terms": original_terms,
+            "msq_symptom_scores": {
+                self._normalize(name): int(score)
+                for name, score in (
+                    getattr(questionnaire, "msq_symptom_scores", {}) or {}
+                ).items()
+                if self._normalize(name) and 1 <= int(score) <= 4
+            }
+            if questionnaire
+            else {},
             "normalized_text": normalized_text,
             "age": context.age,
             "pregnancy": context.pregnancy,
@@ -326,8 +410,12 @@ class LifestylePlanningService:
             return None
         trigger = protocol.get("triggers") or {}
         refs: list[str] = []
-        anchor_texts: list[str] = []
+        anchor_candidates: list[EvidenceAnchor] = []
+        specific_evidence_tiers: list[int] = []
+        tag_evidence_tiers: list[int] = []
+        specific_evidence_keys: list[str] = []
         match_count = 0
+        selection_class = str(protocol.get("selection_class") or "contextual")
 
         for condition in trigger.get("markers", []):
             marker_code, _, flag = str(condition).partition(":")
@@ -340,54 +428,130 @@ class LifestylePlanningService:
             if matched:
                 match_count += 1
                 item = matched[0]
-                refs.append(f"marker:{marker_code}")
+                ref = f"marker:{marker_code}"
+                refs.append(ref)
+                specific_evidence_tiers.append(1)
+                specific_evidence_keys.append(ref)
                 direction = "偏高" if flag == "high" else "偏低" if flag == "low" else "异常"
-                anchor_texts.append(f"{item.marker_name}{direction}")
+                anchor_candidates.append(
+                    EvidenceAnchor(
+                        ref=ref,
+                        text=f"{item.marker_name}{direction}",
+                        tier=1,
+                        source_rank=0,
+                    )
+                )
 
         for finding_code in trigger.get("findings", []):
             findings = evidence["finding_codes"].get(str(finding_code), [])
             if findings:
                 match_count += 1
                 finding = findings[0]
-                refs.append(f"finding:{finding.finding_id}")
-                anchor_texts.append(finding.finding_name)
+                ref = f"finding:{finding.finding_id}"
+                evidence_class = self._evidence_class_value(finding)
+                # A reviewed finding that resolves to the protocol's exact finding
+                # code remains objective clinical evidence even when its recommended
+                # handling is follow-up only.  ``follow_up_only`` limits the action;
+                # it must not demote the underlying imaging/laboratory finding below
+                # recovery signals such as ordinary sleep or a 1-point MSQ symptom.
+                finding_tier = (
+                    1
+                    if evidence_class
+                    in {"lab_abnormal", "clinical_confirmed", "follow_up_only"}
+                    else self._finding_class_tier(
+                        evidence_class=evidence_class,
+                        selection_class=selection_class,
+                        symptom_score=None,
+                    )
+                )
+                refs.append(ref)
+                specific_evidence_tiers.append(finding_tier)
+                specific_evidence_keys.append(ref)
+                anchor_candidates.append(
+                    EvidenceAnchor(
+                        ref=ref,
+                        text=finding.finding_name,
+                        tier=finding_tier,
+                        source_rank=self._term_source_rank(
+                            ref,
+                            evidence_class=evidence_class,
+                        ),
+                    )
+                )
 
         for term in trigger.get("terms", []):
             normalized_term = self._normalize(str(term))
             if normalized_term and normalized_term in evidence["normalized_text"]:
-                matched_source = next(
-                    (
-                        (source_ref, value)
-                        for source_ref, value in evidence["original_terms"]
-                        if normalized_term in self._normalize(value)
-                        and not self._is_non_evidence_protocol_heading(
-                            str(protocol.get("protocol_id") or ""),
-                            value,
-                        )
-                    ),
-                    None,
-                )
-                if matched_source:
+                matched_sources = [
+                    self._term_evidence_anchor(
+                        source_ref=source_ref,
+                        value=value,
+                        term=str(term),
+                        selection_class=selection_class,
+                        evidence=evidence,
+                    )
+                    for source_ref, value in evidence["original_terms"]
+                    if normalized_term in self._normalize(value)
+                    and not self._is_non_evidence_protocol_heading(
+                        str(protocol.get("protocol_id") or ""),
+                        value,
+                    )
+                ]
+                if matched_sources:
+                    matched_source = min(
+                        matched_sources,
+                        key=lambda item: (
+                            item.tier,
+                            item.source_rank,
+                            len(item.text),
+                        ),
+                    )
                     match_count += 1
-                    refs.append(matched_source[0])
-                    anchor_texts.append(matched_source[1])
+                    refs.extend(item.ref for item in matched_sources)
+                    anchor_candidates.append(matched_source)
+                    specific_evidence_tiers.append(matched_source.tier)
+                    specific_evidence_keys.append(
+                        "|".join(
+                            (
+                                matched_source.ref,
+                                self._normalize(matched_source.raw_value),
+                                normalized_term,
+                            )
+                        )
+                    )
 
         for tag in trigger.get("lifestyle_tags", []):
             if tag in context.lifestyle_tags:
                 match_count += 1
-                if tag == "energy_support" and any(
-                    self._is_specific_fatigue_anchor(text) for text in anchor_texts
-                ):
-                    continue
+                tag_tier = self._tag_evidence_tier(tag, selection_class)
+                tag_evidence_tiers.append(tag_tier)
                 ref, text = self._lifestyle_tag_anchor(tag, context)
                 refs.append(ref)
-                anchor_texts.append(text)
+                anchor_candidates.append(
+                    EvidenceAnchor(
+                        ref=ref,
+                        text=text,
+                        tier=tag_tier,
+                        source_rank=9,
+                        generic=True,
+                    )
+                )
 
         if protocol.get("protocol_id") == "LP02" and getattr(context, "food_sensitivities", set()):
             foods = sorted(str(item).strip() for item in context.food_sensitivities if str(item).strip())
             match_count += 1
-            refs.append("case:food_sensitivities")
-            anchor_texts.append(f"已记录的食物敏感项目（{'、'.join(foods[:5])}）")
+            ref = "case:food_sensitivities"
+            refs.append(ref)
+            specific_evidence_tiers.append(2)
+            specific_evidence_keys.append(ref)
+            anchor_candidates.append(
+                EvidenceAnchor(
+                    ref=ref,
+                    text=f"已记录的食物敏感项目（{'、'.join(foods[:5])}）",
+                    tier=2,
+                    source_rank=3,
+                )
+            )
 
         if match_count < int(protocol.get("min_trigger_matches") or 1):
             return None
@@ -398,15 +562,19 @@ class LifestylePlanningService:
         score = int(protocol.get("priority") or 0) + match_count * 12
         if admission == "referral":
             score += 20
+            specific_evidence_tiers.append(0)
         refs = list(dict.fromkeys(refs))
-        anchor_texts = list(dict.fromkeys(anchor_texts))
-        anchor_text = "、".join(anchor_texts[:2]) or "已确认的生活方式问题"
+        anchor_text = self._select_anchor_text(anchor_candidates)
         return ProtocolMatch(
             protocol=protocol,
             score=score,
+            evidence_tier=min(
+                specific_evidence_tiers or tag_evidence_tiers or [3]
+            ),
             reason=f"依据{anchor_text}命中",
-            anchor_refs=tuple(refs[:4]),
+            anchor_refs=tuple(refs),
             anchor_text=anchor_text,
+            specific_evidence_keys=tuple(dict.fromkeys(specific_evidence_keys)),
         )
 
     @staticmethod
@@ -431,29 +599,7 @@ class LifestylePlanningService:
         return False
 
     def _select_protocols(self, matches: list[ProtocolMatch], context: Any) -> list[ProtocolMatch]:
-        family_matches: dict[str, ProtocolMatch] = {}
-        independent_matches: list[ProtocolMatch] = []
-        for match in matches:
-            family = str(match.protocol.get("selection_family") or "").strip()
-            if not family:
-                independent_matches.append(match)
-                continue
-            existing = family_matches.get(family)
-            candidate_rank = (
-                int(match.protocol.get("family_priority") or 0),
-                match.score,
-            )
-            existing_rank = (
-                int(existing.protocol.get("family_priority") or 0),
-                existing.score,
-            ) if existing is not None else (-1, -1)
-            if existing is None or candidate_rank > existing_rank:
-                family_matches[family] = match
-
-        ranked = sorted(
-            [*independent_matches, *family_matches.values()],
-            key=lambda item: (-item.score, item.protocol["protocol_id"]),
-        )
+        ranked = sorted(self._fold_protocol_families(matches), key=self._protocol_rank_key)
         selected: list[ProtocolMatch] = []
 
         def reserve_protocols(protocol_ids: tuple[str, ...]) -> None:
@@ -468,8 +614,7 @@ class LifestylePlanningService:
                 (
                     item
                     for item in ranked
-                    if domain in (item.protocol.get("actions") or {})
-                    and (item.protocol.get("actions") or {}).get(domain)
+                    if domain in set(item.protocol.get("primary_domains") or [])
                 ),
                 None,
             )
@@ -482,16 +627,111 @@ class LifestylePlanningService:
         # Explicit fatigue/energy evidence must not be displaced by a duplicate
         # stress protocol after the three-protocol cap is applied.
         reserve_protocols(("LP09",))
-        if "sleep_recovery" in context.lifestyle_tags:
-            reserve_protocols(("LP06", "LP05"))
-        if "stress_support" in context.lifestyle_tags:
-            reserve_protocols(("LP24", "LP20", "LP05"))
         for match in ranked:
             if len(selected) >= self.max_parallel_protocols:
                 break
             if match not in selected:
                 selected.append(match)
-        return selected
+        return sorted(selected, key=self._protocol_rank_key)
+
+    @staticmethod
+    def _protocol_rank_key(match: ProtocolMatch) -> tuple[int, int, str]:
+        return (
+            match.evidence_tier,
+            -match.score,
+            str(match.protocol.get("protocol_id") or ""),
+        )
+
+    def _fold_protocol_families(self, matches: list[ProtocolMatch]) -> list[ProtocolMatch]:
+        grouped: dict[str, list[ProtocolMatch]] = {}
+        independent: list[ProtocolMatch] = []
+        for match in matches:
+            family = str(match.protocol.get("selection_family") or "").strip()
+            if family:
+                grouped.setdefault(family, []).append(match)
+            else:
+                independent.append(match)
+
+        folded = list(independent)
+        for family_matches in grouped.values():
+            mode = str(
+                family_matches[0].protocol.get("family_collapse_mode") or "always"
+            )
+            if mode == "same_evidence_only" and self._family_has_distinct_specific_evidence(
+                family_matches
+            ):
+                folded.extend(family_matches)
+                continue
+            winner = max(family_matches, key=self._family_winner_key)
+            losers = [item for item in family_matches if item is not winner]
+            folded.append(self._merge_family_actions(winner, losers))
+        return folded
+
+    @staticmethod
+    def _family_has_distinct_specific_evidence(matches: list[ProtocolMatch]) -> bool:
+        if len(matches) < 2 or any(not item.specific_evidence_keys for item in matches):
+            return False
+        evidence_sets = [set(item.specific_evidence_keys) for item in matches]
+        return all(
+            left.isdisjoint(right)
+            for index, left in enumerate(evidence_sets)
+            for right in evidence_sets[index + 1 :]
+        )
+
+    @staticmethod
+    def _family_winner_key(match: ProtocolMatch) -> tuple[int, int, int, int]:
+        return (
+            1 if match.specific_evidence_keys else 0,
+            -match.evidence_tier,
+            int(match.protocol.get("family_priority") or 0),
+            match.score,
+        )
+
+    def _merge_family_actions(
+        self,
+        winner: ProtocolMatch,
+        losers: list[ProtocolMatch],
+    ) -> ProtocolMatch:
+        if not losers:
+            return winner
+        protocol = dict(winner.protocol)
+        actions = {
+            domain: list(raw_actions)
+            for domain, raw_actions in (winner.protocol.get("actions") or {}).items()
+        }
+        seen_text = {
+            self._normalize(str(action.get("text") or ""))
+            for raw_actions in actions.values()
+            for action in raw_actions
+        }
+        monitoring = list(winner.protocol.get("monitoring") or [])
+        admission_rank = {"direct": 0, "review": 1, "referral": 2}
+        admission = str(winner.protocol.get("admission") or "review")
+        for loser in losers:
+            loser_admission = str(loser.protocol.get("admission") or "review")
+            if admission_rank.get(loser_admission, 1) > admission_rank.get(admission, 1):
+                admission = loser_admission
+            for domain, raw_actions in (loser.protocol.get("actions") or {}).items():
+                target = actions.setdefault(domain, [])
+                for raw_action in raw_actions:
+                    normalized = self._normalize(str(raw_action.get("text") or ""))
+                    if not normalized or normalized in seen_text:
+                        continue
+                    target.append(dict(raw_action))
+                    seen_text.add(normalized)
+            monitoring.extend(loser.protocol.get("monitoring") or [])
+        protocol["actions"] = actions
+        protocol["monitoring"] = list(dict.fromkeys(monitoring))
+        protocol["admission"] = admission
+        return ProtocolMatch(
+            protocol=protocol,
+            score=winner.score,
+            evidence_tier=winner.evidence_tier,
+            reason=winner.reason,
+            anchor_refs=winner.anchor_refs,
+            anchor_text=winner.anchor_text,
+            specific_evidence_keys=winner.specific_evidence_keys,
+        )
 
     def _build_action(
         self,
@@ -1066,6 +1306,184 @@ class LifestylePlanningService:
             clinician_review_required=True,
         )
 
+    def _term_evidence_anchor(
+        self,
+        *,
+        source_ref: str,
+        value: str,
+        term: str,
+        selection_class: str,
+        evidence: dict[str, Any],
+    ) -> EvidenceAnchor:
+        normalized_value = self._normalize(value)
+        symptom_score: int | None = None
+        ref = source_ref
+        evidence_class = str(
+            evidence.get("clinical_finding_classes", {}).get(source_ref, "") or ""
+        )
+        if source_ref == "questionnaire:symptoms":
+            score = evidence.get("msq_symptom_scores", {}).get(normalized_value)
+            if score in MSQ_SEVERITY_LABELS:
+                symptom_score = int(score)
+                ref = f"questionnaire:msq_symptom_scores.{value.strip()}"
+        elif source_ref.startswith("finding:") and evidence_class == "symptom":
+            symptom_score = self._matching_msq_score(term, evidence)
+
+        tier = self._term_source_tier(
+            source_ref=source_ref,
+            symptom_score=symptom_score,
+            selection_class=selection_class,
+            urgent=self._is_urgent_sleep_term(term),
+            evidence_class=evidence_class,
+        )
+        return EvidenceAnchor(
+            ref=ref,
+            text=self._term_display_anchor(
+                source_ref=source_ref,
+                value=value,
+                term=term,
+                symptom_score=symptom_score,
+            ),
+            tier=tier,
+            source_rank=self._term_source_rank(
+                source_ref,
+                evidence_class=evidence_class,
+            ),
+            raw_value=value,
+        )
+
+    @staticmethod
+    def _term_source_tier(
+        *,
+        source_ref: str,
+        symptom_score: int | None,
+        selection_class: str,
+        urgent: bool,
+        evidence_class: str = "",
+    ) -> int:
+        if urgent:
+            return 0
+        if selection_class != "physical":
+            return 3
+        if source_ref.startswith("finding:"):
+            return LifestylePlanningService._finding_class_tier(
+                evidence_class=evidence_class,
+                selection_class=selection_class,
+                symptom_score=symptom_score,
+            )
+        if source_ref == "questionnaire:known_conditions":
+            return 1
+        if source_ref == "questionnaire:symptoms" and symptom_score == 1:
+            return 3
+        return 2
+
+    @staticmethod
+    def _term_source_rank(source_ref: str, *, evidence_class: str = "") -> int:
+        if source_ref.startswith("finding:"):
+            if evidence_class in {"symptom", "exposure", "genetic_risk", "follow_up_only"}:
+                return 7
+            return 0
+        ranks = {
+            "questionnaire:known_conditions": 1,
+            "questionnaire:chief_concerns": 2,
+            "questionnaire:symptoms": 3,
+            "case:clinical_summary": 4,
+            "questionnaire:additional_notes": 5,
+        }
+        return ranks.get(source_ref, 6)
+
+    @staticmethod
+    def _evidence_class_value(finding: Any) -> str:
+        evidence_class = getattr(finding, "evidence_class", "")
+        return str(getattr(evidence_class, "value", evidence_class) or "")
+
+    @staticmethod
+    def _finding_class_tier(
+        *,
+        evidence_class: str,
+        selection_class: str,
+        symptom_score: int | None,
+    ) -> int:
+        if selection_class != "physical":
+            return 3
+        if evidence_class in {"lab_abnormal", "clinical_confirmed", ""}:
+            return 1
+        if evidence_class == "symptom":
+            return 3 if symptom_score == 1 else 2
+        if evidence_class == "exposure":
+            return 2
+        return 3
+
+    @classmethod
+    def _matching_msq_score(cls, term: str, evidence: dict[str, Any]) -> int | None:
+        normalized_term = cls._normalize(term)
+        if not normalized_term:
+            return None
+        scores = [
+            int(score)
+            for symptom, score in evidence.get("msq_symptom_scores", {}).items()
+            if normalized_term in symptom or symptom in normalized_term
+        ]
+        return max(scores) if scores else None
+
+    @classmethod
+    def _term_display_anchor(
+        cls,
+        *,
+        source_ref: str,
+        value: str,
+        term: str,
+        symptom_score: int | None,
+    ) -> str:
+        cleaned = re.sub(r"\s+", " ", str(value or "")).strip(" ，,；;。")
+        if source_ref == "questionnaire:symptoms" and symptom_score in MSQ_SEVERITY_LABELS:
+            return (
+                f"MSQ：{cleaned}（{MSQ_SEVERITY_LABELS[symptom_score]}，"
+                f"{symptom_score}分）"
+            )
+        if (
+            source_ref in {"questionnaire:additional_notes", "case:clinical_summary"}
+            or "MSQ 问卷自动导入" in cleaned
+            or "人工核对后再生成最终报告" in cleaned
+            or len(cleaned) > 40
+            or len(re.findall(r"[，,；;、]", cleaned)) >= 2
+        ):
+            return str(term).strip()
+        return cleaned or str(term).strip()
+
+    @classmethod
+    def _select_anchor_text(cls, candidates: list[EvidenceAnchor]) -> str:
+        specific = [item for item in candidates if not item.generic]
+        ranked = sorted(
+            specific or candidates,
+            key=lambda item: (item.tier, item.source_rank, len(item.text)),
+        )
+        visible: list[str] = []
+        normalized_visible: list[str] = []
+        for item in ranked:
+            text = re.sub(r"\s+", " ", item.text).strip(" ，,；;。")
+            if not text:
+                continue
+            normalized = cls._normalize(text)
+            if any(
+                normalized == existing
+                or normalized in existing
+                or existing in normalized
+                for existing in normalized_visible
+            ):
+                continue
+            if not visible and len(text) > 40:
+                text = text[:39] + "…"
+                normalized = cls._normalize(text)
+            candidate = "、".join([*visible, text])
+            if visible and len(candidate) > 40:
+                break
+            visible.append(text)
+            normalized_visible.append(normalized)
+            if len(visible) >= 2:
+                break
+        return "、".join(visible) or "已确认的生活方式问题"
+
     def _matched_contraindication(self, protocol: dict[str, Any], evidence: dict[str, Any]) -> str | None:
         special_terms = set()
         if evidence["age"] is not None and evidence["age"] < 18:
@@ -1116,6 +1534,22 @@ class LifestylePlanningService:
             )
         )
 
+    @classmethod
+    def _is_urgent_sleep_term(cls, term: str) -> bool:
+        normalized = cls._normalize(term)
+        return any(
+            cls._normalize(urgent) in normalized
+            for urgent in ("OSAHS", "睡眠呼吸暂停")
+        )
+
+    @staticmethod
+    def _tag_evidence_tier(tag: str, selection_class: str) -> int:
+        if selection_class != "physical":
+            return 3
+        if tag in {"movement", "sedentary_risk", "metabolic_support"}:
+            return 3
+        return 2
+
     def _has_stress_terms(self, evidence: dict[str, Any]) -> bool:
         return bool(
             self._first_matching_term(
@@ -1138,8 +1572,16 @@ class LifestylePlanningService:
             for marker_code in ("systolic_bp", "diastolic_bp")
         )
 
-    def _cap_sections(self, sections: dict[str, list[LifestyleAction]]) -> None:
+    def _cap_sections(
+        self,
+        sections: dict[str, list[LifestyleAction]],
+        selected_protocol_ids: list[str] | None = None,
+    ) -> None:
         caps = {"diet": 5, "movement": 5, "sleep": 5, "stress": 5}
+        protocol_rank = {
+            protocol_id: index
+            for index, protocol_id in enumerate(selected_protocol_ids or [])
+        }
         category_order = {
             "diet": {"limit": 0, "recommend": 1, "execution": 2},
             "movement": {"principle": 0, "plan": 1, "safety": 2},
@@ -1147,48 +1589,74 @@ class LifestylePlanningService:
             "stress": {"practice": 0, "execution": 1, "support": 2, "safety": 3},
         }
         for domain, actions in sections.items():
-            ordered = sorted(
-                actions,
-                key=lambda action: category_order.get(domain, {}).get(action.category, 99),
-            )
-            selected: list[LifestyleAction] = []
-            selected_groups: set[str] = set()
-            for action in ordered:
-                group = self._action_problem_group(action)
-                if group in selected_groups:
+            if not actions:
+                continue
+            refs_to_protocol: dict[tuple[str, ...], str] = {}
+            for action in actions:
+                protocol_id = action.action_id.split("_", 1)[0]
+                if protocol_id.startswith("SUPPORT-"):
                     continue
-                selected.append(action)
-                selected_groups.add(group)
+                refs = tuple(sorted(action.anchor_refs))
+                existing = refs_to_protocol.get(refs)
+                if existing is None or protocol_rank.get(protocol_id, 999) < protocol_rank.get(existing, 999):
+                    refs_to_protocol[refs] = protocol_id
+
+            def problem_group(action: LifestyleAction) -> str:
+                protocol_id = action.action_id.split("_", 1)[0]
+                if protocol_id.startswith("SUPPORT-"):
+                    refs = tuple(sorted(action.anchor_refs))
+                    return refs_to_protocol.get(refs, self._action_problem_group(action))
+                return protocol_id
+
+            grouped: dict[str, list[LifestyleAction]] = {}
+            for action in actions:
+                grouped.setdefault(problem_group(action), []).append(action)
+            for group_actions in grouped.values():
+                group_actions.sort(
+                    key=lambda action: category_order.get(domain, {}).get(action.category, 99)
+                )
+
+            def group_rank(group: str) -> tuple[int, str]:
+                if group == "OSAHS":
+                    return -1, group
+                return protocol_rank.get(group, len(protocol_rank) + 100), group
+
+            ordered_groups = sorted(grouped, key=group_rank)
+            selected: list[LifestyleAction] = []
+            retained_groups: list[str] = []
+            for group in ordered_groups:
+                selected.append(grouped[group][0])
+                retained_groups.append(group)
                 if len(selected) >= caps[domain]:
                     break
             if domain == "movement":
-                for group in list(selected_groups):
+                for group in retained_groups:
                     if len(selected) >= caps[domain]:
                         break
                     safety = next(
                         (
-                            item
-                            for item in ordered
-                            if item.category == "safety"
-                            and self._action_problem_group(item) == group
+                            item for item in grouped[group] if item.category == "safety"
                         ),
                         None,
                     )
                     if safety is not None and safety not in selected:
                         selected.append(safety)
-            for action in ordered:
+            for group in retained_groups:
+                for action in grouped[group]:
+                    if len(selected) >= caps[domain]:
+                        break
+                    if action not in selected:
+                        selected.append(action)
                 if len(selected) >= caps[domain]:
                     break
-                if action not in selected:
-                    selected.append(action)
-            if domain == "movement" and ordered and not any(item.category == "safety" for item in selected):
-                safety = next((item for item in ordered if item.category == "safety"), None)
-                if safety is not None:
-                    if len(selected) < caps[domain]:
-                        selected.append(safety)
-                    else:
-                        selected[-1] = safety
-            sections[domain] = selected
+            group_position = {group: index for index, group in enumerate(retained_groups)}
+            sections[domain] = sorted(
+                selected,
+                key=lambda action: (
+                    group_position.get(problem_group(action), 999),
+                    category_order.get(domain, {}).get(action.category, 99),
+                ),
+            )
 
     @staticmethod
     def _action_problem_group(action: LifestyleAction) -> str:

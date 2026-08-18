@@ -173,6 +173,7 @@ class FakeStructuredQuestionnaireImportService:
             chief_concerns=["合成问卷诉求"],
             symptoms=["合成已选症状"],
             goals=["合成健康目标"],
+            msq_symptom_scores={"合成已选症状": 2},
             msq_system_scores={"消化道": 2},
         )
 
@@ -1025,6 +1026,7 @@ class CaseAnalysisTests(unittest.TestCase):
 
         self.assertEqual(result.report_type, "msq")
         self.assertEqual(result.questionnaire["symptoms"], ["合成已选症状"])
+        self.assertEqual(result.questionnaire["msq_symptom_scores"], {"合成已选症状": 2})
         self.assertEqual(result.questionnaire["msq_system_scores"], {"消化道": 2})
         self.assertEqual(result.abnormal_findings, [])
         self.assertEqual(self.provider.document_calls, 0)

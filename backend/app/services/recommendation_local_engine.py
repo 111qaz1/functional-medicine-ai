@@ -37,7 +37,7 @@ from app.services.body_systems import (
     system_ids_for_axes,
 )
 from app.services.indicator_extraction import CaseIndicatorService
-from app.services.evidence_policy import classify_confirmed_evidence
+from app.services.evidence_policy import classify_confirmed_evidence, classify_finding_evidence
 from app.services.dosage_rules import select_dosage_option
 from app.services.lifestyle_planning import (
     LifestylePlanningService,
@@ -83,6 +83,10 @@ class RecommendationContext:
     # statement from an objective finding. Recommendation matching continues to
     # use the aggregate ``conditions`` set above.
     reported_conditions: set[str] = field(default_factory=set)
+    # Only clinician-entered/manual summary text may act as independent lifestyle
+    # evidence. Model-reviewed summaries remain in ``clinical_summary_text`` for
+    # narrative and retrieval use, but must not upgrade the evidence they repeat.
+    manual_clinical_summary_text: str = ""
 
 
 @dataclass
@@ -1340,7 +1344,44 @@ class RecommendationService:
             markers_by_code.setdefault(item.marker_code, []).append(item)
         # Do not reconstruct standard markers from arbitrary display strings. Only
         # doctor-confirmed, exactly standardized lab items enter marker rules.
+        latest_analysis = self.repository.get_latest_case_analysis(case.id)
         clinical_findings = list(getattr(case, "confirmed_clinical_findings", []) or [])
+        if (
+            latest_analysis
+            and getattr(latest_analysis.status, "value", latest_analysis.status) == "reviewed"
+            and self.standardization_service
+        ):
+            # Dictionary improvements must also benefit already-reviewed cases.
+            # Re-standardize only the clinician-reviewed findings in memory; this
+            # does not rewrite the case or bypass the review boundary.
+            refreshed_findings = []
+            for raw_finding in (
+                latest_analysis.reviewed_abnormal_findings
+                or latest_analysis.abnormal_findings
+            ):
+                standardized = self.standardization_service.standardize(
+                    raw_finding,
+                    doctor_confirmed=True,
+                )
+                clinical_finding = self.standardization_service.to_clinical_finding(
+                    standardized
+                )
+                if not clinical_finding or not standardized.finding_code:
+                    continue
+                refreshed_findings.append(
+                    clinical_finding.model_copy(
+                        update={
+                            "support_goals": [],
+                            "evidence_class": classify_finding_evidence(standardized),
+                        }
+                    )
+                )
+            clinical_findings = list(
+                {
+                    item.finding_id: item
+                    for item in [*clinical_findings, *refreshed_findings]
+                }.values()
+            )
         clinical_findings_by_code: dict[str, list] = {}
         clinical_findings_by_system: dict[str, list] = {}
         support_goal_findings: dict[str, list] = {}
@@ -1403,7 +1444,6 @@ class RecommendationService:
             else {}
         )
         summary_parts = [(case.clinical_summary_text or "").strip()]
-        latest_analysis = self.repository.get_latest_case_analysis(case.id)
         structured_system_findings: list[StructuredSystemFinding] = []
         if latest_analysis and getattr(latest_analysis.status, "value", latest_analysis.status) == "reviewed":
             reviewed_food = getattr(latest_analysis, "food_sensitivity", None)
@@ -1576,6 +1616,7 @@ class RecommendationService:
                 for text in (questionnaire.known_conditions if questionnaire else [])
                 if str(text or "").strip()
             },
+            manual_clinical_summary_text=(case.clinical_summary_text or "").strip(),
         )
 
     def _is_admin_metadata_snippet(self, snippet: str) -> bool:

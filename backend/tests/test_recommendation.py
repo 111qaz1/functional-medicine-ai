@@ -16,6 +16,8 @@ from app.domain.models import (
     AnalysisStatus,
     CaseAnalysis,
     CaseIndicator,
+    ClinicalEvidenceClass,
+    ConfirmedClinicalFinding,
     IndicatorStatus,
     ProductRule,
     Questionnaire,
@@ -2301,6 +2303,197 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("5分钟", formatted_lifestyle)
         self.assertNotIn("2 次", formatted_lifestyle)
         self.assertNotIn("5 分钟", formatted_lifestyle)
+
+    def test_physical_lifestyle_priority_survives_review_and_pdf(self) -> None:
+        from pypdf import PdfReader
+
+        case = self._prepare_case(
+            "hs-CRP 4.2 mg/L 0-3",
+            Questionnaire(
+                age=40,
+                sex="female",
+                sleep_quality="差",
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        selected = [item.protocol_id for item in draft.lifestyle_plan.selected_protocols]
+        draft_lifestyle = "\n".join(
+            self.container.recommendation_service.lifestyle_planning_service.report_items(
+                draft.lifestyle_plan
+            )
+        )
+
+        self.assertEqual(selected[0], "LP01")
+        self.assertLess(draft_lifestyle.index("抗炎饮食"), draft_lifestyle.index("睡眠修复"))
+
+        review = self.container.review_service.approve(
+            draft.id,
+            reviewer_id="reviewer-01",
+            publishable_summary=None,
+            edits={},
+        )
+        self.assertLess(
+            review.publishable_report.index("抗炎饮食"),
+            review.publishable_report.index("睡眠修复"),
+        )
+        pdf_text = "\n".join(
+            page.extract_text() or ""
+            for page in PdfReader(str(review.pdf_report_path)).pages
+        )
+        self.assertLess(pdf_text.index("抗炎饮食"), pdf_text.index("睡眠修复"))
+
+    def test_msq_score_anchor_and_priority_survive_review_and_pdf(self) -> None:
+        from pypdf import PdfReader
+
+        case = self._prepare_case(
+            "25-OH维生素D 18 ng/mL 30-100",
+            Questionnaire(
+                age=40,
+                sex="female",
+                symptoms=["湿疹"],
+                known_conditions=["IBS"],
+                medications=[],
+                allergies=[],
+                msq_symptom_scores={"湿疹": 1},
+                msq_system_scores={"皮肤": 1},
+            ),
+        )
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        selected = [item.protocol_id for item in draft.lifestyle_plan.selected_protocols]
+        draft_lifestyle = "\n".join(
+            self.container.recommendation_service.lifestyle_planning_service.report_items(
+                draft.lifestyle_plan
+            )
+        )
+
+        self.assertIn("LP03", selected)
+        self.assertIn("LP01", selected)
+        self.assertLess(selected.index("LP03"), selected.index("LP01"))
+        self.assertIn("依据：MSQ：湿疹（偶尔，1分）", draft_lifestyle)
+
+        review = self.container.review_service.approve(
+            draft.id,
+            reviewer_id="reviewer-01",
+            publishable_summary=None,
+            edits={},
+        )
+        self.assertIn("依据：MSQ：湿疹（偶尔，1分）", review.publishable_report)
+        pdf_text = "\n".join(
+            page.extract_text() or ""
+            for page in PdfReader(str(review.pdf_report_path)).pages
+        )
+        self.assertIn("依据：MSQ：湿疹（偶尔，1分）", pdf_text)
+        self.assertLess(pdf_text.index("低FODMAP短期试验"), pdf_text.index("抗炎饮食"))
+
+    def test_huangqi_equivalent_context_excludes_score_one_eczema_from_top_three(self) -> None:
+        fatigue = "容易疲劳虚弱，没精神"
+        case = self._prepare_case(
+            "白细胞计数 5.5 10^9/L 3.5-9.5",
+            Questionnaire(
+                age=40,
+                sex="female",
+                exercise_frequency="无规律运动",
+                symptoms=["湿疹", "腹胀/胀气", fatigue],
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+                msq_symptom_scores={"湿疹": 1, "腹胀/胀气": 1, fatigue: 1},
+                msq_system_scores={"皮肤": 1, "消化道": 2, "能量/活动": 1},
+            ),
+        )
+        case = self.container.case_service.get_case(case.id)
+        case.confirmed_clinical_findings = [
+            ConfirmedClinicalFinding(
+                finding_id="finding_thyroid_nodule",
+                finding_code="thyroid_nodule",
+                finding_name="甲状腺左叶结节",
+                system_ids=["endocrine_metabolic"],
+                evidence_class=ClinicalEvidenceClass.clinical_confirmed,
+                source_span=SourceSpan(
+                    file_name="体检报告.pdf",
+                    page=1,
+                    snippet="甲状腺左叶结节，TI-RADS 3类",
+                ),
+            ),
+            ConfirmedClinicalFinding(
+                finding_id="sn_energy_fatigue",
+                finding_name="细胞能量与疲劳恢复支持",
+                system_ids=["neuro_sleep"],
+                evidence_class=ClinicalEvidenceClass.symptom,
+                abnormal_flag="patient_reported_symptom",
+                source_span=SourceSpan(
+                    file_name="医生确认资料",
+                    page=1,
+                    snippet="细胞能量与疲劳恢复支持",
+                ),
+            ),
+        ]
+        self.container.repository.save_case(case)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        selected = [item.protocol_id for item in draft.lifestyle_plan.selected_protocols]
+        rendered = "\n".join(
+            self.container.recommendation_service.lifestyle_planning_service.report_items(
+                draft.lifestyle_plan
+            )
+        )
+
+        self.assertEqual(selected, ["LP11", "LP03", "LP09"])
+        self.assertNotIn("LP01", selected)
+        self.assertIn("甲状腺相关生活方式支持（依据：甲状腺左叶结节）", rendered)
+        self.assertIn(f"依据：MSQ：{fatigue}（偶尔，1分）", rendered)
+        self.assertNotIn("依据：湿疹", rendered)
+
+    def test_existing_reviewed_thyroid_candidate_is_refreshed_during_generation(self) -> None:
+        case = self._prepare_case(
+            "白细胞计数 5.5 10^9/L 3.5-9.5",
+            Questionnaire(
+                age=40,
+                sex="female",
+                known_conditions=[],
+                medications=[],
+                allergies=[],
+            ),
+        )
+        analysis = CaseAnalysis(
+            id="analysis-existing-thyroid-candidate",
+            case_id=case.id,
+            status=AnalysisStatus.reviewed,
+            snapshot_hash="synthetic",
+            model_version="synthetic",
+            reviewed_abnormal_findings=[
+                AbnormalFinding(
+                    id="finding-existing-thyroid-candidate",
+                    name="甲状腺左叶结节",
+                    result_text="甲状腺左叶结节，TI-RADS 3类，低度可疑恶性（恶性风险<5%）",
+                    abnormal_flag="positive",
+                    finding_code_candidate="thyroid_nodule",
+                    system_id_candidates=["endocrine_metabolic"],
+                    source_file_id="file-thyroid",
+                    source_file_name="体检报告.pdf",
+                    source_page=1,
+                    source_text="甲状腺左叶结节，TI-RADS 3类，低度可疑恶性（恶性风险<5%）",
+                    confidence=0.95,
+                )
+            ],
+        )
+        self.container.repository.save_case_analysis(analysis)
+
+        draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
+        selected = [item.protocol_id for item in draft.lifestyle_plan.selected_protocols]
+        rendered = "\n".join(
+            self.container.recommendation_service.lifestyle_planning_service.report_items(
+                draft.lifestyle_plan
+            )
+        )
+
+        self.assertEqual(selected[0], "LP11")
+        self.assertIn("甲状腺相关生活方式支持（依据：甲状腺结节）", rendered)
 
     def test_approve_excludes_removed_recommended_skus_from_pdf_payload(self) -> None:
         case = self._prepare_case(

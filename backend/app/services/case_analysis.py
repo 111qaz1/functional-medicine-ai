@@ -804,11 +804,13 @@ class OpenAICompatibleCaseAnalysisProvider:
                 "也不得误写为处方药。"
                 "同时将患者当前正在服用的营养补充剂名称逐项写入current_supplements；只写名称，不写剂量、频次或服用时间。"
                 "必须汇总当前文档内所有明确当前服用项目；历史使用、已停用、计划使用、报告推荐和产品示例不得写入。"
-                "普通医疗问卷不是 MSQ，msq_system_scores 应为空对象，缺少 MSQ 评分不得丢弃其他信息。"
+                "普通医疗问卷不是 MSQ，msq_symptom_scores 和 msq_system_scores 应为空对象，"
+                "缺少 MSQ 评分不得丢弃其他信息。"
                 "普通问卷的患者自述不得写入 abnormal_findings，也不得升级为医生诊断。"
                 "勾选题只提取明确勾选的答案；未勾选选项不是阴性证据，只有明确勾选“否”才可记录否定事实。"
                 "如为 MSQ，questionnaire 必须映射为系统既有问卷字段；只能纳入明确勾选且分值大于 0 的症状，"
                 "report_type 必须为 msq，不得把未勾选的症状选项当成患者症状，"
+                "模型不得生成 msq_symptom_scores；逐项分值仅由固定模板本地解析器写入，"
                 "msq_system_scores 必须来自已选分值。"
                 "MSQ 的患者年龄只能来自姓名/性别/年龄/日期基本信息区域；初次月经年龄、停经年龄、"
                 "绝经年龄、生物年龄、代谢年龄、骨龄和系统年龄均不是患者年龄。患者年龄空白或有歧义时 age 必须为 null。"
@@ -1235,6 +1237,7 @@ class OpenAICompatibleCaseAnalysisProvider:
             "medications": [],
             "allergies": [],
             "symptoms": [],
+            "msq_symptom_scores": {},
             "msq_system_scores": {},
             "sleep_hours": None,
             "sleep_quality": None,
@@ -1261,9 +1264,12 @@ class OpenAICompatibleCaseAnalysisProvider:
             for field_name in unresolved_fields
             if field_name in safe_defaults
         }
+        if "symptoms" in unresolved_fields:
+            updates["msq_symptom_scores"] = {}
         if updates:
             questionnaire = questionnaire.model_copy(update=updates)
         payload = questionnaire.model_dump(mode="json")
+        payload["msq_symptom_scores"] = {}
         payload["msq_system_scores"] = {}
         return payload
 
@@ -2394,6 +2400,9 @@ class OpenAICompatibleCaseAnalysisProvider:
         }
         allowed_fields = set(Questionnaire.model_fields)
         normalized = {key: value for key, value in item.items() if key in allowed_fields}
+        # Per-symptom MSQ scores are accepted only from the deterministic fixed-form
+        # parser. A general document model must not infer or overwrite them.
+        normalized.pop("msq_symptom_scores", None)
         # Model-generated timestamps are not clinical questionnaire facts. Let
         # the domain model assign its own stable default instead of attempting
         # to repair arbitrary provider metadata.
@@ -3217,14 +3226,16 @@ class OpenAICompatibleCaseAnalysisProvider:
             "免疫基因或遗传风险报告统一使用genetic_risk，不是medical_questionnaire；患者结果表中的基因位点和基因型"
             "使用abnormal_flag=genetic_risk，并明确其不表示当前患病。"
             "普通医疗登记表、病史表或医疗调查问卷统一使用 report_type=medical_questionnaire；"
-            "存在明确填写内容时必须返回 questionnaire。普通问卷允许 msq_system_scores 为空，"
+            "存在明确填写内容时必须返回 questionnaire。普通问卷的 msq_symptom_scores 和 "
+            "msq_system_scores 必须为空，"
             "患者自述只进入 questionnaire，不得伪装成检验异常或医生诊断。"
             "只有资料明确说明患者当前正在服用的营养补充剂，才可写入supplement_use；"
             "supplement_use必须返回单个字符串或null，不得返回列表或对象。"
             "历史推荐方案、计划使用产品和营养素表格不得写入supplement_use。"
             "同时将当前正在服用的营养补充剂名称逐项写入current_supplements；只写名称，不写剂量、频次或服用时间。"
             "current_supplements必须汇总当前文档中所有明确当前服用项目；历史使用、已停用、计划使用、报告推荐和产品示例不得写入。"
-            "只有真正的 MSQ 症状评分问卷使用 report_type=msq 和 msq_system_scores。"
+            "只有真正的 MSQ 症状评分问卷使用 report_type=msq 和 msq_system_scores；"
+            "模型不得生成 msq_symptom_scores，该字段仅由固定模板本地解析器提供。"
             "每条异常应从给定白名单中提出标准代码候选；检验指标写入 marker_code_candidate，"
             "非数值临床发现写入 finding_code_candidate，无法确定时必须返回 null，禁止创造代码。"
             "精准代码无法确定时，可从白名单选择 system_id_candidates 和 support_goal_candidates，"
@@ -3850,6 +3861,10 @@ class OpenAICompatibleCaseAnalysisProvider:
             scores = dict(merged.msq_system_scores)
             for key, value in questionnaire.msq_system_scores.items():
                 scores[key] = max(scores.get(key, 0), value)
+            symptom_scores = dict(merged.msq_symptom_scores)
+            for key, value in questionnaire.msq_symptom_scores.items():
+                symptom_scores[key] = max(symptom_scores.get(key, 0), value)
+            update["msq_symptom_scores"] = symptom_scores
             update["msq_system_scores"] = scores
             merged = merged.model_copy(update=update)
         return merged
@@ -3881,7 +3896,7 @@ class OpenAICompatibleCaseAnalysisProvider:
 class CaseAnalysisService:
     MSQ_UNRESOLVED_PREFIX = "__MSQ_UNRESOLVED__:"
     MSQ_SEMANTIC_RETRY_MARKER = "__MSQ_SEMANTIC_RETRY__"
-    DOCUMENT_ANALYSIS_CACHE_VERSION = "document-analysis-v15-msq-food-classification"
+    DOCUMENT_ANALYSIS_CACHE_VERSION = "document-analysis-v16-msq-symptom-scores"
     _MSQ_SEMANTIC_LIST_FIELDS = {
         "known_conditions",
         "chief_concerns",
@@ -3946,6 +3961,7 @@ class CaseAnalysisService:
         "medications": "当前用药",
         "allergies": "过敏信息",
         "symptoms": "症状勾选",
+        "msq_symptom_scores": "MSQ 逐项症状评分",
         "msq_system_scores": "MSQ 系统评分",
         "sleep_hours": "睡眠时长",
         "sleep_quality": "睡眠质量",
@@ -3969,6 +3985,7 @@ class CaseAnalysisService:
         "medications": ("用药", "药物"),
         "allergies": ("过敏",),
         "symptoms": ("症状",),
+        "msq_symptom_scores": ("逐项症状评分",),
         "msq_system_scores": ("系统评分",),
         "sleep_hours": ("睡眠时长", "睡眠时间"),
         "sleep_quality": ("睡眠质量",),
@@ -6064,12 +6081,18 @@ class CaseAnalysisService:
                     warnings.append(warning)
                 continue
             is_msq = self._is_msq_result(result)
-            if not is_msq and questionnaire.msq_system_scores:
+            if not is_msq and (
+                questionnaire.msq_symptom_scores
+                or questionnaire.msq_system_scores
+            ):
                 questionnaire = questionnaire.model_copy(
-                    update={"msq_system_scores": {}}
+                    update={
+                        "msq_symptom_scores": {},
+                        "msq_system_scores": {},
+                    }
                 )
                 warnings.append(
-                    "普通医疗问卷返回了 MSQ 系统评分，已忽略该评分。"
+                    "普通医疗问卷返回了 MSQ 评分，已忽略该评分。"
                 )
             unresolved = self._unresolved_questionnaire_fields(result)
             safe_questionnaire = self._isolate_unresolved_questionnaire_fields(
@@ -6296,6 +6319,7 @@ class CaseAnalysisService:
             "medications": [],
             "allergies": [],
             "symptoms": [],
+            "msq_symptom_scores": {},
             "msq_system_scores": {},
             "sleep_hours": None,
             "sleep_quality": None,
@@ -6317,6 +6341,8 @@ class CaseAnalysisService:
             for field_name in unresolved_fields
             if field_name in safe_defaults
         }
+        if "symptoms" in unresolved_fields:
+            updates["msq_symptom_scores"] = {}
         return questionnaire.model_copy(update=updates) if updates else questionnaire
 
     def _merge_medical_questionnaire_supplements(
@@ -6364,6 +6390,7 @@ class CaseAnalysisService:
                 supplement.additional_notes,
             )
             # Only the selected fixed MSQ may supply score-based rule input.
+            update["msq_symptom_scores"] = dict(merged.msq_symptom_scores)
             update["msq_system_scores"] = dict(merged.msq_system_scores)
             merged = merged.model_copy(update=update)
         return merged, list(dict.fromkeys(warnings))
@@ -6512,6 +6539,15 @@ class CaseAnalysisService:
         except ValidationError:
             return None, f"{result.file_name} 的问卷结构不合法，已跳过。"
 
+        symptom_scores = questionnaire.msq_symptom_scores
+        if any(value < 1 or value > 4 for value in symptom_scores.values()):
+            questionnaire = questionnaire.model_copy(
+                update={"msq_symptom_scores": {}}
+            )
+            result.questionnaire = questionnaire.model_dump(mode="json")
+            symptom_scores = {}
+            self._mark_msq_symptom_scores_unresolved(result)
+
         scores = questionnaire.msq_system_scores
         if any(value < 0 or value > 4 for value in scores.values()):
             questionnaire = questionnaire.model_copy(
@@ -6528,6 +6564,21 @@ class CaseAnalysisService:
         ):
             self._mark_msq_scores_unresolved(result)
         return questionnaire, None
+
+    def _mark_msq_symptom_scores_unresolved(
+        self,
+        result: DocumentAnalysisResult,
+    ) -> None:
+        marker = f"{self.MSQ_UNRESOLVED_PREFIX}msq_symptom_scores"
+        result.warnings = list(
+            dict.fromkeys(
+                [
+                    *result.warnings,
+                    marker,
+                    "MSQ 逐项症状评分格式异常，请人工核对。",
+                ]
+            )
+        )
 
     @staticmethod
     def _is_msq_result(result: DocumentAnalysisResult) -> bool:

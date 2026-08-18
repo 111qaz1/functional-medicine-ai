@@ -407,6 +407,7 @@ class Questionnaire(StrictModel):
     stress_level: Literal["low", "medium", "high"] | None = None
     emotional_state: list[str] = Field(default_factory=list)
     goals: list[str] = Field(default_factory=list)
+    msq_symptom_scores: dict[str, int] = Field(default_factory=dict)
     msq_system_scores: dict[str, int] = Field(default_factory=dict)
     additional_notes: str | None = None
     form_version: str = "msq_v1"

@@ -101,7 +101,7 @@ def update_clinical_summary(
     "/cases/{case_id}/attachments",
     response_model=AttachmentBatchResponse,
     status_code=201,
-    responses=documented_problem_responses(401, 403, 404, 413, 422, 500),
+    responses=documented_problem_responses(401, 403, 404, 422, 500),
 )
 async def upload_attachments(
     case_id: str,

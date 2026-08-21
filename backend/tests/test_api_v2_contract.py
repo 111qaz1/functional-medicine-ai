@@ -24,7 +24,10 @@ from app.core.settings import AppSettings
 
 
 V1_BASELINE_SHA256 = "5367fbef40cc2069cd2910d5b1867777f4889e176445ede0487c5c9d33b5affe"
-V2_CONTRACT_SHA256 = "d76026095bafdd3234abe17aa1f50667d4d3f68d374b894edbfe12c241127e0f"
+V2_CONTRACT_SHA256 = (
+    "59eb26c4457806d16c15e9b07bf16f0da18370"
+    "494812aa6f9c7a99f1d7927634"
+)
 EXPECTED_V2_PATHS = {
     "/api/v2/cases",
     "/api/v2/cases/{case_id}",
@@ -187,8 +190,12 @@ class V2ProblemDetailsTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(missing.json()["code"], "CASE_NOT_FOUND")
 
-        with patch("app.api.v2.router.V2WorkflowAdapter.get_case", side_effect=RuntimeError("private")):
-            failed = self.client.get("/api/v2/cases/boom", headers=self.headers)
+        with self.assertLogs("app.api.v2.problems", level="ERROR"):
+            with patch(
+                "app.api.v2.router.V2WorkflowAdapter.get_case",
+                side_effect=RuntimeError("private"),
+            ):
+                failed = self.client.get("/api/v2/cases/boom", headers=self.headers)
         self.assertEqual(failed.status_code, 500)
         self.assertEqual(failed.headers["content-type"], "application/problem+json")
         self.assertEqual(failed.json()["code"], "INTERNAL_SERVER_ERROR")

@@ -30,6 +30,7 @@ from app.domain.models import (
     Questionnaire,
     RecommendationDraft,
     ReviewDecision,
+    UploadedFile,
 )
 
 
@@ -204,6 +205,14 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(updated.json()["clinical_summary"], "Synthetic clinical summary")
 
+        cleared = self.client.put(
+            f"/api/v2/cases/{case_id}/clinical-summary",
+            headers=self.headers,
+            json={"clinical_summary": "   "},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertIsNone(cleared.json()["clinical_summary"])
+
         uploaded = self.client.post(
             f"/api/v2/cases/{case_id}/attachments",
             headers=self.headers,
@@ -277,6 +286,7 @@ class V2WorkflowApiTests(unittest.TestCase):
         queued = analysis.model_copy(
             update={
                 "status": AnalysisStatus.reviewed,
+                "revision": analysis.revision + 1,
                 "final_generation_status": FinalGenerationStatus.queued,
                 "final_generation_progress": 0,
             }
@@ -411,6 +421,259 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(downloaded.status_code, 200, downloaded.text)
         self.assertTrue(downloaded.headers["content-type"].startswith("application/pdf"))
         self.assertTrue(downloaded.content.startswith(b"%PDF"))
+
+    def test_attachment_preflight_failure_stays_in_its_batch_item(self) -> None:
+        case_id = self._create_case()
+        original_preflight = self.container.document_intake_service.preflight
+
+        def flaky_preflight(*, filename, content_type, content):
+            if filename == "broken.txt":
+                raise RuntimeError("private preflight implementation detail")
+            return original_preflight(
+                filename=filename,
+                content_type=content_type,
+                content=content,
+            )
+
+        with self.assertLogs("app.api.v2.workflow", level="ERROR"):
+            with patch.object(
+                self.container.document_intake_service,
+                "preflight",
+                side_effect=flaky_preflight,
+            ):
+                response = self.client.post(
+                    f"/api/v2/cases/{case_id}/attachments",
+                    headers=self.headers,
+                    files=[
+                        (
+                            "files",
+                            ("accepted.txt", b"Synthetic marker 12 U/L 1-10", "text/plain"),
+                        ),
+                        ("files", ("broken.txt", b"Synthetic broken input", "text/plain")),
+                    ],
+                    data={"attachment_type": "medical_record"},
+                )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual([item["status"] for item in payload["items"]], ["parsed", "failed"])
+        self.assertEqual(payload["meta"]["accepted_count"], 1)
+        self.assertEqual(payload["meta"]["failed_count"], 1)
+        self.assertEqual(payload["items"][1]["failure"]["code"], "ATTACHMENT_PREFLIGHT_FAILED")
+        self.assertNotIn("private preflight", response.text)
+
+    def test_analysis_precondition_and_invalid_delta_have_distinct_problem_codes(self) -> None:
+        case_id = self._create_case()
+        no_input = self.client.post(
+            f"/api/v2/cases/{case_id}/analyses",
+            headers=self.headers,
+            json={"third_party_processing_confirmed": True},
+        )
+        self.assertEqual(no_input.status_code, 409, no_input.text)
+        self.assertEqual(no_input.json()["code"], "ANALYSIS_START_CONFLICT")
+
+        uploaded = UploadedFile(
+            id="file-v2",
+            case_id=case_id,
+            filename="synthetic.txt",
+            content_type="text/plain",
+            size_bytes=24,
+            storage_uri=str(self.root / "synthetic.txt"),
+            raw_extracted_text="Synthetic marker 12 U/L",
+            content_sha256="synthetic-content-hash",
+        )
+        case = self.container.case_service.add_uploaded_file(case_id, uploaded)
+        analysis = self._analysis(case_id).model_copy(
+            update={
+                "file_ids": [uploaded.id],
+                "snapshot_hash": self.container.case_analysis_service.current_snapshot_hash(case),
+            }
+        )
+        self.container.repository.save_case_analysis(analysis)
+
+        invalid_delta = self.client.post(
+            f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
+            headers=self.headers,
+            json={
+                "reviewer_id": "doctor-v2",
+                "expected_revision": analysis.revision,
+                "finding_changes": [
+                    {
+                        "op": "add",
+                        "value": {
+                            "name": "Synthetic unsupported marker",
+                            "source_file_id": "outside-analysis-file",
+                            "source_file_name": "outside.txt",
+                            "source_page": 1,
+                            "source_text": "Synthetic evidence",
+                        },
+                    }
+                ],
+            },
+        )
+        self.assertEqual(invalid_delta.status_code, 422, invalid_delta.text)
+        self.assertEqual(invalid_delta.json()["code"], "INVALID_REVIEW_CHANGES")
+
+    def test_review_is_not_false_accepted_while_draft_generation_is_active(self) -> None:
+        case_id = self._create_case()
+        analysis = self._analysis(case_id).model_copy(
+            update={
+                "status": AnalysisStatus.reviewed,
+                "final_generation_status": FinalGenerationStatus.queued,
+                "final_generation_progress": 5,
+            }
+        )
+        self.container.repository.save_case_analysis(analysis)
+
+        response = self.client.post(
+            f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
+            headers=self.headers,
+            json={
+                "reviewer_id": "doctor-v2",
+                "expected_revision": analysis.revision,
+            },
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "DRAFT_GENERATION_IN_PROGRESS")
+
+    def test_empty_review_confirmation_uses_real_service_and_preserves_snapshot(self) -> None:
+        case_id = self._create_case()
+        uploaded = UploadedFile(
+            id="file-v2",
+            case_id=case_id,
+            filename="synthetic.txt",
+            content_type="text/plain",
+            size_bytes=24,
+            storage_uri=str(self.root / "synthetic.txt"),
+            raw_extracted_text="Synthetic marker 12 U/L",
+            content_sha256="synthetic-content-hash",
+        )
+        case = self.container.case_service.add_uploaded_file(case_id, uploaded)
+        analysis = self._analysis(case_id).model_copy(
+            update={
+                "file_ids": [uploaded.id],
+                "snapshot_hash": self.container.case_analysis_service.current_snapshot_hash(case),
+            }
+        )
+        self.container.repository.save_case_analysis(analysis)
+
+        with patch.object(
+            self.container.case_analysis_service.executor,
+            "submit",
+            return_value=None,
+        ):
+            response = self.client.post(
+                f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
+                headers=self.headers,
+                json={
+                    "reviewer_id": "doctor-v2",
+                    "expected_revision": analysis.revision,
+                },
+            )
+
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(response.json()["stage"], "draft_generation")
+        self.assertEqual(response.json()["status"], "queued")
+        persisted = self.container.repository.get_case_analysis(analysis.id)
+        self.assertEqual(persisted.revision, analysis.revision + 1)
+        self.assertEqual(persisted.reviewed_by, "doctor-v2")
+        self.assertEqual(persisted.reviewed_abnormal_findings[0].id, "finding-v2")
+        self.assertEqual(
+            persisted.reviewed_abnormal_findings[0].source_text,
+            "Synthetic evidence",
+        )
+
+    def test_internal_execution_errors_are_sanitized_in_public_resources(self) -> None:
+        case_id = self._create_case()
+        private_detail = "private storage implementation detail"
+        analysis = self._analysis(case_id).model_copy(
+            update={
+                "status": AnalysisStatus.failed,
+                "error_code": "runtimeerror",
+                "error_message": private_detail,
+            }
+        )
+        self.container.repository.save_case_analysis(analysis)
+
+        latest = self.client.get(
+            f"/api/v2/cases/{case_id}/analyses/latest",
+            headers=self.headers,
+        )
+        operation = self.client.get(
+            f"/api/v2/operations/{analysis.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(latest.status_code, 200, latest.text)
+        self.assertEqual(operation.status_code, 200, operation.text)
+        self.assertEqual(latest.json()["error"]["code"], "ANALYSIS_FAILED")
+        self.assertEqual(operation.json()["failure"]["code"], "ANALYSIS_FAILED")
+        self.assertNotIn(private_detail, latest.text)
+        self.assertNotIn(private_detail, operation.text)
+
+        draft_failure = analysis.model_copy(
+            update={
+                "status": AnalysisStatus.reviewed,
+                "error_code": None,
+                "error_message": None,
+                "final_generation_status": FinalGenerationStatus.failed,
+                "final_generation_error": private_detail,
+            }
+        )
+        self.container.repository.save_case_analysis(draft_failure)
+        latest = self.client.get(
+            f"/api/v2/cases/{case_id}/analyses/latest",
+            headers=self.headers,
+        )
+        operation = self.client.get(
+            f"/api/v2/operations/{analysis.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(latest.json()["draft_generation"]["error"], "Draft generation failed.")
+        self.assertEqual(operation.json()["failure"]["code"], "DRAFT_GENERATION_FAILED")
+        self.assertNotIn(private_detail, latest.text)
+        self.assertNotIn(private_detail, operation.text)
+
+    def test_missing_pdf_is_problem_details_not_a_response_stream_failure(self) -> None:
+        case_id = self._create_case()
+        draft = self._draft(case_id)
+        self.container.repository.save_draft(draft)
+        missing_pdf = self.root / ".runtime" / "reports" / "missing.pdf"
+        review = ReviewDecision(
+            draft_id=draft.id,
+            reviewer_id="doctor-v2",
+            edits={},
+            final_status="approved",
+            publishable_report="Synthetic publishable report",
+            pdf_report_path=str(missing_pdf),
+            pdf_report_filename=missing_pdf.name,
+            audit_log_id="audit-missing-pdf",
+        )
+        self.container.repository.save_review_decision(review)
+
+        metadata = self.client.get(
+            f"/api/v2/drafts/{draft.id}/report",
+            headers=self.headers,
+        )
+        self.assertEqual(metadata.status_code, 409, metadata.text)
+        self.assertEqual(metadata.json()["code"], "REPORT_NOT_READY")
+
+        safe_client = TestClient(self.app, raise_server_exceptions=False)
+        try:
+            with patch.object(
+                self.container.review_service,
+                "ensure_pdf",
+                return_value=(missing_pdf, missing_pdf.name),
+            ):
+                response = safe_client.get(
+                    f"/api/v2/drafts/{draft.id}/report.pdf",
+                    headers=self.headers,
+                )
+        finally:
+            safe_client.close()
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(response.json()["code"], "REPORT_NOT_FOUND")
 
 
 if __name__ == "__main__":

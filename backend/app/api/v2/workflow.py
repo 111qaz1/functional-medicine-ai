@@ -1,16 +1,22 @@
 from __future__ import annotations
 
-import uuid
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from app.api.v2.mappers import (
     analysis_to_response,
+    attachment_is_accepted,
+    attachment_is_parsed,
     apply_review_changes,
     approval_request_to_edits,
     approval_to_response,
+    build_uploaded_file,
     case_to_response,
+    doctor_workspace_scope,
     draft_to_response,
+    mark_attachment_parse_failed,
     operation_to_response,
     report_to_response,
 )
@@ -32,13 +38,19 @@ from app.api.v2.schemas import (
     ReviewSubmitRequest,
     StartAnalysisRequest,
 )
-from app.domain.models import (
-    FileIntakeStatus,
-    FileParseStatus,
-    UploadedFile,
-    WorkspaceScope,
-)
 from app.services.review_local import InvalidDosageOverrideError
+
+
+logger = logging.getLogger(__name__)
+
+_ACTIVE_DRAFT_GENERATION_STATUSES = {
+    "queued",
+    "final_synthesizing",
+    "validating_support_needs",
+    "mapping_products",
+    "checking_safety",
+    "generating_draft",
+}
 
 
 @dataclass(frozen=True)
@@ -107,7 +119,7 @@ class V2WorkflowAdapter:
             ),
             notes=(request.notes or "").strip() or None,
             consent=None,
-            workspace_scope=WorkspaceScope.doctor,
+            workspace_scope=doctor_workspace_scope(),
             owner_doctor_id=doctor.id,
         )
         return case_to_response(case)
@@ -167,11 +179,24 @@ class V2WorkflowAdapter:
                 )
                 continue
 
-            intake = self.container.document_intake_service.preflight(
-                filename=prepared.filename,
-                content_type=prepared.media_type,
-                content=prepared.content,
-            )
+            try:
+                intake = self.container.document_intake_service.preflight(
+                    filename=prepared.filename,
+                    content_type=prepared.media_type,
+                    content=prepared.content,
+                )
+            except Exception:
+                logger.exception("Attachment preflight failed case_id=%s", case.id)
+                items.append(
+                    self._failed_attachment(
+                        prepared,
+                        attachment_type,
+                        code="ATTACHMENT_PREFLIGHT_FAILED",
+                        message="The server could not validate this attachment.",
+                        retryable=True,
+                    )
+                )
+                continue
             if intake.validation_error:
                 items.append(
                     self._failed_attachment(
@@ -205,6 +230,18 @@ class V2WorkflowAdapter:
                         )
                     )
                     continue
+                except Exception:
+                    logger.exception("Questionnaire processing failed case_id=%s", case.id)
+                    items.append(
+                        self._failed_attachment(
+                            prepared,
+                            attachment_type,
+                            code="QUESTIONNAIRE_PROCESSING_FAILED",
+                            message="The server could not process this questionnaire.",
+                            retryable=True,
+                        )
+                    )
+                    continue
                 accepted_count += 1
                 items.append(
                     AttachmentUploadItem(
@@ -223,7 +260,7 @@ class V2WorkflowAdapter:
                     for existing in case.files
                     if existing.content_sha256
                     and existing.content_sha256 == intake.content_sha256
-                    and existing.intake_status != FileIntakeStatus.invalid
+                    and attachment_is_accepted(existing)
                 ),
                 None,
             )
@@ -248,7 +285,8 @@ class V2WorkflowAdapter:
                     prepared.filename,
                     prepared.content,
                 )
-            except OSError:
+            except Exception:
+                logger.exception("Attachment storage failed case_id=%s", case.id)
                 items.append(
                     self._failed_attachment(
                         prepared,
@@ -260,23 +298,28 @@ class V2WorkflowAdapter:
                 )
                 continue
 
-            uploaded = UploadedFile(
-                id=f"file_{uuid.uuid4().hex[:12]}",
+            uploaded = build_uploaded_file(
                 case_id=case.id,
                 filename=prepared.filename,
-                content_type=prepared.media_type,
+                media_type=prepared.media_type,
                 size_bytes=len(prepared.content),
                 storage_uri=storage_uri,
-                raw_extracted_text=intake.extracted_text or None,
-                content_sha256=intake.content_sha256,
-                intake_status=intake.intake_status,
-                page_count=intake.page_count,
-                page_texts=intake.page_texts,
-                is_scanned=intake.is_scanned,
-                precheck_warning=intake.precheck_warning,
-                validation_error=intake.validation_error,
+                intake=intake,
             )
-            case = self.container.case_service.add_uploaded_file(case.id, uploaded)
+            try:
+                case = self.container.case_service.add_uploaded_file(case.id, uploaded)
+            except Exception:
+                logger.exception("Attachment persistence failed case_id=%s", case.id)
+                items.append(
+                    self._failed_attachment(
+                        prepared,
+                        attachment_type,
+                        code="ATTACHMENT_PERSISTENCE_FAILED",
+                        message="The server could not register this attachment.",
+                        retryable=True,
+                    )
+                )
+                continue
             accepted_count += 1
             try:
                 extraction, lab_items = self.container.parsing_service.parse(
@@ -302,7 +345,7 @@ class V2WorkflowAdapter:
                     parse_warnings=parse_warnings,
                 )
                 parsed = next(item for item in case.files if item.id == uploaded.id)
-                status = "parsed" if parsed.parse_status == FileParseStatus.parsed else "pending"
+                status = "parsed" if attachment_is_parsed(parsed) else "pending"
                 items.append(
                     AttachmentUploadItem(
                         file_id=uploaded.id,
@@ -318,8 +361,7 @@ class V2WorkflowAdapter:
                 )
             except Exception:
                 persisted = next(item for item in case.files if item.id == uploaded.id)
-                persisted.parse_status = FileParseStatus.failed
-                persisted.validation_error = "Attachment parsing failed."
+                mark_attachment_parse_failed(persisted)
                 self.container.repository.save_case(case)
                 items.append(
                     AttachmentUploadItem(
@@ -329,7 +371,7 @@ class V2WorkflowAdapter:
                         status="failed",
                         media_type=prepared.media_type,
                         size_bytes=len(prepared.content),
-                        parse_status=FileParseStatus.failed.value,
+                        parse_status=persisted.parse_status.value,
                         failure=AttachmentFailure(
                             code="ATTACHMENT_PARSE_FAILED",
                             message="The attachment was stored but could not be parsed.",
@@ -385,17 +427,24 @@ class V2WorkflowAdapter:
         doctor: Any,
     ) -> OperationResponse:
         self.require_owned_case(case_id, doctor)
+        if not request.third_party_processing_confirmed:
+            raise V2ApiError(
+                status=422,
+                code="THIRD_PARTY_PROCESSING_CONFIRMATION_REQUIRED",
+                title="Third-party processing confirmation required",
+                detail="Confirm third-party processing before starting an analysis.",
+            )
         try:
             analysis = self.container.case_analysis_service.create_analysis(
                 case_id,
-                third_party_processing_confirmed=request.third_party_processing_confirmed,
+                third_party_processing_confirmed=True,
             )
         except ValueError as exc:
             raise V2ApiError(
-                status=422,
-                code="ANALYSIS_START_REJECTED",
-                title="Analysis start rejected",
-                detail=str(exc),
+                status=409,
+                code="ANALYSIS_START_CONFLICT",
+                title="Analysis cannot start",
+                detail="The case is not currently ready to start an analysis.",
             ) from exc
         return operation_to_response(analysis)
 
@@ -430,6 +479,14 @@ class V2WorkflowAdapter:
                 title="Analysis not found",
                 detail="The analysis does not belong to the requested case.",
             )
+        final_generation_status = str(analysis.final_generation_status.value)
+        if final_generation_status in _ACTIVE_DRAFT_GENERATION_STATUSES:
+            raise V2ApiError(
+                status=409,
+                code="DRAFT_GENERATION_IN_PROGRESS",
+                title="Draft generation in progress",
+                detail="Wait for the current draft generation operation to finish.",
+            )
         findings, supplements, food_sensitivity = apply_review_changes(analysis, request)
         try:
             updated, _, _ = self.container.case_analysis_service.review_and_generate(
@@ -449,12 +506,34 @@ class V2WorkflowAdapter:
                 detail="The requested analysis does not exist.",
             ) from exc
         except ValueError as exc:
+            message = str(exc)
+            if "版本已变化" in message:
+                raise V2ApiError(
+                    status=409,
+                    code="ANALYSIS_REVISION_CONFLICT",
+                    title="Analysis revision conflict",
+                    detail="The analysis was updated. Fetch the latest revision before submitting.",
+                ) from exc
+            if "尚未进入可校对状态" in message or "资料已变化" in message:
+                raise V2ApiError(
+                    status=409,
+                    code="ANALYSIS_REVIEW_CONFLICT",
+                    title="Analysis review conflict",
+                    detail="The analysis is not currently available for review.",
+                ) from exc
+            raise V2ApiError(
+                status=422,
+                code="INVALID_REVIEW_CHANGES",
+                title="Invalid review changes",
+                detail="The submitted review changes are not valid for this analysis.",
+            ) from exc
+        if updated.revision != request.expected_revision + 1:
             raise V2ApiError(
                 status=409,
                 code="ANALYSIS_REVIEW_CONFLICT",
                 title="Analysis review conflict",
-                detail=str(exc),
-            ) from exc
+                detail="The submitted review was not applied. Fetch the latest analysis and retry.",
+            )
         return operation_to_response(updated)
 
     def retry_draft_generation(
@@ -565,6 +644,17 @@ class V2WorkflowAdapter:
                 title="Report not ready",
                 detail="The draft must be approved before its report is available.",
             )
+        if (
+            not review.pdf_report_path
+            or not review.pdf_report_filename
+            or not Path(review.pdf_report_path).is_file()
+        ):
+            raise V2ApiError(
+                status=409,
+                code="REPORT_NOT_READY",
+                title="Report not ready",
+                detail="The published report file is not currently available.",
+            )
         return report_to_response(review)
 
     def ensure_pdf(self, draft_id: str, doctor: Any):
@@ -577,7 +667,7 @@ class V2WorkflowAdapter:
                 detail="The draft must be approved before its report is available.",
             )
         try:
-            return self.container.review_service.ensure_pdf(draft_id)
+            pdf_path, filename = self.container.review_service.ensure_pdf(draft_id)
         except KeyError as exc:
             raise V2ApiError(
                 status=404,
@@ -585,3 +675,11 @@ class V2WorkflowAdapter:
                 title="Report not found",
                 detail="The requested report does not exist.",
             ) from exc
+        if not Path(pdf_path).is_file():
+            raise V2ApiError(
+                status=404,
+                code="REPORT_NOT_FOUND",
+                title="Report not found",
+                detail="The requested report file does not exist.",
+            )
+        return pdf_path, filename

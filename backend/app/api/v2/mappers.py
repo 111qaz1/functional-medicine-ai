@@ -36,11 +36,14 @@ from app.domain.models import (
     DosageRegimen,
     DraftRecommendationItem,
     EvidenceStatus,
+    FileIntakeStatus,
+    FileParseStatus,
     FinalGenerationStatus,
     FoodSensitivityItem,
     RecommendationDraft,
     ReviewDecision,
     UploadedFile,
+    WorkspaceScope,
 )
 
 
@@ -52,6 +55,51 @@ def _percentage(current: int, total: int) -> int:
     if total <= 0:
         return 0
     return max(0, min(100, round((current / total) * 100)))
+
+
+def doctor_workspace_scope() -> WorkspaceScope:
+    return WorkspaceScope.doctor
+
+
+def attachment_is_accepted(uploaded: UploadedFile) -> bool:
+    return uploaded.intake_status != FileIntakeStatus.invalid
+
+
+def attachment_is_parsed(uploaded: UploadedFile) -> bool:
+    return uploaded.parse_status == FileParseStatus.parsed
+
+
+def build_uploaded_file(
+    *,
+    case_id: str,
+    filename: str,
+    media_type: str,
+    size_bytes: int,
+    storage_uri: Any,
+    intake: Any,
+) -> UploadedFile:
+    return UploadedFile(
+        id=f"file_{uuid.uuid4().hex[:12]}",
+        case_id=case_id,
+        filename=filename,
+        content_type=media_type,
+        size_bytes=size_bytes,
+        storage_uri=storage_uri,
+        raw_extracted_text=intake.extracted_text or None,
+        content_sha256=intake.content_sha256,
+        intake_status=intake.intake_status,
+        page_count=intake.page_count,
+        page_texts=intake.page_texts,
+        is_scanned=intake.is_scanned,
+        precheck_warning=intake.precheck_warning,
+        validation_error=intake.validation_error,
+    )
+
+
+def mark_attachment_parse_failed(uploaded: UploadedFile) -> UploadedFile:
+    uploaded.parse_status = FileParseStatus.failed
+    uploaded.validation_error = "Attachment parsing failed."
+    return uploaded
 
 
 def attachment_to_response(uploaded: UploadedFile) -> AttachmentResponse:
@@ -155,6 +203,98 @@ def food_sensitivity_to_response(
     )
 
 
+_PUBLIC_ANALYSIS_FAILURES: dict[str, tuple[str, str]] = {
+    "model_timeout": (
+        "ANALYSIS_MODEL_TIMEOUT",
+        "The analysis model timed out. Retry the analysis later.",
+    ),
+    "model_connection_interrupted": (
+        "ANALYSIS_MODEL_UNAVAILABLE",
+        "The analysis model is temporarily unavailable. Retry the analysis later.",
+    ),
+    "model_auth_failed": (
+        "ANALYSIS_MODEL_AUTH_FAILED",
+        "The analysis model could not be authorized.",
+    ),
+    "model_rate_limited": (
+        "ANALYSIS_MODEL_RATE_LIMITED",
+        "The analysis model is temporarily rate limited. Retry the analysis later.",
+    ),
+    "model_service_unavailable": (
+        "ANALYSIS_MODEL_UNAVAILABLE",
+        "The analysis model is temporarily unavailable. Retry the analysis later.",
+    ),
+    "invalid_json": (
+        "ANALYSIS_MODEL_INVALID_RESPONSE",
+        "The analysis model returned an invalid response. Retry the analysis.",
+    ),
+    "invalid_schema": (
+        "ANALYSIS_MODEL_INVALID_RESPONSE",
+        "The analysis model returned an invalid response. Retry the analysis.",
+    ),
+}
+
+
+def _analysis_failure_to_response(analysis: CaseAnalysis) -> OperationFailure:
+    if analysis.status == AnalysisStatus.stale:
+        return OperationFailure(
+            code="ANALYSIS_STALE",
+            message="The case changed after this analysis started.",
+            retryable=True,
+        )
+    internal_code = str(analysis.error_code or "").strip().lower()
+    public = _PUBLIC_ANALYSIS_FAILURES.get(internal_code)
+    if public is None and internal_code.startswith("model_http_"):
+        public = (
+            "ANALYSIS_MODEL_ERROR",
+            "The analysis model returned an error. Retry the analysis later.",
+        )
+    code, message = public or (
+        "ANALYSIS_FAILED",
+        "The analysis could not be completed.",
+    )
+    return OperationFailure(code=code, message=message, retryable=True)
+
+
+def _draft_failure_to_response(error: str | None) -> OperationFailure:
+    internal = str(error or "").strip().lower()
+    if internal.startswith("model_timeout:"):
+        return OperationFailure(
+            code="DRAFT_GENERATION_MODEL_TIMEOUT",
+            message="The draft generation model timed out. Retry draft generation later.",
+            retryable=True,
+        )
+    if internal.startswith(("model_connection_interrupted:", "model_http_")):
+        return OperationFailure(
+            code="DRAFT_GENERATION_MODEL_UNAVAILABLE",
+            message="The draft generation model is temporarily unavailable.",
+            retryable=True,
+        )
+    if internal.startswith("model_rate_limited:"):
+        return OperationFailure(
+            code="DRAFT_GENERATION_MODEL_RATE_LIMITED",
+            message="Draft generation is temporarily rate limited.",
+            retryable=True,
+        )
+    if internal.startswith(("model_invalid_schema:", "model_invalid_json:")):
+        return OperationFailure(
+            code="DRAFT_GENERATION_MODEL_INVALID_RESPONSE",
+            message="The draft generation model returned an invalid response.",
+            retryable=True,
+        )
+    if "病例资料已变化" in internal:
+        return OperationFailure(
+            code="DRAFT_GENERATION_STALE",
+            message="The case changed after draft generation started.",
+            retryable=True,
+        )
+    return OperationFailure(
+        code="DRAFT_GENERATION_FAILED",
+        message="Draft generation failed.",
+        retryable=True,
+    )
+
+
 def analysis_to_response(analysis: CaseAnalysis) -> AnalysisResponse:
     reviewed = analysis.reviewed_at is not None
     findings = (
@@ -173,12 +313,13 @@ def analysis_to_response(analysis: CaseAnalysis) -> AnalysisResponse:
         else analysis.system_findings
     )
     error = None
-    if analysis.error_code or analysis.error_message:
-        error = OperationFailure(
-            code=analysis.error_code or "ANALYSIS_FAILED",
-            message=analysis.error_message or "The analysis failed.",
-            retryable=True,
-        )
+    if analysis.status in {AnalysisStatus.stale, AnalysisStatus.failed}:
+        error = _analysis_failure_to_response(analysis)
+    draft_failure = (
+        _draft_failure_to_response(analysis.final_generation_error)
+        if analysis.final_generation_status == FinalGenerationStatus.failed
+        else None
+    )
     return AnalysisResponse(
         id=analysis.id,
         case_id=analysis.case_id,
@@ -203,7 +344,7 @@ def analysis_to_response(analysis: CaseAnalysis) -> AnalysisResponse:
         draft_generation=DraftGenerationState(
             status=_value(analysis.final_generation_status),
             progress=analysis.final_generation_progress,
-            error=analysis.final_generation_error,
+            error=draft_failure.message if draft_failure is not None else None,
         ),
         draft_id=analysis.draft_id,
         created_at=analysis.created_at,
@@ -231,11 +372,7 @@ def operation_to_response(analysis: CaseAnalysis) -> OperationResponse:
             current_item=None,
         )
         failure = (
-            OperationFailure(
-                code="DRAFT_GENERATION_FAILED",
-                message=analysis.final_generation_error or "Draft generation failed.",
-                retryable=True,
-            )
+            _draft_failure_to_response(analysis.final_generation_error)
             if status == "failed"
             else None
         )
@@ -260,21 +397,7 @@ def operation_to_response(analysis: CaseAnalysis) -> OperationResponse:
             percent=_percentage(analysis.progress_current, analysis.progress_total),
             current_item=analysis.current_file_name,
         )
-        failure = (
-            OperationFailure(
-                code=analysis.error_code or (
-                    "ANALYSIS_STALE" if analysis.status == AnalysisStatus.stale else "ANALYSIS_FAILED"
-                ),
-                message=analysis.error_message or (
-                    "The case changed after this analysis started."
-                    if analysis.status == AnalysisStatus.stale
-                    else "The analysis failed."
-                ),
-                retryable=True,
-            )
-            if status == "failed"
-            else None
-        )
+        failure = _analysis_failure_to_response(analysis) if status == "failed" else None
     return OperationResponse(
         operation_id=analysis.id,
         stage=stage,
@@ -514,6 +637,24 @@ def apply_review_changes(
             code="ANALYSIS_REVISION_CONFLICT",
             title="Analysis revision conflict",
             detail="The analysis was updated. Fetch the latest revision before submitting.",
+        )
+    allowed_file_ids = set(analysis.file_ids)
+    referenced_file_ids: list[str] = []
+    for change in request.finding_changes:
+        if change.op == "add":
+            referenced_file_ids.append(change.value.source_file_id)
+        elif change.op == "update" and "source_file_id" in change.changes.model_fields_set:
+            if change.changes.source_file_id is not None:
+                referenced_file_ids.append(change.changes.source_file_id)
+    for change in request.food_sensitivity_changes:
+        if change.op == "add":
+            referenced_file_ids.append(change.value.source_file_id)
+    if any(file_id not in allowed_file_ids for file_id in referenced_file_ids):
+        raise V2ApiError(
+            status=422,
+            code="INVALID_REVIEW_CHANGES",
+            title="Invalid review changes",
+            detail="A review change references a file outside the current analysis.",
         )
     findings = (
         analysis.reviewed_abnormal_findings

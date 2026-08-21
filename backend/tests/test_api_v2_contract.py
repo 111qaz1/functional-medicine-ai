@@ -109,6 +109,12 @@ class V2OpenApiContractTests(unittest.TestCase):
         ):
             self.assertNotIn(field, serialized)
 
+    def test_workflow_adapter_does_not_import_domain_models(self) -> None:
+        workflow_source = (
+            Path(__file__).resolve().parents[1] / "app" / "api" / "v2" / "workflow.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("from app.domain", workflow_source)
+
 
 class V2ProblemDetailsTests(unittest.TestCase):
     def setUp(self) -> None:

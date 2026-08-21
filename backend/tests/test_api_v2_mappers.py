@@ -62,6 +62,7 @@ def _analysis() -> CaseAnalysis:
         prompt_version="internal-prompt",
         progress_current=1,
         progress_total=1,
+        file_ids=["file-1", "file-food"],
         case_summary="Synthetic summary",
         abnormal_findings=[_finding()],
         current_supplements=[CurrentSupplement(id="supplement-1", name="Synthetic A")],

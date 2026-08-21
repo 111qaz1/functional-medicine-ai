@@ -157,6 +157,8 @@ Operation 不单独持久化：`operation_id` 等于 `analysis_id`，从现有�
 
 Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳定错误码、公开消息和 `retryable`。HTTP 4xx/5xx 只表示轮询请求本身失败。
 
+领域服务产生的异常文本不会直接进入 `failure` 或 `draft_generation.error`。已知模型失败会映射为稳定公开错误码；未知异常统一降级为 `ANALYSIS_FAILED` 或 `DRAFT_GENERATION_FAILED`。
+
 ## 6. 分析结果与差量复核
 
 `AnalysisResponse` 返回公开摘要、系统发现、异常指标、当前补充剂、食物敏感、进度、警告和草案生成状态。以下内部字段不会返回：
@@ -211,7 +213,7 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 - `remove`：必须给出当前条目 ID。
 - `add`：不得提供领域 ID，由服务端生成。
 
-同一条目不能在一个请求中被操作两次。未知 ID 或重复目标返回 `422`；修订号不一致返回 `409 ANALYSIS_REVISION_CONFLICT`。三个变化数组可以同时为空，用于确认当前结果并继续生成草案。
+同一条目不能在一个请求中被操作两次。未知 ID、分析快照之外的文件引用或其他无效差量返回 `422`；修订号不一致返回 `409 ANALYSIS_REVISION_CONFLICT`。草案生成任务仍在运行时返回 `409 DRAFT_GENERATION_IN_PROGRESS`，不会将未应用的差量误报为成功。三个变化数组可以同时为空，用于确认当前结果并继续生成草案。
 
 后端会以当前分析快照为基础应用变化；客户端未提交的置信度、证据状态、标准化信息和系统映射会原样保留。
 
@@ -274,11 +276,16 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 | 401 | `AUTHENTICATION_REQUIRED` | Token 缺失或失效 |
 | 403 | `CASE_ACCESS_DENIED` | 当前医生不拥有病例 |
 | 404 | `CASE_NOT_FOUND` / `ANALYSIS_NOT_FOUND` / `DRAFT_NOT_FOUND` | 资源不存在 |
+| 404 | `REPORT_NOT_FOUND` | 报告记录存在但 PDF 文件不可用 |
+| 409 | `ANALYSIS_START_CONFLICT` | 病例尚无有效资料或当前状态不能启动分析 |
 | 409 | `ANALYSIS_REVISION_CONFLICT` | 复核提交基于旧修订 |
+| 409 | `DRAFT_GENERATION_IN_PROGRESS` | 当前草案生成尚未结束，不能再次复核 |
 | 409 | `DRAFT_STALE` | 病例资料变化导致草案过期 |
-| 409 | `REPORT_NOT_READY` | 草案尚未审批 |
+| 409 | `REPORT_NOT_READY` | 草案尚未审批或已发布 PDF 当前不可用 |
 | 422 | `REQUEST_VALIDATION_FAILED` | DTO 或字段类型不合法 |
+| 422 | `THIRD_PARTY_PROCESSING_CONFIRMATION_REQUIRED` | 未确认第三方模型处理授权 |
 | 422 | `UNKNOWN_REVIEW_ITEM` | 差量指令引用未知条目 |
+| 422 | `INVALID_REVIEW_CHANGES` | 差量引用分析外文件或不符合领域约束 |
 | 422 | `INVALID_DOSAGE_OVERRIDE` | 剂量选项不合法 |
 | 500 | `INTERNAL_SERVER_ERROR` | 未公开内部异常详情 |
 
@@ -312,5 +319,8 @@ python -m unittest discover -s backend/tests -p "test_api_v2_*.py" -v
 - v2 十三条 paths 和完整 OpenAPI 组件哈希不变。
 - DTO 拒绝额外字段和空更新。
 - Mapper 不泄漏内部字段并保留未修改领域数据。
-- 病例归属、附件部分失败、Operation、修订冲突、审批和 PDF 均有 HTTP 契约测试。
+- 病例归属、附件阶段性失败、Operation、修订冲突、真实空差量复核、审批和 PDF 均有 HTTP 契约测试。
+- 未知执行异常不会进入公开响应；缺失 PDF 不会先发送 `200 application/pdf` 后再发生流式失败。
 - 测试仅使用虚构数据，不调用真实模型、密钥或病例。
+
+这些进程内契约测试不是甲方真实调用证明。交付前仍必须在实际启动的 HTTP 服务上使用 Postman/Newman 覆盖 13 条路由、multipart 上传、异步轮询、跨请求状态持久化、PDF 二进制与 Problem Details；该门槛当前尚未执行。

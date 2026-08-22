@@ -26,7 +26,9 @@ export const workflowStepOrder: WorkflowStepId[] = [
 
 export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[] {
   const { caseResource, analysis, draft, report } = resources;
-  const hasAttachments = Boolean(caseResource?.attachments.length);
+  const hasAttachments = Boolean(
+    caseResource && (caseResource.attachments.length > 0 || caseResource.status !== "intake")
+  );
   const analysisFailed = analysis?.status === "failed" || analysis?.status === "stale";
   const reviewReady = analysis?.status === "ready_for_review" || analysis?.status === "reviewed";
   const draftFailed = analysis?.draft_generation.status === "failed";
@@ -34,7 +36,13 @@ export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[
   const states: Record<WorkflowStepId, WorkflowStepState> = {
     case: caseResource ? "complete" : "current",
     attachments: !caseResource ? "blocked" : hasAttachments ? "complete" : "current",
-    analysis: !hasAttachments ? "blocked" : analysisFailed ? "error" : analysis ? "complete" : "current",
+    analysis: !hasAttachments
+      ? "blocked"
+      : analysisFailed
+        ? "error"
+        : reviewReady
+          ? "complete"
+          : "current",
     review: !analysis ? "blocked" : analysisFailed ? "blocked" : reviewReady ? (draft ? "complete" : "current") : "blocked",
     draft: !reviewReady ? "blocked" : draftFailed ? "error" : draft ? (draft.status === "approved" ? "complete" : "current") : "blocked",
     report: draft?.status !== "approved" ? "blocked" : report ? "complete" : "current"

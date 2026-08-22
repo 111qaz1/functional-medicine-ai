@@ -4,7 +4,8 @@ import React, { type FormEvent, useMemo, useState } from "react";
 
 import { workflowCopy } from "../../lib/api-v2/copy";
 import { workflowErrorMessage } from "../../lib/api-v2/errors";
-import { HttpWorkflowGateway } from "../../lib/api-v2/gateway";
+import type { FixtureScenario } from "../../lib/api-v2/fixture-gateway";
+import { createWorkflowGateway } from "../../lib/api-v2/gateway-factory";
 import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell";
 
 const entrySteps = [
@@ -16,8 +17,11 @@ const entrySteps = [
   { id: "report", state: "blocked" }
 ] as const;
 
-export function IntegrationEntry() {
-  const gateway = useMemo(() => new HttpWorkflowGateway(), []);
+export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode: boolean; fixtureScenario: FixtureScenario }) {
+  const gateway = useMemo(
+    () => createWorkflowGateway(fixtureMode, fixtureScenario),
+    [fixtureMode, fixtureScenario]
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,7 +60,11 @@ export function IntegrationEntry() {
       description={workflowCopy.entry.description}
       steps={[...entrySteps]}
       currentStep="case"
+      theme={fixtureMode ? "test" : "default"}
     >
+      {fixtureMode ? (
+        <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。所有病例均为当前标签页内的虚构数据。</WorkflowNotice>
+      ) : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       <div className="workflow-entry-grid">
         <WorkflowSection

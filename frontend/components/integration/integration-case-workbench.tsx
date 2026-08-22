@@ -10,7 +10,9 @@ import {
   workflowCopy
 } from "../../lib/api-v2/copy";
 import { isWorkflowProblem, workflowErrorMessage } from "../../lib/api-v2/errors";
-import { HttpWorkflowGateway, type AcceptedOperation } from "../../lib/api-v2/gateway";
+import type { FixtureScenario } from "../../lib/api-v2/fixture-gateway";
+import type { AcceptedOperation } from "../../lib/api-v2/gateway";
+import { createWorkflowGateway } from "../../lib/api-v2/gateway-factory";
 import { OperationPoller } from "../../lib/api-v2/operation-poller";
 import { buildReviewChanges, createReviewDraft, type ReviewDraftState } from "../../lib/api-v2/review-diff";
 import type {
@@ -44,8 +46,19 @@ function attachmentStatusLabel(status: string): string {
   } as Record<string, string>)[status] ?? status;
 }
 
-export function IntegrationCaseWorkbench({ caseId }: { caseId: string }) {
-  const gateway = useMemo(() => new HttpWorkflowGateway(), []);
+export function IntegrationCaseWorkbench({
+  caseId,
+  fixtureMode,
+  fixtureScenario
+}: {
+  caseId: string;
+  fixtureMode: boolean;
+  fixtureScenario: FixtureScenario;
+}) {
+  const gateway = useMemo(
+    () => createWorkflowGateway(fixtureMode, fixtureScenario),
+    [fixtureMode, fixtureScenario]
+  );
   const pollerRef = useRef<OperationPoller | null>(null);
   const loadSequence = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -353,7 +366,8 @@ export function IntegrationCaseWorkbench({ caseId }: { caseId: string }) {
   if (!caseResource) {
     const emptySteps = deriveWorkflowSteps({ caseResource: null, analysis: null, draft: null, report: null });
     return (
-      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case">
+      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case" theme={fixtureMode ? "test" : "default"}>
+        {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式：{fixtureScenario}</WorkflowNotice> : null}
         {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
         <WorkflowSection id="case" title={loadState === "loading" ? "正在读取病例" : "病例无法加载"} state={loadState === "error" ? "error" : "current"}>
           <p className="workflow-placeholder">{loadState === "loading" ? workflowCopy.common.loading : "请检查病例 ID、访问权限或服务端对接配置。"}</p>
@@ -370,6 +384,7 @@ export function IntegrationCaseWorkbench({ caseId }: { caseId: string }) {
       caseId={caseResource.id}
       steps={steps}
       currentStep={currentStep}
+      theme={fixtureMode ? "test" : "default"}
       headerActions={
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases">返回病例入口</a>
@@ -377,6 +392,7 @@ export function IntegrationCaseWorkbench({ caseId }: { caseId: string }) {
         </>
       }
     >
+      {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，当前场景：{fixtureScenario}。页面不会调用后端或模型。</WorkflowNotice> : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       {notice ? <WorkflowNotice tone="info" live>{notice}</WorkflowNotice> : null}
 

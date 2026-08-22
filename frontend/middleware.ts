@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 const INTERNAL_API_PREFIX = "/api/internal";
+const V2_API_PREFIX = "/api/v2";
 const DEFAULT_INTERNAL_API_BASE_URL = "http://127.0.0.1:8000";
 
 export function buildBackendUrl(request: NextRequest): URL {
@@ -21,6 +22,31 @@ export function buildBackendUrl(request: NextRequest): URL {
 }
 
 export function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname === V2_API_PREFIX || request.nextUrl.pathname.startsWith(`${V2_API_PREFIX}/`)) {
+    const token = process.env.FM_API_V2_BEARER_TOKEN?.trim();
+    if (!token) {
+      return NextResponse.json(
+        {
+          type: "urn:fm-ai:problem:frontend-integration-not-configured",
+          title: "Frontend integration not configured",
+          status: 503,
+          detail: "对接工作台尚未配置服务端访问令牌，请联系系统管理员。",
+          instance: request.nextUrl.pathname,
+          code: "FRONTEND_INTEGRATION_NOT_CONFIGURED",
+          errors: []
+        },
+        {
+          status: 503,
+          headers: { "Content-Type": "application/problem+json" }
+        }
+      );
+    }
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set("Authorization", `Bearer ${token}`);
+    return NextResponse.rewrite(buildBackendUrl(request), {
+      request: { headers: requestHeaders }
+    });
+  }
   return NextResponse.rewrite(buildBackendUrl(request));
 }
 
@@ -28,6 +54,7 @@ export const config = {
   matcher: [
     "/api/internal/:path*",
     "/api/v1/:path*",
+    "/api/v2/:path*",
     "/health/:path*",
     "/docs/:path*",
     "/redoc/:path*",

@@ -323,4 +323,46 @@ python -m unittest discover -s backend/tests -p "test_api_v2_*.py" -v
 - 未知执行异常不会进入公开响应；缺失 PDF 不会先发送 `200 application/pdf` 后再发生流式失败。
 - 测试仅使用虚构数据，不调用真实模型、密钥或病例。
 
-这些进程内契约测试不是甲方真实调用证明。交付前仍必须在实际启动的 HTTP 服务上使用 Postman/Newman 覆盖 13 条路由、multipart 上传、异步轮询、跨请求状态持久化、PDF 二进制与 Problem Details；该门槛当前尚未执行。
+这些进程内契约测试不是甲方真实调用证明。仓库同时提供第一阶段真实 HTTP 集合：
+
+- `postman/api_v2.postman_collection.json`
+- `postman/api_v2.local.postman_environment.json`
+- `postman/fixtures/api-v2-synthetic-labs.txt`
+- `postman/fixtures/api-v2-invalid.exe`
+
+本地服务的 `FM_EXTERNAL_TRUST_SHARED_SECRET` 必须与测试环境中的虚构共享密钥一致。集合从仓库根目录运行，使 multipart 文件路径可被 Newman 正确解析：
+
+```powershell
+npx.cmd --yes newman@6.2.2 run postman\api_v2.postman_collection.json `
+  -e postman\api_v2.local.postman_environment.json `
+  --working-dir . `
+  --timeout 60000 `
+  --timeout-request 10000 `
+  --timeout-script 5000 `
+  --delay-request 100 `
+  -r cli,json `
+  --reporter-json-export <隔离报告路径>
+```
+
+第一阶段显式移除 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 后运行，只验证不消耗模型额度的真实传输边界：
+
+- 13 条 v2 路由均被真实 HTTP 请求命中。
+- 病例、临床摘要、multipart 部分成功、分析启动、Operation 轮询和最新分析覆盖成功响应。
+- 鉴权、归属、严格 DTO、工作流冲突、草案/审批/报告不存在及 PDF 错误媒体类型覆盖 Problem Details。
+- 无模型配置时，分析任务按公开契约终止为 `status="failed"` 和 `code="ANALYSIS_FAILED"`，不暴露内部异常。
+
+2026-08-21 的第一阶段隔离本地记录为 24 个请求、53 条断言、0 失败，Newman 退出码 0。
+
+经病例与模型额度明确授权后，第二阶段使用 `postman/api_v2.model_e2e.postman_collection.json` 对一个匿名 PDF 样例（源文件 SHA-256 前缀 `5c10c63c6094`，24 页）执行单病例真实模型闭环。运行结果为 168 个 HTTP 请求（含异步轮询）、182 条断言、0 失败，Newman 退出码 0，约 3 分 17 秒。验证覆盖：
+
+- 附件上传成功并启动分析，Operation 最终成功；最新分析存在异常发现且不泄漏快照哈希、模型/Prompt 版本或内部审计。
+- 使用类型化 `finding_changes.update` 提交安全的原值差量，草案生成最终成功；草案含可审批推荐且不泄漏内部字段。
+- 审批发布成功，报告资源进入可下载状态；PDF 响应媒体类型、附件文件名和 `%PDF` 文件头正确。
+- 生成 PDF 为 239267 字节，SHA-256 为 `25e1d68fa83ddc33fd0c0f3bd4beec2a1e2e36d7b93c78075ddc5c94edfdc78b`。
+- 数据库审计记录 4 次真实模型请求、0 失败，共 43776 tokens（prompt 36159、completion 7617、cached 1024）；低于本次批准的 12 次请求上限。
+
+运行后发现测试包装器的外部请求计数只覆盖了病例分析提供器，未覆盖独立的随访计划提供器，因此计数文件错误显示 3 次；数据库的 4 次审计记录是本次结论的权威依据。包装器现已将随访、OCR、草案和 RAG 提供器纳入同一客户端上限，但该机械修复没有再次消耗额度复跑。
+
+为避免病例数据留存，不保存 Newman 响应报告，隔离运行产生的病例副本、SQLite 数据库和报告 PDF 在提取上述聚合证据后删除；用户提供的源文件保持不变。该结果只证明一个授权 PDF 样例的单病例成功路径，不证明其他文件格式、真实问卷、多病例并发、负载/故障恢复或甲方前端适配。
+
+同日全量后端回归实际运行 349 项，结果为 17 个失败、3 个错误，不能记为全绿。其中 2 个错误是当前环境缺少 FAISS 稠密索引，1 个错误是 Windows 清理临时 SQLite 文件时仍被占用；功能失败集中在既有报告分类、章节/风险提示和推荐/RAG 旧断言。仓库既有基线文档已经记录 17 个同类失败和 2 个 FAISS 环境错误；另外在未含 v2 改动的 `963d49d` 临时 worktree 中，代表性的报告分类失败、FAISS 错误和 SQLite 文件锁均可复现。因此当前没有证据将它们归因于 v2，但没有为 17 个失败逐项执行完整基线对照。v2 聚焦测试独立运行仍为 23/23 通过。

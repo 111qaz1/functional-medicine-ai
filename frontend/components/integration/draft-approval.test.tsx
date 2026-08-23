@@ -19,6 +19,13 @@ const draft = {
   red_flags: [],
   manual_review_required: false,
   abstain_reason: null,
+  core_health_portrait: null,
+  structured_system_findings: [],
+  lifestyle_plan: null,
+  safety_decisions: [],
+  uncovered_system_ids: [],
+  uncovered_system_reasons: {},
+  report_sections: [],
   recommended_skus: [
     {
       sku_id: "SKU_FIXTURE",
@@ -42,20 +49,20 @@ const draft = {
 } as unknown as DraftResponse;
 
 describe("DraftApproval", () => {
-  it("marks the approval reviewer as required and exposes a local validation target", () => {
+  it("shows the authenticated approval doctor without an editable identity field", () => {
     const html = renderToStaticMarkup(
       <DraftApproval
         draft={draft}
         value={createApprovalDraft(draft)}
+        reviewerName="测试医生"
         onChange={() => undefined}
         busy={false}
         onApprove={() => undefined}
       />
     );
 
-    expect(html).toContain("审批医生 ID（必填）");
-    expect(html).toContain('required=""');
-    expect(html).toContain('aria-describedby="approval-reviewer-error"');
-    expect(html).toContain('id="approval-reviewer-error"');
+    expect(html).toContain("当前批准医生");
+    expect(html).toContain("测试医生");
+    expect(html).not.toContain("审批医生 ID（必填）");
   });
 });

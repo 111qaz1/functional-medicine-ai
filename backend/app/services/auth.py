@@ -29,7 +29,14 @@ class AuthService:
     def __init__(self, repository: LocalRepository) -> None:
         self.repository = repository
 
-    def register(self, *, username: str, password: str, display_name: str | None = None) -> DoctorAccount:
+    def register(
+        self,
+        *,
+        username: str,
+        password: str,
+        display_name: str | None = None,
+        role: DoctorRole | None = None,
+    ) -> DoctorAccount:
         normalized_username = self._normalize_username(username)
         if not normalized_username:
             raise ValueError("请输入医生账号。")
@@ -38,7 +45,7 @@ class AuthService:
         if self.repository.get_doctor_by_username(normalized_username):
             raise ValueError("该医生账号已存在，请直接登录。")
 
-        role = DoctorRole.admin if self.repository.count_doctors() == 0 else DoctorRole.doctor
+        role = role or (DoctorRole.admin if self.repository.count_doctors() == 0 else DoctorRole.doctor)
         doctor = DoctorAccount(
             id=f"doctor_{uuid.uuid4().hex[:12]}",
             username=normalized_username,
@@ -47,6 +54,42 @@ class AuthService:
             role=role,
             enabled=True,
         )
+        return self.repository.save_doctor(doctor)
+
+    def list_doctors(self) -> list[DoctorAccount]:
+        return self.repository.list_doctors()
+
+    def update_doctor(
+        self,
+        doctor_id: str,
+        *,
+        display_name: str | None = None,
+        enabled: bool | None = None,
+    ) -> DoctorAccount:
+        doctor = self.repository.get_doctor(doctor_id)
+        if doctor is None:
+            raise KeyError("Doctor not found")
+        if display_name is not None:
+            normalized_display_name = display_name.strip()
+            if not normalized_display_name:
+                raise ValueError("Doctor display name cannot be empty")
+            doctor.display_name = normalized_display_name
+        if enabled is not None:
+            doctor.enabled = enabled
+            if not enabled:
+                self.repository.delete_sessions_for_doctor(doctor.id)
+        doctor.updated_at = utc_now()
+        return self.repository.save_doctor(doctor)
+
+    def reset_password(self, doctor_id: str, *, new_password: str) -> DoctorAccount:
+        doctor = self.repository.get_doctor(doctor_id)
+        if doctor is None:
+            raise KeyError("Doctor not found")
+        if len(new_password or "") < 6:
+            raise ValueError("New password must be at least 6 characters")
+        doctor.password_hash = self._hash_password(new_password)
+        doctor.updated_at = utc_now()
+        self.repository.delete_sessions_for_doctor(doctor.id)
         return self.repository.save_doctor(doctor)
 
     def login(self, *, username: str, password: str) -> AuthSession:

@@ -52,6 +52,8 @@ class AppSettings:
     rag_index_dir: Path | None = None
     rag_llm_fusion_enabled: bool = True
     max_upload_bytes: int = 50 * 1024 * 1024
+    max_upload_files_per_batch: int = 10
+    max_upload_batch_bytes: int = 100 * 1024 * 1024
     max_pdf_pages: int = 50
     analysis_worker_count: int = 20
     case_document_worker_count: int = 2
@@ -155,6 +157,13 @@ def load_settings() -> AppSettings:
         "off",
     }
     max_upload_bytes = int(float(os.getenv("FM_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
+    max_upload_files_per_batch = max(
+        1,
+        min(int(os.getenv("FM_MAX_UPLOAD_FILES_PER_BATCH", "10")), 50),
+    )
+    max_upload_batch_bytes = int(
+        float(os.getenv("FM_MAX_UPLOAD_BATCH_MB", "100")) * 1024 * 1024
+    )
     max_pdf_pages = int(os.getenv("FM_MAX_PDF_PAGES", "50"))
     analysis_worker_count = max(
         1,
@@ -195,6 +204,8 @@ def load_settings() -> AppSettings:
         rag_index_dir=rag_index_dir,
         rag_llm_fusion_enabled=rag_llm_fusion_enabled,
         max_upload_bytes=max_upload_bytes,
+        max_upload_files_per_batch=max_upload_files_per_batch,
+        max_upload_batch_bytes=max_upload_batch_bytes,
         max_pdf_pages=max_pdf_pages,
         analysis_worker_count=analysis_worker_count,
         case_document_worker_count=case_document_worker_count,

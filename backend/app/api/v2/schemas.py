@@ -116,6 +116,23 @@ class CaseResponse(ContractModel):
     attachments: list[AttachmentResponse] = Field(default_factory=list)
 
 
+class CaseSummaryResponse(ContractModel):
+    id: str
+    customer_name: str
+    consultant_id: str | None = None
+    status: CaseStatusValue
+    attachment_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseListResponse(ContractModel):
+    items: list[CaseSummaryResponse] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+
+
 class AttachmentFailure(ContractModel):
     code: str
     message: str
@@ -419,7 +436,6 @@ FoodSensitivityChange = Annotated[
 
 
 class ReviewSubmitRequest(StrictRequestModel):
-    reviewer_id: str = Field(min_length=1, max_length=160)
     expected_revision: int = Field(ge=1)
     finding_changes: list[FindingChange] = Field(default_factory=list)
     supplement_changes: list[SupplementChange] = Field(default_factory=list)
@@ -466,6 +482,129 @@ class DraftRecommendationResponse(ContractModel):
     current_supplement_overlap_notice: str | None = None
 
 
+class SafetyDecisionResponse(ContractModel):
+    rule_id: str
+    sku_id: str | None = None
+    action: Literal["exclude", "requires_review", "warn"]
+    message: str
+    source_ref: str | None = None
+
+
+class StructuredSystemFindingResponse(ContractModel):
+    system_id: str
+    system_name: str
+    priority_level: str
+    priority_score: float
+    summary: str
+    finding_ids: list[str] = Field(default_factory=list)
+
+
+class LifestyleActionResponse(ContractModel):
+    action_id: str
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    category: str
+    text: str
+    anchor_refs: list[str] = Field(default_factory=list)
+    quantity: str | None = None
+    safety_level: Literal["standard", "review", "referral"]
+    clinician_review_required: bool
+
+
+class LifestyleSectionResponse(ContractModel):
+    domain: Literal["diet", "movement", "sleep", "stress"]
+    title: str
+    actions: list[LifestyleActionResponse] = Field(default_factory=list)
+
+
+class LifestyleProtocolResponse(ContractModel):
+    protocol_id: str
+    title: str
+    admission: Literal["direct", "review", "referral"]
+    reason: str
+    anchor_refs: list[str] = Field(default_factory=list)
+
+
+class LifestylePlanResponse(ContractModel):
+    status: Literal["ready", "partial", "needs_review", "blocked"]
+    rule_version: str
+    selected_protocols: list[LifestyleProtocolResponse] = Field(default_factory=list)
+    sections: list[LifestyleSectionResponse] = Field(default_factory=list)
+    monitoring: list[str] = Field(default_factory=list)
+    missing_info: list[str] = Field(default_factory=list)
+    clinician_review_required: bool
+
+
+class HealthPortraitFindingResponse(ContractModel):
+    finding_id: str
+    name: str
+    system_ids: list[str] = Field(default_factory=list)
+    evidence_level: Literal["objective_lab", "imaging_pathology", "symptom_cluster", "patient_reported"]
+    display_value: str | None = None
+    deviation_tier: Literal["P0", "T2", "T1", "unknown"]
+    trend: Literal["worsening", "improving", "stable", "unknown"]
+    food_sensitivity: bool
+    intervenable: bool
+    objective: bool
+    organ_damage_signal: bool
+
+
+class HealthPortraitRiskResponse(ContractModel):
+    p0_referral: list[str] = Field(default_factory=list)
+    review_required: list[str] = Field(default_factory=list)
+    dose_caution: list[str] = Field(default_factory=list)
+
+
+class HealthMechanismChainResponse(ContractModel):
+    chain_id: str
+    axis_name: str
+    system_path: list[str] = Field(default_factory=list)
+    display_path: list[str] = Field(default_factory=list)
+    supporting_finding_ids: list[str] = Field(default_factory=list)
+    auxiliary_food_sensitivity_ids: list[str] = Field(default_factory=list)
+    objective_support_count: int
+
+
+class HealthInterventionHubResponse(ContractModel):
+    system_id: str
+    label: str
+    supporting_finding_ids: list[str] = Field(default_factory=list)
+    chain_intersection_count: int
+    upstream_score: int
+    evidence_score: int
+    downstream_reach: int
+
+
+class HealthInterventionStepResponse(ContractModel):
+    order: int
+    label: str
+    target_system_ids: list[str] = Field(default_factory=list)
+    linked_recommendation_ids: list[str] = Field(default_factory=list)
+    linked_lifestyle_action_ids: list[str] = Field(default_factory=list)
+
+
+class CoreHealthPortraitDecisionResponse(ContractModel):
+    findings: list[HealthPortraitFindingResponse] = Field(default_factory=list)
+    risks: HealthPortraitRiskResponse
+    mechanism_chains: list[HealthMechanismChainResponse] = Field(default_factory=list)
+    intervention_hubs: list[HealthInterventionHubResponse] = Field(default_factory=list)
+    intervention_steps: list[HealthInterventionStepResponse] = Field(default_factory=list)
+    steady_state_axis: str | None = None
+
+
+class CoreHealthPortraitResponse(ContractModel):
+    text: str
+    status: Literal["ready", "degraded", "referral_only"]
+    manual_review_required: bool
+    validation_violations: list[str] = Field(default_factory=list)
+    decision: CoreHealthPortraitDecisionResponse
+    rule_version: str
+
+
+class ReportSectionResponse(ContractModel):
+    title: str
+    items: list[str] = Field(default_factory=list)
+
+
 class DraftResponse(ContractModel):
     id: str
     case_id: str
@@ -483,6 +622,13 @@ class DraftResponse(ContractModel):
     abstain_reason: str | None = None
     manual_review_required: bool
     red_flags: list[str] = Field(default_factory=list)
+    core_health_portrait: CoreHealthPortraitResponse | None = None
+    structured_system_findings: list[StructuredSystemFindingResponse] = Field(default_factory=list)
+    lifestyle_plan: LifestylePlanResponse | None = None
+    safety_decisions: list[SafetyDecisionResponse] = Field(default_factory=list)
+    uncovered_system_ids: list[str] = Field(default_factory=list)
+    uncovered_system_reasons: dict[str, Literal["no_approved_mapping", "evidence_not_eligible", "safety_excluded"]] = Field(default_factory=dict)
+    report_sections: list[ReportSectionResponse] = Field(default_factory=list)
     generated_at: datetime
 
 
@@ -493,7 +639,7 @@ class DosageOverrideRequest(StrictRequestModel):
 
 
 class ApprovalRequest(StrictRequestModel):
-    reviewer_id: str = Field(min_length=1, max_length=160)
+    expected_revision: int = Field(ge=1)
     publishable_summary: str | None = Field(default=None, max_length=50000)
     excluded_sku_ids: list[str] = Field(default_factory=list)
     dosage_overrides: list[DosageOverrideRequest] = Field(default_factory=list)

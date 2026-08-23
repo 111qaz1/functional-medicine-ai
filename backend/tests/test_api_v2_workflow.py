@@ -242,7 +242,19 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(questionnaire.status_code, 201, questionnaire.text)
         self.assertEqual(questionnaire.json()["items"][0]["status"], "questionnaire_imported")
 
+        own_cases = self.client.get("/api/v2/cases", headers=self.headers)
+        self.assertEqual(own_cases.status_code, 200, own_cases.text)
+        self.assertEqual(own_cases.json()["total"], 1)
+        self.assertEqual(own_cases.json()["items"][0]["id"], case_id)
+        self.assertEqual(own_cases.json()["items"][0]["attachment_count"], 1)
+
         other_token = self._external_token("doctor-other", "Other synthetic doctor")
+        other_cases = self.client.get(
+            "/api/v2/cases",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        self.assertEqual(other_cases.status_code, 200, other_cases.text)
+        self.assertEqual(other_cases.json()["items"], [])
         denied = self.client.get(
             f"/api/v2/cases/{case_id}",
             headers={"Authorization": f"Bearer {other_token}"},
@@ -301,7 +313,6 @@ class V2WorkflowApiTests(unittest.TestCase):
                 f"/api/v2/cases/{case_id}/analyses/analysis-v2/reviews",
                 headers=self.headers,
                 json={
-                    "reviewer_id": "doctor-v2",
                     "expected_revision": 1,
                     "finding_changes": [
                         {
@@ -318,10 +329,17 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(sent_finding.name, "Doctor confirmed marker")
         self.assertEqual(sent_finding.marker_code, "INTERNAL-MARKER")
 
+        spoofed = self.client.post(
+            f"/api/v2/cases/{case_id}/analyses/analysis-v2/reviews",
+            headers=self.headers,
+            json={"reviewer_id": "doctor-other", "expected_revision": 2},
+        )
+        self.assertEqual(spoofed.status_code, 422)
+
         conflict = self.client.post(
             f"/api/v2/cases/{case_id}/analyses/analysis-v2/reviews",
             headers=self.headers,
-            json={"reviewer_id": "doctor-v2", "expected_revision": 2},
+            json={"expected_revision": 2},
         )
         self.assertEqual(conflict.status_code, 409)
         self.assertEqual(conflict.json()["code"], "ANALYSIS_REVISION_CONFLICT")
@@ -353,13 +371,21 @@ class V2WorkflowApiTests(unittest.TestCase):
             "/api/v2/drafts/draft-v2/approval",
             headers=self.headers,
             json={
-                "reviewer_id": "doctor-v2",
+                "expected_revision": draft.revision,
                 "excluded_sku_ids": ["SKU-1"],
                 "dosage_overrides": [{"sku_id": "SKU-1", "option_id": "default"}],
             },
         )
         self.assertEqual(invalid.status_code, 422)
         self.assertEqual(invalid.headers["content-type"], "application/problem+json")
+
+        stale = self.client.post(
+            "/api/v2/drafts/draft-v2/approval",
+            headers=self.headers,
+            json={"expected_revision": draft.revision + 1},
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["code"], "DRAFT_REVISION_CONFLICT")
 
         pdf_path = self.root / ".runtime" / "reports" / "synthetic-report.pdf"
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,7 +417,7 @@ class V2WorkflowApiTests(unittest.TestCase):
                 "/api/v2/drafts/draft-v2/approval",
                 headers=self.headers,
                 json={
-                    "reviewer_id": "doctor-v2",
+                    "expected_revision": draft.revision,
                     "publishable_summary": "Synthetic publishable report",
                     "excluded_sku_ids": ["SKU-2"],
                     "dosage_overrides": [
@@ -472,6 +498,20 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][1]["failure"]["code"], "ATTACHMENT_PREFLIGHT_FAILED")
         self.assertNotIn("private preflight", response.text)
 
+    def test_attachment_batch_file_limit_is_rejected_before_parsing(self) -> None:
+        case_id = self._create_case()
+        response = self.client.post(
+            f"/api/v2/cases/{case_id}/attachments",
+            headers=self.headers,
+            files=[
+                ("files", (f"synthetic-{index}.txt", b"synthetic", "text/plain"))
+                for index in range(11)
+            ],
+            data={"attachment_type": "medical_record"},
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertEqual(response.json()["code"], "ATTACHMENT_BATCH_FILE_LIMIT_EXCEEDED")
+
     def test_analysis_precondition_and_invalid_delta_have_distinct_problem_codes(self) -> None:
         case_id = self._create_case()
         no_input = self.client.post(
@@ -505,7 +545,6 @@ class V2WorkflowApiTests(unittest.TestCase):
             f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
             headers=self.headers,
             json={
-                "reviewer_id": "doctor-v2",
                 "expected_revision": analysis.revision,
                 "finding_changes": [
                     {
@@ -539,7 +578,6 @@ class V2WorkflowApiTests(unittest.TestCase):
             f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
             headers=self.headers,
             json={
-                "reviewer_id": "doctor-v2",
                 "expected_revision": analysis.revision,
             },
         )
@@ -576,7 +614,6 @@ class V2WorkflowApiTests(unittest.TestCase):
                 f"/api/v2/cases/{case_id}/analyses/{analysis.id}/reviews",
                 headers=self.headers,
                 json={
-                    "reviewer_id": "doctor-v2",
                     "expected_revision": analysis.revision,
                 },
             )
@@ -586,7 +623,9 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "queued")
         persisted = self.container.repository.get_case_analysis(analysis.id)
         self.assertEqual(persisted.revision, analysis.revision + 1)
-        self.assertEqual(persisted.reviewed_by, "doctor-v2")
+        authenticated_doctor = self.container.auth_service.get_doctor_for_session(self.token)
+        self.assertIsNotNone(authenticated_doctor)
+        self.assertEqual(persisted.reviewed_by, authenticated_doctor.id)
         self.assertEqual(persisted.reviewed_abnormal_findings[0].id, "finding-v2")
         self.assertEqual(
             persisted.reviewed_abnormal_findings[0].source_text,

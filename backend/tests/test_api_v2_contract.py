@@ -25,8 +25,8 @@ from app.core.settings import AppSettings
 
 V1_BASELINE_SHA256 = "5367fbef40cc2069cd2910d5b1867777f4889e176445ede0487c5c9d33b5affe"
 V2_CONTRACT_SHA256 = (
-    "59eb26c4457806d16c15e9b07bf16f0da18370"
-    "494812aa6f9c7a99f1d7927634"
+    "1095385f2971878b3d89a494887ce7b474a12a"
+    "68668736cf884164d280fbcc8a"
 )
 EXPECTED_V2_PATHS = {
     "/api/v2/cases",

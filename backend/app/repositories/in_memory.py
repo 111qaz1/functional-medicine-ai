@@ -785,6 +785,10 @@ class LocalRepository:
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
+    def delete_sessions_for_doctor(self, doctor_id: str) -> None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute("DELETE FROM sessions WHERE doctor_id = ?", (doctor_id,))
+
     def delete_expired_sessions(self, now_iso: str) -> None:
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso,))

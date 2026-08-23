@@ -1,7 +1,6 @@
 import type { ApprovalRequest, DraftResponse } from "./types";
 
 export interface ApprovalDraftState {
-  reviewerId: string;
   excludedSkuIds: string[];
   dosageSelections: Record<string, string>;
   dosageNotes: Record<string, string>;
@@ -11,7 +10,6 @@ export interface ApprovalDraftState {
 
 export function createApprovalDraft(draft: DraftResponse): ApprovalDraftState {
   return {
-    reviewerId: "",
     excludedSkuIds: [],
     dosageSelections: Object.fromEntries(
       draft.recommended_skus.map((item) => [item.sku_id, item.dosage_option_id ?? ""])
@@ -23,9 +21,6 @@ export function createApprovalDraft(draft: DraftResponse): ApprovalDraftState {
 }
 
 export function buildApprovalRequest(draft: DraftResponse, state: ApprovalDraftState): ApprovalRequest {
-  const reviewerId = state.reviewerId.trim();
-  if (!reviewerId) throw new Error("请填写审批医生 ID。");
-
   const knownSkuIds = new Set(draft.recommended_skus.map((item) => item.sku_id));
   const excludedSkuIds = [...new Set(state.excludedSkuIds)];
   if (excludedSkuIds.some((id) => !knownSkuIds.has(id))) throw new Error("排除列表包含未知 SKU。");
@@ -49,7 +44,7 @@ export function buildApprovalRequest(draft: DraftResponse, state: ApprovalDraftS
   if (state.editSummary && !summary) throw new Error("公开摘要开启编辑后不能为空。");
 
   return {
-    reviewer_id: reviewerId,
+    expected_revision: draft.revision,
     publishable_summary: state.editSummary ? summary : null,
     excluded_sku_ids: excludedSkuIds,
     dosage_overrides: dosageOverrides

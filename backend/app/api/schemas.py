@@ -304,6 +304,29 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class DoctorCreateRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str | None = None
+
+
+class DoctorUpdateRequest(BaseModel):
+    display_name: str | None = None
+    enabled: bool | None = None
+
+
+class DoctorPasswordResetRequest(BaseModel):
+    new_password: str
+
+
+class AuthBootstrapResponse(BaseModel):
+    required: bool
+
+
+class DoctorListResponse(BaseModel):
+    doctors: list[DoctorAccountResponse]
+
+
 class AuthResponse(BaseModel):
     doctor: DoctorAccountResponse
 

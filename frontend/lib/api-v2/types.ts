@@ -71,6 +71,23 @@ export interface CaseResponse {
   attachments: AttachmentResponse[];
 }
 
+export interface CaseSummaryResponse {
+  id: string;
+  customer_name: string;
+  consultant_id: string | null;
+  status: CaseStatus;
+  attachment_count: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface CaseListResponse {
+  items: CaseSummaryResponse[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 export interface AttachmentFailure {
   code: string;
   message: string;
@@ -286,7 +303,6 @@ export type FoodSensitivityChange =
   | { op: "remove"; id: string };
 
 export interface ReviewSubmitRequest {
-  reviewer_id: string;
   expected_revision: number;
   finding_changes: FindingChange[];
   supplement_changes: SupplementChange[];
@@ -335,6 +351,104 @@ export interface DraftRecommendationResponse {
 
 export type DraftStatus = "pending_review" | "approved" | "abstained";
 
+export interface SafetyDecisionResponse {
+  rule_id: string;
+  sku_id: string | null;
+  action: "exclude" | "requires_review" | "warn";
+  message: string;
+  source_ref: string | null;
+}
+
+export interface StructuredSystemFindingResponse {
+  system_id: string;
+  system_name: string;
+  priority_level: string;
+  priority_score: number;
+  summary: string;
+  finding_ids: string[];
+}
+
+export interface LifestyleActionResponse {
+  action_id: string;
+  domain: "diet" | "movement" | "sleep" | "stress";
+  category: string;
+  text: string;
+  anchor_refs: string[];
+  quantity: string | null;
+  safety_level: "standard" | "review" | "referral";
+  clinician_review_required: boolean;
+}
+
+export interface LifestylePlanResponse {
+  status: "ready" | "partial" | "needs_review" | "blocked";
+  rule_version: string;
+  selected_protocols: Array<{
+    protocol_id: string;
+    title: string;
+    admission: "direct" | "review" | "referral";
+    reason: string;
+    anchor_refs: string[];
+  }>;
+  sections: Array<{
+    domain: "diet" | "movement" | "sleep" | "stress";
+    title: string;
+    actions: LifestyleActionResponse[];
+  }>;
+  monitoring: string[];
+  missing_info: string[];
+  clinician_review_required: boolean;
+}
+
+export interface CoreHealthPortraitResponse {
+  text: string;
+  status: "ready" | "degraded" | "referral_only";
+  manual_review_required: boolean;
+  validation_violations: string[];
+  decision: {
+    findings: Array<{
+      finding_id: string;
+      name: string;
+      system_ids: string[];
+      evidence_level: "objective_lab" | "imaging_pathology" | "symptom_cluster" | "patient_reported";
+      display_value: string | null;
+      deviation_tier: "P0" | "T2" | "T1" | "unknown";
+      trend: "worsening" | "improving" | "stable" | "unknown";
+      food_sensitivity: boolean;
+      intervenable: boolean;
+      objective: boolean;
+      organ_damage_signal: boolean;
+    }>;
+    risks: { p0_referral: string[]; review_required: string[]; dose_caution: string[] };
+    mechanism_chains: Array<{
+      chain_id: string;
+      axis_name: string;
+      system_path: string[];
+      display_path: string[];
+      supporting_finding_ids: string[];
+      auxiliary_food_sensitivity_ids: string[];
+      objective_support_count: number;
+    }>;
+    intervention_hubs: Array<{
+      system_id: string;
+      label: string;
+      supporting_finding_ids: string[];
+      chain_intersection_count: number;
+      upstream_score: number;
+      evidence_score: number;
+      downstream_reach: number;
+    }>;
+    intervention_steps: Array<{
+      order: number;
+      label: string;
+      target_system_ids: string[];
+      linked_recommendation_ids: string[];
+      linked_lifestyle_action_ids: string[];
+    }>;
+    steady_state_axis: string | null;
+  };
+  rule_version: string;
+}
+
 export interface DraftResponse {
   id: string;
   case_id: string;
@@ -352,6 +466,13 @@ export interface DraftResponse {
   abstain_reason: string | null;
   manual_review_required: boolean;
   red_flags: string[];
+  core_health_portrait: CoreHealthPortraitResponse | null;
+  structured_system_findings: StructuredSystemFindingResponse[];
+  lifestyle_plan: LifestylePlanResponse | null;
+  safety_decisions: SafetyDecisionResponse[];
+  uncovered_system_ids: string[];
+  uncovered_system_reasons: Record<string, "no_approved_mapping" | "evidence_not_eligible" | "safety_excluded">;
+  report_sections: Array<{ title: string; items: string[] }>;
   generated_at: IsoDateTime;
 }
 
@@ -362,7 +483,7 @@ export interface DosageOverrideRequest {
 }
 
 export interface ApprovalRequest {
-  reviewer_id: string;
+  expected_revision: number;
   publishable_summary: string | null;
   excluded_sku_ids: string[];
   dosage_overrides: DosageOverrideRequest[];

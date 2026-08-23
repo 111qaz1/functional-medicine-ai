@@ -1,8 +1,25 @@
 import React from "react";
 import type { ReactNode } from "react";
+import {
+  BeakerIcon,
+  ClipboardDocumentCheckIcon,
+  ClipboardDocumentListIcon,
+  DocumentArrowDownIcon,
+  FolderOpenIcon,
+  PencilSquareIcon
+} from "@heroicons/react/24/outline";
 
 import { workflowCopy, workflowStepStateLabels } from "../../lib/api-v2/copy";
 import type { WorkflowStep, WorkflowStepId, WorkflowStepState } from "../../lib/api-v2/workflow-state";
+
+const workflowStepIcons = {
+  case: ClipboardDocumentListIcon,
+  attachments: FolderOpenIcon,
+  analysis: BeakerIcon,
+  review: PencilSquareIcon,
+  draft: ClipboardDocumentCheckIcon,
+  report: DocumentArrowDownIcon
+} as const;
 
 export type WorkflowTheme = "paracelsus" | "test";
 
@@ -56,8 +73,9 @@ export function WorkflowShell({
         <p className="workflow-shell__nav-heading">{workflowCopy.navigation.process}</p>
         <nav className="integration-workflow-steps" aria-label="病例处理步骤">
           <ol>
-            {steps.map((step, index) => {
+            {steps.map((step) => {
               const copy = workflowCopy.steps[step.id];
+              const StepIcon = workflowStepIcons[step.id];
               const isCurrent = step.id === currentStep;
               const isBlocked = step.state === "blocked";
               return (
@@ -69,7 +87,7 @@ export function WorkflowShell({
                     aria-disabled={isBlocked ? true : undefined}
                     tabIndex={isBlocked ? -1 : undefined}
                   >
-                    <span className="workflow-step__index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="workflow-step__index" aria-hidden="true"><StepIcon className="workflow-step__icon" /></span>
                     <span className="workflow-step__copy">
                       <strong>{copy.label}</strong>
                       <small>{workflowStepStateLabels[step.state]}</small>

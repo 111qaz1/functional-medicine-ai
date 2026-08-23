@@ -16,6 +16,7 @@
 | 方法 | 路径 | 成功状态 | 响应 |
 |---|---|---:|---|
 | POST | `/api/v2/cases` | 201 | `CaseResponse` |
+| GET | `/api/v2/cases?offset=0&limit=50` | 200 | `CaseListResponse` |
 | GET | `/api/v2/cases/{case_id}` | 200 | `CaseResponse` |
 | PUT | `/api/v2/cases/{case_id}/clinical-summary` | 200 | `CaseResponse` |
 | POST | `/api/v2/cases/{case_id}/attachments` | 201 | `AttachmentBatchResponse` |
@@ -175,7 +176,6 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 
 ```json
 {
-  "reviewer_id": "doctor-001",
   "expected_revision": 1,
   "finding_changes": [
     {
@@ -230,7 +230,7 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 
 ```json
 {
-  "reviewer_id": "doctor-001",
+  "expected_revision": 3,
   "publishable_summary": "医生确认后的公开总结",
   "excluded_sku_ids": ["SKU-002"],
   "dosage_overrides": [

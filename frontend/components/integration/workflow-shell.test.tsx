@@ -31,6 +31,8 @@ describe("WorkflowShell", () => {
     expect(html).toContain('data-theme="test"');
     expect(html).toContain('data-current-step="attachments"');
     expect(html).toContain('aria-current="step"');
+    expect(html).toContain('aria-disabled="true" tabindex="-1"');
+    expect(html).not.toContain('href="#workflow-step-analysis"');
     expect(html).toContain('data-step="attachments"');
     expect(html).toContain('role="alert"');
   });

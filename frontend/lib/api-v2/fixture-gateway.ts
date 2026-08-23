@@ -55,6 +55,7 @@ interface FixtureCaseState {
   report: ReportResponse | null;
   operation: FixtureOperationState | null;
   draftRetried: boolean;
+  medicalRecordHashes?: Record<string, string>;
 }
 
 interface FixtureDatabase {
@@ -248,6 +249,143 @@ function createFixtureDraft(caseId: string, draftId: string): DraftResponse {
   };
 }
 
+function invalidFixtureRequest(instance: string, detail: string, status = 422): never {
+  throw problem("REQUEST_VALIDATION_FAILED", status, `Fixture 模拟：${detail}`, instance);
+}
+
+function applyReviewDeltas(
+  analysis: AnalysisResponse,
+  payload: ReviewSubmitRequest,
+  instance: string
+): void {
+  const findingIds = new Set<string>();
+  let findingSequence = 0;
+  for (const change of payload.finding_changes) {
+    if (change.op === "add") {
+      findingSequence += 1;
+      analysis.abnormal_findings.push({
+        id: `finding_fixture_added_${analysis.revision}_${findingSequence}`,
+        ...change.value,
+        interpretation: null,
+        report_explanation: null,
+        neutral_interpretation: null,
+        support_need_text: null,
+        confidence: 1,
+        evidence_status: "doctor_added",
+        evidence_notes: [],
+        observed_at: null
+      });
+      continue;
+    }
+    if (findingIds.has(change.id)) invalidFixtureRequest(instance, `同一指标 ${change.id} 不能重复操作。`);
+    findingIds.add(change.id);
+    const index = analysis.abnormal_findings.findIndex((item) => item.id === change.id);
+    if (index < 0) invalidFixtureRequest(instance, `指标 ${change.id} 不存在。`);
+    if (change.op === "remove") analysis.abnormal_findings.splice(index, 1);
+    else analysis.abnormal_findings[index] = { ...analysis.abnormal_findings[index], ...change.changes };
+  }
+
+  const supplementIds = new Set<string>();
+  let supplementSequence = 0;
+  for (const change of payload.supplement_changes) {
+    if (change.op === "add") {
+      supplementSequence += 1;
+      analysis.current_supplements.push({
+        id: `supplement_fixture_added_${analysis.revision}_${supplementSequence}`,
+        name: change.value.name,
+        source_file_ids: [],
+        source_file_names: [],
+        doctor_added: true
+      });
+      continue;
+    }
+    if (supplementIds.has(change.id)) invalidFixtureRequest(instance, `同一补充剂 ${change.id} 不能重复操作。`);
+    supplementIds.add(change.id);
+    const index = analysis.current_supplements.findIndex((item) => item.id === change.id);
+    if (index < 0) invalidFixtureRequest(instance, `补充剂 ${change.id} 不存在。`);
+    if (change.op === "remove") analysis.current_supplements.splice(index, 1);
+    else analysis.current_supplements[index] = { ...analysis.current_supplements[index], ...change.changes };
+  }
+
+  const foodIds = new Set<string>();
+  let foodSequence = 0;
+  for (const change of payload.food_sensitivity_changes) {
+    if (change.op === "add") {
+      foodSequence += 1;
+      const { source_file_id, source_file_name, ...value } = change.value;
+      if (!analysis.food_sensitivity) {
+        analysis.food_sensitivity = {
+          source_file_id,
+          source_file_name,
+          source_page: value.source_page,
+          items: [],
+          interpretations: [],
+          valid: true,
+          warning: null
+        };
+      }
+      analysis.food_sensitivity.items.push({
+        id: `food_fixture_added_${analysis.revision}_${foodSequence}`,
+        ...value,
+        evidence_status: "doctor_added"
+      });
+      continue;
+    }
+    if (foodIds.has(change.id)) invalidFixtureRequest(instance, `同一食敏条目 ${change.id} 不能重复操作。`);
+    foodIds.add(change.id);
+    const index = analysis.food_sensitivity?.items.findIndex((item) => item.id === change.id) ?? -1;
+    if (index < 0 || !analysis.food_sensitivity) invalidFixtureRequest(instance, `食敏条目 ${change.id} 不存在。`);
+    if (change.op === "remove") analysis.food_sensitivity.items.splice(index, 1);
+    else analysis.food_sensitivity.items[index] = { ...analysis.food_sensitivity.items[index], ...change.changes };
+  }
+}
+
+function applyApprovalEdits(draft: DraftResponse, payload: ApprovalRequest, instance: string): DraftResponse {
+  const excludedIds = new Set(payload.excluded_sku_ids);
+  const overrides = new Map(payload.dosage_overrides.map((item) => [item.sku_id, item]));
+  const knownIds = new Set(draft.recommended_skus.map((item) => item.sku_id));
+  const unknownIds = [...excludedIds, ...overrides.keys()].filter((skuId) => !knownIds.has(skuId));
+  if (unknownIds.length) invalidFixtureRequest(instance, `审批引用了未知 SKU：${unknownIds.join("、")}。`);
+  if ([...excludedIds].some((skuId) => overrides.has(skuId))) {
+    invalidFixtureRequest(instance, "同一 SKU 不能同时排除和改选剂量。");
+  }
+
+  const recommendations = draft.recommended_skus
+    .filter((item) => !excludedIds.has(item.sku_id))
+    .map((item) => {
+      const override = overrides.get(item.sku_id);
+      if (!override) return item;
+      const option = item.dosage_options.find((candidate) => candidate.option_id === override.option_id);
+      if (!option) invalidFixtureRequest(instance, `${item.display_name} 的剂量选项无效。`);
+      if (option.option_id !== item.dosage_option_id && !(override.note ?? "").trim()) {
+        invalidFixtureRequest(instance, `${item.display_name} 改选非默认剂量时必须填写说明。`);
+      }
+      return {
+        ...item,
+        dosage: option.display_text,
+        dosage_option_id: option.option_id,
+        dosage_option_label: option.label,
+        dosage_regimen: option.regimen,
+        dosage_match_reasons: option.option_id === item.dosage_option_id
+          ? item.dosage_match_reasons
+          : [...item.dosage_match_reasons, `医生人工改档：${option.label}；备注：${override.note?.trim()}`]
+      };
+    });
+  if (!recommendations.length) invalidFixtureRequest(instance, "至少保留一项营养素推荐后才能审核发布。", 409);
+
+  return {
+    ...draft,
+    status: "approved",
+    public_summary: payload.publishable_summary === null ? draft.public_summary : [payload.publishable_summary],
+    recommended_skus: recommendations
+  };
+}
+
+async function fileSha256(file: File): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export class FixtureWorkflowGateway implements WorkflowGateway {
   private readonly storage: FixtureStorage;
 
@@ -303,7 +441,8 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
       draft: null,
       report: null,
       operation: null,
-      draftRetried: false
+      draftRetried: false,
+      medicalRecordHashes: {}
     };
     this.write(database);
     return structuredClone(caseResource);
@@ -331,11 +470,12 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     this.authenticate(instance);
     const database = this.read();
     const state = this.caseState(database, caseId, instance);
-    const items = files.map((file, index) => {
+    const items: AttachmentBatchResponse["items"] = [];
+    const medicalRecordHashes = state.medicalRecordHashes ??= {};
+    for (const [index, file] of files.entries()) {
       const fail = this.scenario === "attachment_partial_failure" && index === files.length - 1;
-      const duplicate = state.caseResource.attachments.some((item) => item.filename === file.name);
       if (fail) {
-        return {
+        items.push({
           file_id: null,
           filename: file.name,
           attachment_type: attachmentType,
@@ -346,10 +486,20 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
           lab_item_count: 0,
           warnings: [],
           failure: { code: "FIXTURE_FILE_REJECTED", message: "Fixture 模拟：单文件处理失败。", retryable: false }
-        };
+        });
+        continue;
       }
-      const fileId = attachmentType === "medical_record" ? "file_fixture_medical" : "file_fixture_questionnaire";
-      if (attachmentType === "medical_record" && !duplicate) {
+      const contentHash = attachmentType === "medical_record" ? await fileSha256(file) : null;
+      const duplicateId = contentHash
+        ? Object.entries(medicalRecordHashes).find(([, hash]) => hash === contentHash)?.[0] ?? null
+        : null;
+      const fileId = duplicateId
+        ?? (attachmentType === "medical_record"
+          ? state.caseResource.attachments.length === 0
+            ? "file_fixture_medical"
+            : `file_fixture_medical_${state.caseResource.attachments.length + 1}`
+          : "file_fixture_questionnaire");
+      if (attachmentType === "medical_record" && !duplicateId) {
         const attachment: AttachmentResponse = {
           id: fileId,
           filename: file.name,
@@ -368,20 +518,21 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
           error: null
         };
         state.caseResource.attachments.push(attachment);
+        medicalRecordHashes[fileId] = contentHash!;
       }
-      return {
+      items.push({
         file_id: fileId,
         filename: file.name,
         attachment_type: attachmentType,
-        status: duplicate ? "duplicate" as const : attachmentType === "questionnaire" ? "questionnaire_imported" as const : "parsed" as const,
+        status: duplicateId ? "duplicate" : attachmentType === "questionnaire" ? "questionnaire_imported" : "parsed",
         media_type: file.type || "text/plain",
         size_bytes: file.size,
         parse_status: attachmentType === "medical_record" ? "parsed" as const : null,
         lab_item_count: attachmentType === "medical_record" ? 1 : 0,
         warnings: [],
         failure: null
-      };
-    });
+      });
+    }
     const acceptedCount = items.filter((item) => item.status !== "failed").length;
     state.caseResource.status = acceptedCount ? "parsing_completed" : state.caseResource.status;
     state.caseResource.updated_at = isoNow();
@@ -488,6 +639,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     if (this.scenario === "revision_conflict" || payload.expected_revision !== state.analysis.revision) {
       throw problem("ANALYSIS_REVISION_CONFLICT", 409, "Fixture 模拟：分析修订号冲突。", instance);
     }
+    applyReviewDeltas(state.analysis, payload, instance);
     state.analysis.revision += 1;
     state.analysis.status = "reviewed";
     state.analysis.draft_generation = { status: "queued", progress: 0, error: null };
@@ -556,7 +708,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     const database = this.read();
     const state = Object.values(database.cases).find((item) => item.draft?.id === draftId);
     if (!state?.draft) throw problem("DRAFT_NOT_FOUND", 404, "Fixture 草案不存在。", instance);
-    state.draft.status = "approved";
+    state.draft = applyApprovalEdits(state.draft, payload, instance);
     state.caseResource.status = "approved";
     const approvedAt = isoNow();
     if (this.scenario !== "report_not_ready") {

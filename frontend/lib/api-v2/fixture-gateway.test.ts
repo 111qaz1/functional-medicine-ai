@@ -64,12 +64,86 @@ describe("FixtureWorkflowGateway", () => {
     });
     const report = await fixture.getReport(prepared.draft!.id);
     const pdf = await fixture.downloadReport(prepared.draft!.id);
+    const publishedDraft = await fixture.getDraft(prepared.draft!.id);
 
     expect(approved.status).toBe("approved");
+    expect(publishedDraft.status).toBe("approved");
+    expect(publishedDraft.recommended_skus).toHaveLength(1);
+    expect(publishedDraft.recommended_skus[0]).toMatchObject({
+      sku_id: "SKU-FIXTURE-D3",
+      dosage: "隔日 1 粒",
+      dosage_option_id: "alternate",
+      dosage_option_label: "备选档"
+    });
     expect(report.status).toBe("ready");
     expect(pdf.filename).toBe(report.filename);
     expect(await pdf.blob.text()).toContain("%PDF-1.4");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("persists doctor review deltas before generating the draft", async () => {
+    const fixture = gateway();
+    const created = await createCaseWithAttachment(fixture);
+    const { analysis } = await completeAnalysis(fixture, created.id);
+
+    await fixture.submitReview(created.id, analysis.id, {
+      reviewer_id: "fixture-doctor",
+      expected_revision: analysis.revision,
+      finding_changes: [
+        { op: "update", id: "finding_fixture_vitamin_d", changes: { name: "25-羟维生素 D（医生已修订）" } },
+        {
+          op: "add",
+          value: {
+            name: "虚构新增指标",
+            result_text: "阳性",
+            raw_value: null,
+            unit: null,
+            reference_range: null,
+            abnormal_flag: "positive",
+            source_file_id: "file_fixture_medical",
+            source_file_name: "fixture-medical-record.txt",
+            source_page: 1,
+            source_text: "Synthetic doctor-added evidence"
+          }
+        }
+      ],
+      supplement_changes: [{ op: "remove", id: "supplement_fixture_c" }],
+      food_sensitivity_changes: [
+        { op: "update", id: "food_fixture_milk", changes: { severity: "high" } }
+      ]
+    });
+
+    const reviewed = await fixture.getLatestAnalysis(created.id);
+    expect(reviewed.revision).toBe(analysis.revision + 1);
+    expect(reviewed.abnormal_findings.map((item) => item.name)).toEqual([
+      "25-羟维生素 D（医生已修订）",
+      "虚构新增指标"
+    ]);
+    expect(reviewed.current_supplements).toEqual([]);
+    expect(reviewed.food_sensitivity?.items[0].severity).toBe("high");
+  });
+
+  it("uses content identity for medical duplicates and never cross-deduplicates questionnaires", async () => {
+    const fixture = gateway();
+    const created = await fixture.createCase({ customer_name: "虚构用户", consultant_id: null, notes: null });
+
+    const first = await fixture.uploadAttachments(created.id, "medical_record", [
+      new File(["same-content"], "first-name.txt", { type: "text/plain" })
+    ]);
+    const renamedDuplicate = await fixture.uploadAttachments(created.id, "medical_record", [
+      new File(["same-content"], "renamed.txt", { type: "text/plain" })
+    ]);
+    const sameNameDifferentContent = await fixture.uploadAttachments(created.id, "medical_record", [
+      new File(["different-content"], "first-name.txt", { type: "text/plain" })
+    ]);
+    const questionnaire = await fixture.uploadAttachments(created.id, "questionnaire", [
+      new File(["same-content"], "first-name.txt", { type: "text/plain" })
+    ]);
+
+    expect(first.items[0].status).toBe("parsed");
+    expect(renamedDuplicate.items[0].status).toBe("duplicate");
+    expect(sameNameDifferentContent.items[0].status).toBe("parsed");
+    expect(questionnaire.items[0].status).toBe("questionnaire_imported");
   });
 
   it("returns ordered partial attachment failures without rolling back accepted files", async () => {

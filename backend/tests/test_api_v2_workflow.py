@@ -26,6 +26,7 @@ from app.domain.models import (
     CaseAnalysis,
     DosageOptionSummary,
     DraftRecommendationItem,
+    DraftStatus,
     FinalGenerationStatus,
     Questionnaire,
     RecommendationDraft,
@@ -380,6 +381,8 @@ class V2WorkflowApiTests(unittest.TestCase):
         )
 
         def save_review(*args, **kwargs):
+            draft.status = DraftStatus.approved
+            self.container.repository.save_draft(draft)
             self.container.repository.save_review_decision(review)
             return review
 
@@ -404,6 +407,13 @@ class V2WorkflowApiTests(unittest.TestCase):
         internal_edits = approve.call_args.kwargs["edits"]
         self.assertIsInstance(internal_edits["dosage_overrides"], dict)
         self.assertEqual(approved.json()["report_url"], "/api/v2/drafts/draft-v2/report.pdf")
+
+        published_draft = self.client.get("/api/v2/drafts/draft-v2", headers=self.headers)
+        self.assertEqual(published_draft.status_code, 200, published_draft.text)
+        self.assertEqual(published_draft.json()["status"], "approved")
+        self.assertEqual(len(published_draft.json()["recommended_skus"]), 1)
+        self.assertEqual(published_draft.json()["recommended_skus"][0]["sku_id"], "SKU-1")
+        self.assertEqual(published_draft.json()["recommended_skus"][0]["dosage_option_id"], "alternate")
 
         report = self.client.get("/api/v2/drafts/draft-v2/report", headers=self.headers)
         self.assertEqual(report.status_code, 200, report.text)

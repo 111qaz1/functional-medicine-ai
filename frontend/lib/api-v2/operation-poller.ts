@@ -33,6 +33,7 @@ export class OperationPoller {
   private abortController: AbortController | null = null;
   private operationId: string | null = null;
   private startedAt = 0;
+  private hiddenAt: number | null = null;
   private running = false;
   private lastOperation: OperationResponse | null = null;
   private onUpdate: ((operation: OperationResponse) => void) | null = null;
@@ -53,6 +54,7 @@ export class OperationPoller {
     this.cancel(false);
     this.operationId = operationId;
     this.startedAt = this.now();
+    this.hiddenAt = this.visibility?.hidden ? this.startedAt : null;
     this.onUpdate = onUpdate;
     this.onStop = onStop;
     this.visibility?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -69,9 +71,14 @@ export class OperationPoller {
 
   private readonly handleVisibilityChange = (): void => {
     if (this.visibility?.hidden) {
+      if (this.hiddenAt === null) this.hiddenAt = this.now();
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       return;
+    }
+    if (this.hiddenAt !== null) {
+      this.startedAt += this.now() - this.hiddenAt;
+      this.hiddenAt = null;
     }
     if (!this.running && !this.timer && this.operationId) void this.tick();
   };
@@ -128,6 +135,7 @@ export class OperationPoller {
     this.abortController = null;
     this.visibility?.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.operationId = null;
+    this.hiddenAt = null;
     this.running = false;
     this.onUpdate = null;
     this.onStop = null;

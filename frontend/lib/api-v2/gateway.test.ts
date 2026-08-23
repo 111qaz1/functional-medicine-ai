@@ -10,21 +10,105 @@ function jsonResponse(body: unknown, status = 200, headers?: HeadersInit): Respo
   });
 }
 
+const caseResponse = {
+  id: "case_1",
+  customer_name: "虚构用户",
+  consultant_id: null,
+  status: "intake",
+  notes: null,
+  clinical_summary: null,
+  created_at: "2026-08-22T00:00:00Z",
+  updated_at: "2026-08-22T00:00:00Z",
+  attachments: []
+};
+
+const operationResponse = {
+  operation_id: "analysis_1",
+  kind: "case_workflow",
+  stage: "analysis",
+  status: "queued",
+  case_id: "case_1",
+  analysis_id: "analysis_1",
+  draft_id: null,
+  progress: { current: 0, total: 1, percent: 0, current_item: null },
+  failure: null,
+  created_at: "2026-08-22T00:00:00Z",
+  updated_at: "2026-08-22T00:00:00Z"
+};
+
+const analysisResponse = {
+  id: "analysis_1",
+  case_id: "case_1",
+  version: 1,
+  revision: 1,
+  status: "ready_for_review",
+  progress: { current: 1, total: 1, percent: 100, current_file_name: null },
+  case_summary: null,
+  system_findings: [],
+  abnormal_findings: [],
+  current_supplements: [],
+  food_sensitivity: null,
+  warnings: [],
+  error: null,
+  draft_generation: { status: "idle", progress: 0, error: null },
+  draft_id: null,
+  created_at: "2026-08-22T00:00:00Z",
+  updated_at: "2026-08-22T00:00:00Z"
+};
+
+const draftResponse = {
+  id: "draft_1",
+  case_id: "case_1",
+  status: "pending_review",
+  revision: 1,
+  public_summary: [],
+  key_lab_highlights: [],
+  recommended_skus: [],
+  lifestyle_actions: [],
+  rationale: [],
+  evidence_details: [],
+  contraindications: [],
+  missing_info: [],
+  confidence: 0,
+  abstain_reason: null,
+  manual_review_required: false,
+  red_flags: [],
+  generated_at: "2026-08-22T00:00:00Z"
+};
+
+const approvalResponse = {
+  draft_id: "draft_1",
+  status: "approved",
+  reviewer_id: "doctor_1",
+  publishable_report: "虚构报告",
+  approved_at: "2026-08-22T00:00:00Z",
+  report_ready: true,
+  report_url: "/api/v2/drafts/draft_1/report.pdf"
+};
+
+const reportResponse = {
+  draft_id: "draft_1",
+  status: "ready",
+  filename: "fixture-report.pdf",
+  download_url: "/api/v2/drafts/draft_1/report.pdf",
+  approved_at: "2026-08-22T00:00:00Z"
+};
+
 describe("HttpWorkflowGateway", () => {
   it("uses the 13 declared v2 routes and preserves Location, multipart, and PDF metadata", async () => {
     const responses = [
-      jsonResponse({ id: "case_1" }, 201),
-      jsonResponse({ id: "case_1" }),
-      jsonResponse({ id: "case_1", clinical_summary: "摘要" }),
-      jsonResponse({ items: [], meta: { case_id: "case_1" } }, 201),
-      jsonResponse({ operation_id: "analysis_1" }, 202, { Location: "/api/v2/operations/analysis_1" }),
-      jsonResponse({ operation_id: "analysis_1" }),
-      jsonResponse({ id: "analysis_1" }),
-      jsonResponse({ operation_id: "analysis_1" }, 202, { Location: "/api/v2/operations/analysis_1" }),
-      jsonResponse({ operation_id: "analysis_1" }, 202, { Location: "/api/v2/operations/analysis_1" }),
-      jsonResponse({ id: "draft_1" }),
-      jsonResponse({ draft_id: "draft_1" }),
-      jsonResponse({ draft_id: "draft_1", status: "ready" }),
+      jsonResponse(caseResponse, 201),
+      jsonResponse(caseResponse),
+      jsonResponse({ ...caseResponse, clinical_summary: "摘要" }),
+      jsonResponse({ items: [], meta: { case_id: "case_1", case_status: "parsing_completed", accepted_count: 0, failed_count: 0 } }, 201),
+      jsonResponse(operationResponse, 202, { Location: "/api/v2/operations/analysis_1" }),
+      jsonResponse(operationResponse),
+      jsonResponse(analysisResponse),
+      jsonResponse({ ...operationResponse, stage: "draft_generation" }, 202, { Location: "/api/v2/operations/analysis_1" }),
+      jsonResponse({ ...operationResponse, stage: "draft_generation" }, 202, { Location: "/api/v2/operations/analysis_1" }),
+      jsonResponse(draftResponse),
+      jsonResponse(approvalResponse),
+      jsonResponse(reportResponse),
       new Response(new Blob(["%PDF-fixture"], { type: "application/pdf" }), {
         status: 200,
         headers: {
@@ -138,6 +222,27 @@ describe("HttpWorkflowGateway", () => {
         code: "GATEWAY_RESPONSE_INVALID",
         detail: "服务端返回了无法识别的错误响应，请联系系统管理员。"
       }
+    });
+  });
+
+  it("rejects malformed successful JSON instead of trusting a TypeScript cast", async () => {
+    const gateway = new HttpWorkflowGateway(
+      vi.fn(async () => jsonResponse({ id: "case_1" })) as typeof fetch
+    );
+    await expect(gateway.getCase("case_1")).rejects.toMatchObject({
+      problem: { code: "GATEWAY_RESPONSE_INVALID", status: 502 }
+    });
+  });
+
+  it("rejects a successful non-PDF response from the report endpoint", async () => {
+    const gateway = new HttpWorkflowGateway(
+      vi.fn(async () => new Response("login page", {
+        status: 200,
+        headers: { "Content-Type": "text/html" }
+      })) as typeof fetch
+    );
+    await expect(gateway.downloadReport("draft_1")).rejects.toMatchObject({
+      problem: { code: "GATEWAY_RESPONSE_INVALID", status: 502 }
     });
   });
 });

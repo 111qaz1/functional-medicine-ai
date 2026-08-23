@@ -101,6 +101,30 @@ describe("OperationPoller", () => {
     expect(onStop).toHaveBeenCalledWith(expect.objectContaining({ reason: "terminal" }));
   });
 
+  it("does not count hidden wall time toward the automatic polling limit", async () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const visibility = new TestVisibility();
+    const getOperation = vi.fn(async () => operation(getOperation.mock.calls.length >= 2 ? "succeeded" : "running"));
+    const onStop = vi.fn();
+    const poller = new OperationPoller(gateway(getOperation), {
+      intervalMs: 100,
+      maxAutoPollMs: 500,
+      visibility,
+      now: () => now
+    });
+
+    poller.start("analysis_1", vi.fn(), onStop);
+    await vi.advanceTimersByTimeAsync(0);
+    visibility.setHidden(true);
+    now += 60_000;
+    visibility.setHidden(false);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(getOperation).toHaveBeenCalledTimes(2);
+    expect(onStop).toHaveBeenCalledWith(expect.objectContaining({ reason: "terminal" }));
+  });
+
   it("stops automatic polling at the time bound without marking the operation failed", async () => {
     vi.useFakeTimers();
     let now = 0;

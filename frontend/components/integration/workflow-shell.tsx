@@ -44,12 +44,14 @@ export function WorkflowShell({
           {steps.map((step, index) => {
             const copy = workflowCopy.steps[step.id];
             const isCurrent = step.id === currentStep;
+            const isBlocked = step.state === "blocked";
             return (
               <li key={step.id} data-state={step.state}>
                 <a
-                  href={`#workflow-step-${step.id}`}
+                  href={isBlocked ? undefined : `#workflow-step-${step.id}`}
                   aria-current={isCurrent ? "step" : undefined}
-                  aria-disabled={step.state === "blocked" ? true : undefined}
+                  aria-disabled={isBlocked ? true : undefined}
+                  tabIndex={isBlocked ? -1 : undefined}
                 >
                   <span className="workflow-step__index" aria-hidden="true">{index + 1}</span>
                   <span>

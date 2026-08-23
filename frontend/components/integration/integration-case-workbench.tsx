@@ -366,7 +366,7 @@ export function IntegrationCaseWorkbench({
   if (!caseResource) {
     const emptySteps = deriveWorkflowSteps({ caseResource: null, analysis: null, draft: null, report: null });
     return (
-      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case" theme={fixtureMode ? "test" : "default"}>
+      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case">
         {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式：{fixtureScenario}</WorkflowNotice> : null}
         {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
         <WorkflowSection id="case" title={loadState === "loading" ? "正在读取病例" : "病例无法加载"} state={loadState === "error" ? "error" : "current"}>
@@ -384,7 +384,14 @@ export function IntegrationCaseWorkbench({
       caseId={caseResource.id}
       steps={steps}
       currentStep={currentStep}
-      theme={fixtureMode ? "test" : "default"}
+      contextSlot={
+        <div className="workflow-case-context">
+          <span>当前病例</span>
+          <strong>{caseResource.customer_name}</strong>
+          <small>{caseStatusLabels[caseResource.status]}</small>
+          <code>{caseResource.id}</code>
+        </div>
+      }
       headerActions={
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases">返回病例入口</a>
@@ -449,7 +456,9 @@ export function IntegrationCaseWorkbench({
               {caseResource.attachments.map((item) => (
                 <li key={item.id} data-state={item.parse_status}>
                   <div><strong>{item.filename}</strong><small>{item.media_type}，{item.size_bytes.toLocaleString("zh-CN")} 字节</small></div>
-                  <span>{item.parse_status}{item.needs_manual_review ? "，需人工复核" : ""}</span>
+                  <span className="workflow-status-badge">
+                    {attachmentStatusLabel(item.parse_status)}{item.needs_manual_review ? "，需人工复核" : ""}
+                  </span>
                 </li>
               ))}
             </ul>

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useRef, useState } from "react";
 
 import type { ApprovalDraftState } from "../../lib/api-v2/approval";
 import type { DraftResponse } from "../../lib/api-v2/types";
@@ -27,9 +27,26 @@ function TextList({ title, items }: { title: string; items: string[] }) {
 export function DraftApproval({ draft, value, onChange, busy, onApprove }: DraftApprovalProps) {
   const approved = draft.status === "approved";
   const includedCount = draft.recommended_skus.filter((item) => !value.excludedSkuIds.includes(item.sku_id)).length;
+  const reviewerInputRef = useRef<HTMLInputElement>(null);
+  const [showReviewerError, setShowReviewerError] = useState(false);
+  const reviewerMissing = showReviewerError && !value.reviewerId.trim();
+
+  function handleApprove() {
+    if (!value.reviewerId.trim()) {
+      setShowReviewerError(true);
+      reviewerInputRef.current?.focus();
+      return;
+    }
+    setShowReviewerError(false);
+    onApprove();
+  }
 
   return (
     <div className="workflow-stack">
+      <div className="workflow-review-summary" aria-live="polite">
+        <strong>{draft.recommended_skus.length} 项推荐</strong>
+        <span>当前保留 {includedCount} 项，排除 {draft.recommended_skus.length - includedCount} 项</span>
+      </div>
       <div className="workflow-summary-grid">
         <TextList title="公开摘要" items={draft.public_summary} />
         <TextList title="重点指标" items={draft.key_lab_highlights} />
@@ -58,7 +75,7 @@ export function DraftApproval({ draft, value, onChange, busy, onApprove }: Draft
                   <h3>{item.display_name}</h3>
                   <p>{item.reason}</p>
                 </div>
-                <label className="workflow-check">
+                <label className="workflow-check workflow-inclusion-control">
                   <input
                     type="checkbox"
                     checked={!excluded}
@@ -121,14 +138,28 @@ export function DraftApproval({ draft, value, onChange, busy, onApprove }: Draft
 
       <div className="workflow-approval-panel">
         <label className="workflow-field">
-          <span>审批医生 ID</span>
+          <span>审批医生 ID（必填）</span>
           <input
+            ref={reviewerInputRef}
             value={value.reviewerId}
             maxLength={160}
+            required
+            aria-invalid={reviewerMissing || undefined}
+            aria-describedby="approval-reviewer-error"
             disabled={busy || approved}
-            onChange={(event) => onChange({ ...value, reviewerId: event.target.value })}
+            onChange={(event) => {
+              if (event.target.value.trim()) setShowReviewerError(false);
+              onChange({ ...value, reviewerId: event.target.value });
+            }}
           />
         </label>
+        <p
+          id="approval-reviewer-error"
+          className="workflow-field-error"
+          role="alert"
+        >
+          {reviewerMissing ? "请填写审批医生 ID。" : null}
+        </p>
         <label className="workflow-check">
           <input
             type="checkbox"
@@ -157,7 +188,7 @@ export function DraftApproval({ draft, value, onChange, busy, onApprove }: Draft
             className="workflow-button workflow-button--primary"
             type="button"
             disabled={busy || approved || includedCount === 0 || !draft.recommended_skus.length}
-            onClick={onApprove}
+            onClick={handleApprove}
           >
             {approved ? "已审批发布" : busy ? "正在发布…" : "审批并发布"}
           </button>

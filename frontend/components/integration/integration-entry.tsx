@@ -60,7 +60,6 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
       description={workflowCopy.entry.description}
       steps={[...entrySteps]}
       currentStep="case"
-      theme={fixtureMode ? "test" : "default"}
     >
       {fixtureMode ? (
         <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。所有病例均为当前标签页内的虚构数据。</WorkflowNotice>

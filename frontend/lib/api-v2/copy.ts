@@ -2,7 +2,14 @@ import type { AnalysisStatus, CaseStatus, DraftGenerationStatus, OperationStatus
 
 export const workflowCopy = {
   productName: "功能医学对接工作台",
+  productSubtitle: "功能医学 AI 辅助系统",
   productDescription: "按病例完成资料提交、分析复核、草案审批与报告发布。",
+  navigation: {
+    workspace: "工作台",
+    process: "分析流程",
+    stepUnit: "步",
+    clinicalNotice: "AI 结果仅供医生参考，最终方案以医生判断为准。"
+  },
   entry: {
     title: "开始病例工作流",
     description: "创建新病例，或输入已知病例 ID 恢复处理。当前接口不提供病例列表。",
@@ -27,6 +34,14 @@ export const workflowCopy = {
     configurationError: "对接访问令牌尚未在 Next 服务端配置。",
     pollTimeout: "自动轮询已在 15 分钟后停止，业务状态未被判定为失败。请手动刷新状态。"
   }
+} as const;
+
+export const workflowStepStateLabels = {
+  complete: "已完成",
+  current: "当前步骤",
+  available: "可进入",
+  blocked: "待解锁",
+  error: "需处理"
 } as const;
 
 export const caseStatusLabels: Record<CaseStatus, string> = {

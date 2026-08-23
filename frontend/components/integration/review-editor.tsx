@@ -26,6 +26,14 @@ const foodSeverities = [
   ["high", "高度"]
 ] as const;
 
+function abnormalFlagLabel(value: string): string {
+  return editableAbnormalFlags.find(([flag]) => flag === value)?.[1] ?? value;
+}
+
+function foodSeverityLabel(value: string): string {
+  return foodSeverities.find(([severity]) => severity === value)?.[1] ?? value;
+}
+
 function clientId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -163,7 +171,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>异常指标</h3>
+            <h3>异常指标 <span className="workflow-count">{value.findings.length} 项</span></h3>
             <p>仅可编辑 v2 公开字段，未修改的证据状态和置信度不会回传。</p>
           </div>
           <button
@@ -180,7 +188,7 @@ export function ReviewEditor({
             <details className="workflow-editor-item" key={item.id} open={item.is_new}>
               <summary>
                 <span>{item.name.trim() || "未命名异常指标"}</span>
-                <small>{item.is_new ? "新增" : item.abnormal_flag}</small>
+                <small>{item.is_new ? "新增" : abnormalFlagLabel(item.abnormal_flag)}</small>
               </summary>
               <div className="workflow-editor-item__body">
                 <div className="workflow-form-grid">
@@ -254,7 +262,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>当前补充剂</h3>
+            <h3>当前补充剂 <span className="workflow-count">{value.supplements.length} 项</span></h3>
             <p>医生可以更名、移除或新增患者当前使用的补充剂。</p>
           </div>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={addSupplement}>
@@ -284,7 +292,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>慢性食物敏感</h3>
+            <h3>慢性食物敏感 <span className="workflow-count">{value.foodSensitivityItems.length} 项</span></h3>
             <p>食敏修订仍绑定当前分析的来源文件，不接收内部映射字段。</p>
           </div>
           <button
@@ -301,7 +309,7 @@ export function ReviewEditor({
             <details className="workflow-editor-item" key={item.id} open={item.is_new}>
               <summary>
                 <span>{item.name.trim() || "未命名食敏条目"}</span>
-                <small>{item.severity}</small>
+                <small>{foodSeverityLabel(item.severity)}</small>
               </summary>
               <div className="workflow-editor-item__body">
                 <div className="workflow-form-grid">

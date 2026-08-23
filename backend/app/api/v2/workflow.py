@@ -13,6 +13,7 @@ from app.api.v2.mappers import (
     approval_request_to_edits,
     approval_to_response,
     build_uploaded_file,
+    case_to_summary_response,
     case_to_response,
     doctor_workspace_scope,
     draft_to_response,
@@ -30,6 +31,7 @@ from app.api.v2.schemas import (
     AttachmentFailure,
     AttachmentUploadItem,
     CaseCreateRequest,
+    CaseListResponse,
     CaseResponse,
     ClinicalSummaryUpdateRequest,
     DraftResponse,
@@ -123,6 +125,19 @@ class V2WorkflowAdapter:
             owner_doctor_id=doctor.id,
         )
         return case_to_response(case)
+
+    def list_cases(self, doctor: Any, *, offset: int, limit: int) -> CaseListResponse:
+        cases = self.container.case_service.list_cases(
+            workspace_scope=doctor_workspace_scope(),
+            owner_doctor_id=doctor.id,
+        )
+        ordered = sorted(cases, key=lambda item: item.updated_at, reverse=True)
+        return CaseListResponse(
+            items=[case_to_summary_response(item) for item in ordered[offset : offset + limit]],
+            total=len(ordered),
+            offset=offset,
+            limit=limit,
+        )
 
     def get_case(self, case_id: str, doctor: Any) -> CaseResponse:
         return case_to_response(self.require_owned_case(case_id, doctor))
@@ -492,7 +507,7 @@ class V2WorkflowAdapter:
             updated, _, _ = self.container.case_analysis_service.review_and_generate(
                 case_id=case_id,
                 analysis_id=analysis_id,
-                reviewer_id=request.reviewer_id,
+                reviewer_id=doctor.id,
                 expected_revision=request.expected_revision,
                 abnormal_findings=findings,
                 current_supplements=supplements,
@@ -589,6 +604,13 @@ class V2WorkflowAdapter:
         doctor: Any,
     ) -> ApprovalResponse:
         case, draft = self._require_owned_draft(draft_id, doctor)
+        if draft.revision != request.expected_revision:
+            raise V2ApiError(
+                status=409,
+                code="DRAFT_REVISION_CONFLICT",
+                title="Draft revision conflict",
+                detail="The draft was updated. Fetch the latest revision before approving.",
+            )
         if draft.source_analysis_id:
             analysis = self.container.repository.get_case_analysis(draft.source_analysis_id)
             snapshot_changed = bool(
@@ -607,7 +629,7 @@ class V2WorkflowAdapter:
         try:
             review = self.container.review_service.approve(
                 draft_id,
-                reviewer_id=request.reviewer_id,
+                reviewer_id=doctor.id,
                 publishable_summary=(request.publishable_summary or "").strip() or None,
                 edits=edits,
             )

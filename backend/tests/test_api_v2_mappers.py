@@ -138,7 +138,6 @@ class V2SchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ReviewSubmitRequest.model_validate(
                 {
-                    "reviewer_id": "doctor-1",
                     "expected_revision": 1,
                     "finding_changes": [
                         {"op": "update", "id": "finding-1", "changes": {}}
@@ -162,7 +161,6 @@ class V2MapperTests(unittest.TestCase):
         analysis = _analysis()
         request = ReviewSubmitRequest.model_validate(
             {
-                "reviewer_id": "doctor-1",
                 "expected_revision": 1,
                 "finding_changes": [
                     {
@@ -207,7 +205,6 @@ class V2MapperTests(unittest.TestCase):
         analysis = _analysis()
         duplicate = ReviewSubmitRequest.model_validate(
             {
-                "reviewer_id": "doctor-1",
                 "expected_revision": 1,
                 "finding_changes": [
                     {"op": "remove", "id": "finding-1"},
@@ -220,7 +217,6 @@ class V2MapperTests(unittest.TestCase):
 
         unknown = ReviewSubmitRequest.model_validate(
             {
-                "reviewer_id": "doctor-1",
                 "expected_revision": 1,
                 "finding_changes": [{"op": "remove", "id": "unknown"}],
             }
@@ -228,7 +224,7 @@ class V2MapperTests(unittest.TestCase):
         with self.assertRaisesRegex(V2ApiError, "not part of the current analysis"):
             apply_review_changes(analysis, unknown)
 
-        stale = ReviewSubmitRequest(reviewer_id="doctor-1", expected_revision=2)
+        stale = ReviewSubmitRequest(expected_revision=2)
         with self.assertRaisesRegex(V2ApiError, "updated"):
             apply_review_changes(analysis, stale)
 
@@ -253,7 +249,7 @@ class V2MapperTests(unittest.TestCase):
     def test_approval_mapper_types_internal_edits(self) -> None:
         request = ApprovalRequest.model_validate(
             {
-                "reviewer_id": "doctor-1",
+                "expected_revision": 1,
                 "excluded_sku_ids": ["SKU-2"],
                 "dosage_overrides": [
                     {"sku_id": "SKU-1", "option_id": "alternate", "note": "Doctor decision"}
@@ -268,14 +264,14 @@ class V2MapperTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ApprovalRequest.model_validate(
                 {
-                    "reviewer_id": "doctor-1",
+                    "expected_revision": 1,
                     "excluded_sku_ids": ["SKU-1"],
                     "dosage_overrides": [{"sku_id": "SKU-1", "option_id": "default"}],
                 }
             )
         no_note = ApprovalRequest.model_validate(
             {
-                "reviewer_id": "doctor-1",
+                "expected_revision": 1,
                 "dosage_overrides": [{"sku_id": "SKU-1", "option_id": "alternate"}],
             }
         )

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v2.problems import (
     ProblemDetailsRoute,
@@ -17,6 +18,7 @@ from app.api.v2.schemas import (
     ApprovalResponse,
     AttachmentBatchResponse,
     CaseCreateRequest,
+    CaseListResponse,
     CaseResponse,
     ClinicalSummaryUpdateRequest,
     DraftResponse,
@@ -34,6 +36,18 @@ router = APIRouter(
     route_class=ProblemDetailsRoute,
 )
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = await file.read(min(1024 * 1024, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
 
 
 def _adapter(request: Request) -> V2WorkflowAdapter:
@@ -71,6 +85,20 @@ def create_case(
 
 
 @router.get(
+    "/cases",
+    response_model=CaseListResponse,
+    responses=documented_problem_responses(401, 422, 500),
+)
+def list_cases(
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    doctor: Any = Depends(_require_external_doctor),
+) -> CaseListResponse:
+    return _adapter(request).list_cases(doctor, offset=offset, limit=limit)
+
+
+@router.get(
     "/cases/{case_id}",
     response_model=CaseResponse,
     responses=documented_problem_responses(401, 403, 404, 422, 500),
@@ -101,7 +129,7 @@ def update_clinical_summary(
     "/cases/{case_id}/attachments",
     response_model=AttachmentBatchResponse,
     status_code=201,
-    responses=documented_problem_responses(401, 403, 404, 422, 500),
+    responses=documented_problem_responses(401, 403, 404, 413, 422, 500),
 )
 async def upload_attachments(
     case_id: str,
@@ -110,15 +138,35 @@ async def upload_attachments(
     attachment_type: Literal["medical_record", "questionnaire"] = Form("medical_record"),
     doctor: Any = Depends(_require_external_doctor),
 ) -> AttachmentBatchResponse:
-    prepared = [
-        PreparedAttachment(
-            filename=file.filename or "upload.bin",
-            media_type=file.content_type or "application/octet-stream",
-            content=await file.read(),
+    settings = request.app.state.container.settings
+    if len(files) > settings.max_upload_files_per_batch:
+        raise V2ApiError(
+            status=413,
+            code="ATTACHMENT_BATCH_FILE_LIMIT_EXCEEDED",
+            title="Attachment batch file limit exceeded",
+            detail="The attachment batch contains too many files.",
         )
-        for file in files
-    ]
-    return _adapter(request).upload_attachments(
+    prepared: list[PreparedAttachment] = []
+    batch_size = 0
+    for file in files:
+        content = await _read_upload_with_limit(file, settings.max_upload_bytes)
+        batch_size += len(content)
+        if batch_size > settings.max_upload_batch_bytes:
+            raise V2ApiError(
+                status=413,
+                code="ATTACHMENT_BATCH_SIZE_EXCEEDED",
+                title="Attachment batch size exceeded",
+                detail="The attachment batch exceeds the configured size limit.",
+            )
+        prepared.append(
+            PreparedAttachment(
+                filename=file.filename or "upload.bin",
+                media_type=file.content_type or "application/octet-stream",
+                content=content,
+            )
+        )
+    return await run_in_threadpool(
+        _adapter(request).upload_attachments,
         case_id,
         prepared,
         attachment_type,

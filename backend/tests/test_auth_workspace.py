@@ -92,9 +92,56 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["doctor"]
 
+    def _create_doctor(
+        self,
+        admin_client: TestClient,
+        doctor_client: TestClient,
+        username: str,
+    ):
+        created = admin_client.post(
+            "/auth/doctors",
+            json={"username": username, "password": "secret123", "display_name": username.upper()},
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        logged_in = doctor_client.post(
+            "/auth/login",
+            json={"username": username, "password": "secret123"},
+        )
+        self.assertEqual(logged_in.status_code, 200, logged_in.text)
+        return created.json()["doctor"]
+
+    def test_doctor_registration_and_admin_lifecycle(self) -> None:
+        self.assertEqual(self.public_client.get("/auth/bootstrap").json(), {"required": True})
+        administrator = self._register(self.client_a, "admin-user")
+        self.assertEqual(self.public_client.get("/auth/bootstrap").json(), {"required": False})
+
+        closed = self.public_client.post(
+            "/auth/register",
+            json={"username": "public-doctor", "password": "secret123"},
+        )
+        self.assertEqual(closed.status_code, 403)
+
+        doctor = self._create_doctor(self.client_a, self.client_b, "doctor-user")
+        listed = self.client_a.get("/auth/doctors")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual({item["id"] for item in listed.json()["doctors"]}, {administrator["id"], doctor["id"]})
+
+        disabled = self.client_a.patch(
+            f"/auth/doctors/{doctor['id']}",
+            json={"enabled": False},
+        )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.assertIsNone(self.client_b.get("/auth/me").json()["doctor"])
+
+        self_disabled = self.client_a.patch(
+            f"/auth/doctors/{administrator['id']}",
+            json={"enabled": False},
+        )
+        self.assertEqual(self_disabled.status_code, 409)
+
     def test_doctor_workspaces_are_isolated_but_public_workspace_is_open(self) -> None:
         doctor_a = self._register(self.client_a, "doctor-a")
-        self._register(self.client_b, "doctor-b")
+        self._create_doctor(self.client_a, self.client_b, "doctor-b")
 
         private_case = self.client_a.post(
             "/cases",
@@ -266,7 +313,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
 
     def test_admin_configuration_and_rule_mutations_are_protected(self) -> None:
         self._register(self.client_a, "admin-user")
-        self._register(self.client_b, "doctor-user")
+        self._create_doctor(self.client_a, self.client_b, "doctor-user")
 
         self.assertEqual(self.public_client.get("/system/llm-config").status_code, 401)
         self.assertEqual(self.client_b.get("/system/llm-config").status_code, 403)

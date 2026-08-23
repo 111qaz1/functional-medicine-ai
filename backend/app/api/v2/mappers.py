@@ -10,7 +10,9 @@ from app.api.v2.schemas import (
     ApprovalRequest,
     ApprovalResponse,
     AttachmentResponse,
+    CaseSummaryResponse,
     CaseResponse,
+    CoreHealthPortraitResponse,
     DosageOptionResponse,
     DosageRegimenResponse,
     DraftGenerationState,
@@ -19,11 +21,15 @@ from app.api.v2.schemas import (
     FindingResponse,
     FoodSensitivityItemResponse,
     FoodSensitivityResponse,
+    LifestylePlanResponse,
     OperationFailure,
     OperationProgress,
     OperationResponse,
     ReportResponse,
+    ReportSectionResponse,
     ReviewSubmitRequest,
+    SafetyDecisionResponse,
+    StructuredSystemFindingResponse,
     SupplementResponse,
 )
 from app.domain.models import (
@@ -132,6 +138,18 @@ def case_to_response(case: CaseRecord) -> CaseResponse:
         created_at=case.created_at,
         updated_at=case.updated_at,
         attachments=[attachment_to_response(uploaded) for uploaded in case.files],
+    )
+
+
+def case_to_summary_response(case: CaseRecord) -> CaseSummaryResponse:
+    return CaseSummaryResponse(
+        id=case.id,
+        customer_name=case.customer_name,
+        consultant_id=case.consultant_id,
+        status=_value(case.status),
+        attachment_count=len(case.files),
+        created_at=case.created_at,
+        updated_at=case.updated_at,
     )
 
 
@@ -465,6 +483,34 @@ def draft_to_response(draft: RecommendationDraft) -> DraftResponse:
         abstain_reason=draft.abstain_reason,
         manual_review_required=draft.manual_review_required,
         red_flags=list(draft.red_flags),
+        core_health_portrait=(
+            CoreHealthPortraitResponse.model_validate(draft.core_health_portrait.model_dump())
+            if draft.core_health_portrait is not None
+            else None
+        ),
+        structured_system_findings=[
+            StructuredSystemFindingResponse.model_validate(item.model_dump())
+            for item in draft.structured_system_findings
+        ],
+        lifestyle_plan=(
+            LifestylePlanResponse.model_validate(draft.lifestyle_plan.model_dump())
+            if draft.lifestyle_plan is not None
+            else None
+        ),
+        safety_decisions=[
+            SafetyDecisionResponse.model_validate(item.model_dump())
+            for item in draft.safety_decisions
+        ],
+        uncovered_system_ids=list(draft.uncovered_system_ids),
+        uncovered_system_reasons=dict(draft.uncovered_system_reasons),
+        report_sections=[
+            ReportSectionResponse(
+                title=title,
+                items=[str(value) for value in values],
+            )
+            for title, values in draft.report_sections.items()
+            if isinstance(values, list)
+        ],
         generated_at=draft.generated_at,
     )
 

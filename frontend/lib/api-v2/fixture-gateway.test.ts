@@ -28,7 +28,6 @@ async function prepareDraft(gateway: FixtureWorkflowGateway) {
   const created = await createCaseWithAttachment(gateway);
   const { analysis } = await completeAnalysis(gateway, created.id);
   const accepted = await gateway.submitReview(created.id, analysis.id, {
-    reviewer_id: "fixture-doctor",
     expected_revision: analysis.revision,
     finding_changes: [],
     supplement_changes: [],
@@ -55,7 +54,7 @@ describe("FixtureWorkflowGateway", () => {
     expect(prepared.terminal.status).toBe("succeeded");
     expect(prepared.draft?.recommended_skus.length).toBeGreaterThan(0);
     const approved = await fixture.approveDraft(prepared.draft!.id, {
-      reviewer_id: "fixture-doctor",
+      expected_revision: prepared.draft!.revision,
       publishable_summary: null,
       excluded_sku_ids: ["SKU-FIXTURE-MULTI"],
       dosage_overrides: [
@@ -87,7 +86,6 @@ describe("FixtureWorkflowGateway", () => {
     const { analysis } = await completeAnalysis(fixture, created.id);
 
     await fixture.submitReview(created.id, analysis.id, {
-      reviewer_id: "fixture-doctor",
       expected_revision: analysis.revision,
       finding_changes: [
         { op: "update", id: "finding_fixture_vitamin_d", changes: { name: "25-羟维生素 D（医生已修订）" } },
@@ -185,7 +183,6 @@ describe("FixtureWorkflowGateway", () => {
     const created = await createCaseWithAttachment(fixture);
     const { analysis } = await completeAnalysis(fixture, created.id);
     await expect(fixture.submitReview(created.id, analysis.id, {
-      reviewer_id: "fixture-doctor",
       expected_revision: analysis.revision,
       finding_changes: [],
       supplement_changes: [],
@@ -197,7 +194,7 @@ describe("FixtureWorkflowGateway", () => {
     const invalidGateway = gateway("approval_validation_error");
     const invalidApproval = await prepareDraft(invalidGateway);
     await expect(invalidGateway.approveDraft(invalidApproval.draft!.id, {
-      reviewer_id: "fixture-doctor",
+      expected_revision: invalidApproval.draft!.revision,
       publishable_summary: null,
       excluded_sku_ids: [],
       dosage_overrides: []
@@ -206,7 +203,7 @@ describe("FixtureWorkflowGateway", () => {
     const notReadyGateway = gateway("report_not_ready");
     const prepared = await prepareDraft(notReadyGateway);
     await notReadyGateway.approveDraft(prepared.draft!.id, {
-      reviewer_id: "fixture-doctor",
+      expected_revision: prepared.draft!.revision,
       publishable_summary: null,
       excluded_sku_ids: [],
       dosage_overrides: []

@@ -23,26 +23,48 @@ export function buildBackendUrl(request: NextRequest): URL {
 
 export function middleware(request: NextRequest) {
   if (request.nextUrl.pathname === V2_API_PREFIX || request.nextUrl.pathname.startsWith(`${V2_API_PREFIX}/`)) {
-    const token = process.env.FM_API_V2_BEARER_TOKEN?.trim();
-    if (!token) {
+    const session = request.cookies.get("fm_session")?.value;
+    if (!session) {
       return NextResponse.json(
         {
-          type: "urn:fm-ai:problem:frontend-integration-not-configured",
-          title: "Frontend integration not configured",
-          status: 503,
-          detail: "对接工作台尚未配置服务端访问令牌，请联系系统管理员。",
+          type: "urn:fm-ai:problem:authentication-required",
+          title: "Authentication required",
+          status: 401,
+          detail: "医生登录已失效，请重新登录。",
           instance: request.nextUrl.pathname,
-          code: "FRONTEND_INTEGRATION_NOT_CONFIGURED",
+          code: "AUTHENTICATION_REQUIRED",
           errors: []
         },
         {
-          status: 503,
+          status: 401,
           headers: { "Content-Type": "application/problem+json" }
         }
       );
     }
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      const origin = request.headers.get("Origin");
+      const fetchSite = request.headers.get("Sec-Fetch-Site");
+      if (origin !== request.nextUrl.origin || (fetchSite && fetchSite !== "same-origin")) {
+        return NextResponse.json(
+          {
+            type: "urn:fm-ai:problem:cross-origin-request-rejected",
+            title: "Cross-origin request rejected",
+            status: 403,
+            detail: "写操作只允许从当前医生工作台发起。",
+            instance: request.nextUrl.pathname,
+            code: "CROSS_ORIGIN_REQUEST_REJECTED",
+            errors: []
+          },
+          {
+            status: 403,
+            headers: { "Content-Type": "application/problem+json" }
+          }
+        );
+      }
+    }
     const requestHeaders = new Headers(request.headers);
-    requestHeaders.set("Authorization", `Bearer ${token}`);
+    requestHeaders.delete("Authorization");
+    requestHeaders.set("Authorization", `Bearer ${session}`);
     return NextResponse.rewrite(buildBackendUrl(request), {
       request: { headers: requestHeaders }
     });

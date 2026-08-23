@@ -1,11 +1,13 @@
 "use client";
 
-import React, { type FormEvent, useMemo, useState } from "react";
+import React, { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { workflowCopy } from "../../lib/api-v2/copy";
+import { caseStatusLabels, workflowCopy } from "../../lib/api-v2/copy";
 import { workflowErrorMessage } from "../../lib/api-v2/errors";
 import type { FixtureScenario } from "../../lib/api-v2/fixture-gateway";
 import { createWorkflowGateway } from "../../lib/api-v2/gateway-factory";
+import type { CaseSummaryResponse } from "../../lib/api-v2/types";
+import { useIntegrationDoctor } from "./doctor-session";
 import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell";
 
 const entrySteps = [
@@ -18,12 +20,27 @@ const entrySteps = [
 ] as const;
 
 export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode: boolean; fixtureScenario: FixtureScenario }) {
-  const gateway = useMemo(
-    () => createWorkflowGateway(fixtureMode, fixtureScenario),
-    [fixtureMode, fixtureScenario]
-  );
+  const gateway = useMemo(() => createWorkflowGateway(fixtureMode, fixtureScenario), [fixtureMode, fixtureScenario]);
+  const { doctor, logout } = useIntegrationDoctor();
+  const [cases, setCases] = useState<CaseSummaryResponse[]>([]);
+  const [loadingCases, setLoadingCases] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loadCases = useCallback(async () => {
+    setLoadingCases(true);
+    setError(null);
+    try {
+      const result = await gateway.listCases(0, 50);
+      setCases(result.items);
+    } catch (cause) {
+      setError(workflowErrorMessage(cause));
+    } finally {
+      setLoadingCases(false);
+    }
+  }, [gateway]);
+
+  useEffect(() => { void loadCases(); }, [loadCases]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,8 +62,7 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
 
   function handleResume(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const caseId = String(form.get("case_id") ?? "").trim();
+    const caseId = String(new FormData(event.currentTarget).get("case_id") ?? "").trim();
     if (!caseId) {
       setError("请输入病例 ID。");
       return;
@@ -56,58 +72,66 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
 
   return (
     <WorkflowShell
-      title={workflowCopy.entry.title}
-      description={workflowCopy.entry.description}
+      title="我的 AI 病例"
+      description={`当前医生：${doctor.display_name}。病例仅对本人可见。`}
       steps={[...entrySteps]}
       currentStep="case"
       theme={fixtureMode ? "test" : "default"}
+      headerActions={
+        <>
+          {doctor.role === "admin" ? <a className="workflow-button workflow-button--secondary" href="/doctors">账号管理</a> : null}
+          <button className="workflow-button workflow-button--secondary" type="button" onClick={() => void logout()}>退出登录</button>
+        </>
+      }
     >
-      {fixtureMode ? (
-        <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。所有病例均为当前标签页内的虚构数据。</WorkflowNotice>
-      ) : null}
+      {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。数据只用于界面测试。</WorkflowNotice> : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
-      <div className="workflow-entry-grid">
-        <WorkflowSection
-          id="case"
-          title={workflowCopy.entry.createTitle}
-          description="创建操作只提交 v2 已声明的姓名、顾问 ID 和备注。"
-          state="current"
-        >
-          <form className="workflow-form" onSubmit={(event) => void handleCreate(event)}>
-            <label className="workflow-field">
-              <span>客户名称</span>
-              <input name="customer_name" required maxLength={160} autoComplete="off" />
-            </label>
-            <label className="workflow-field">
-              <span>顾问 ID（可选）</span>
-              <input name="consultant_id" maxLength={160} autoComplete="off" />
-            </label>
-            <label className="workflow-field">
-              <span>备注（可选）</span>
-              <textarea name="notes" rows={4} maxLength={4000} />
-            </label>
-            <button className="workflow-button workflow-button--primary" disabled={busy} type="submit">
-              {busy ? "正在创建…" : workflowCopy.entry.createAction}
-            </button>
-          </form>
-        </WorkflowSection>
 
-        <section className="workflow-entry-resume" aria-labelledby="workflow-resume-title">
+      <WorkflowSection id="case" title="我的病例" description="按最近更新时间排列，可继续尚未完成的六步流程。" state="current" actions={<button className="workflow-button workflow-button--secondary" type="button" disabled={loadingCases} onClick={() => void loadCases()}>刷新列表</button>}>
+        {loadingCases ? <p className="workflow-placeholder">正在读取病例…</p> : cases.length ? (
+          <div className="workflow-case-table-wrap">
+            <table className="workflow-case-table">
+              <thead><tr><th>客户</th><th>状态</th><th>附件</th><th>最近更新</th><th><span className="workflow-visually-hidden">操作</span></th></tr></thead>
+              <tbody>
+                {cases.map((item) => (
+                  <tr key={item.id}>
+                    <td><strong>{item.customer_name}</strong><small>{item.id}</small></td>
+                    <td><span className="workflow-status-badge">{caseStatusLabels[item.status]}</span></td>
+                    <td>{item.attachment_count}</td>
+                    <td>{new Date(item.updated_at).toLocaleString("zh-CN")}</td>
+                    <td><a className="workflow-button workflow-button--secondary" href={`/integration/cases/${encodeURIComponent(item.id)}`}>继续处理</a></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="workflow-empty">当前账号还没有病例，请创建第一份病例。</p>}
+      </WorkflowSection>
+
+      <div className="workflow-entry-grid">
+        <section className="workflow-entry-create" aria-labelledby="workflow-create-title">
           <div className="workflow-section__header">
             <div>
-              <h2 id="workflow-resume-title">{workflowCopy.entry.resumeTitle}</h2>
-              <p>刷新页面后可通过病例 ID 恢复最新分析、草案和报告状态。</p>
+              <h2 id="workflow-create-title">{workflowCopy.entry.createTitle}</h2>
+              <p>创建后进入资料上传和分析流程。</p>
             </div>
           </div>
           <div className="workflow-section__body">
+          <form className="workflow-form" onSubmit={(event) => void handleCreate(event)}>
+            <label className="workflow-field"><span>客户名称</span><input name="customer_name" required maxLength={160} autoComplete="off" /></label>
+            <label className="workflow-field"><span>顾问 ID（可选）</span><input name="consultant_id" maxLength={160} autoComplete="off" /></label>
+            <label className="workflow-field"><span>备注（可选）</span><textarea name="notes" rows={4} maxLength={4000} /></label>
+            <button className="workflow-button workflow-button--primary" disabled={busy} type="submit">{busy ? "正在创建…" : workflowCopy.entry.createAction}</button>
+          </form>
+          </div>
+        </section>
+
+        <section className="workflow-entry-resume" aria-labelledby="workflow-resume-title">
+          <div className="workflow-section__header"><div><h2 id="workflow-resume-title">按 ID 恢复</h2><p>仅用于联调和辅助排查，日常请从本人病例列表进入。</p></div></div>
+          <div className="workflow-section__body">
             <form className="workflow-form" onSubmit={handleResume}>
-              <label className="workflow-field">
-                <span>病例 ID</span>
-                <input name="case_id" required autoComplete="off" />
-              </label>
-              <button className="workflow-button workflow-button--secondary" type="submit">
-                {workflowCopy.entry.resumeAction}
-              </button>
+              <label className="workflow-field"><span>病例 ID</span><input name="case_id" required autoComplete="off" /></label>
+              <button className="workflow-button workflow-button--secondary" type="submit">{workflowCopy.entry.resumeAction}</button>
             </form>
           </div>
         </section>

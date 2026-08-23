@@ -33,6 +33,53 @@
   --workflow-focus: #44478f;
 }
 
+.workflow-auth {
+  --workflow-surface: #ffffff;
+  --workflow-surface-muted: #eef3f2;
+  --workflow-ink: #17211e;
+  --workflow-muted: #52635e;
+  --workflow-border: #cfdad7;
+  --workflow-accent: #126c64;
+  --workflow-accent-strong: #0b514b;
+  --workflow-focus: #006b60;
+  --workflow-danger: #a22d25;
+  --workflow-danger-surface: #fff1ef;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background: #f5f7f7;
+  color: var(--workflow-ink);
+}
+
+.workflow-auth__card {
+  display: grid;
+  width: min(100%, 440px);
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid var(--workflow-border);
+  border-radius: 12px;
+  background: var(--workflow-surface);
+}
+
+.workflow-auth__card h1,
+.workflow-auth__card p {
+  margin: 0;
+}
+
+.workflow-auth__card > p:not(.workflow-auth__eyebrow) {
+  color: var(--workflow-muted);
+  line-height: 1.6;
+}
+
+.workflow-auth__eyebrow {
+  color: var(--workflow-accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .workflow-app *,
 .workflow-app *::before,
 .workflow-app *::after {
@@ -243,10 +290,65 @@
   align-items: start;
 }
 
+.workflow-entry-create,
 .workflow-entry-resume {
   border: 1px solid var(--workflow-border);
   border-radius: var(--workflow-radius);
   background: var(--workflow-surface);
+}
+
+.workflow-case-table-wrap {
+  overflow-x: auto;
+}
+
+.workflow-case-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.workflow-case-table th,
+.workflow-case-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--workflow-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.workflow-case-table th {
+  color: var(--workflow-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.workflow-case-table td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--workflow-muted);
+}
+
+.workflow-case-table tbody tr:hover {
+  background: var(--workflow-surface-muted);
+}
+
+.workflow-status-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: var(--workflow-surface-muted);
+  color: var(--workflow-accent-strong);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.workflow-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .workflow-form,
@@ -523,6 +625,20 @@
   color: var(--workflow-muted);
 }
 
+.workflow-reviewer-identity {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--workflow-accent);
+  background: var(--workflow-surface);
+}
+
+.workflow-reviewer-identity span,
+.workflow-reviewer-identity small {
+  color: var(--workflow-muted);
+  font-size: 0.8rem;
+}
+
 .workflow-editor-group {
   display: grid;
   gap: 14px;
@@ -607,6 +723,66 @@
   border: 1px solid var(--workflow-border);
   border-radius: 9px;
   background: var(--workflow-border);
+}
+
+.workflow-plan-block,
+.workflow-report-sections {
+  padding: 18px;
+  border: 1px solid var(--workflow-border);
+  border-radius: 10px;
+  background: var(--workflow-surface);
+}
+
+.workflow-plan-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.workflow-plan-block__header h3,
+.workflow-lifestyle-grid h4 {
+  margin: 0;
+}
+
+.workflow-plan-block__header span {
+  color: var(--workflow-muted);
+  font-size: 0.8rem;
+}
+
+.workflow-system-grid,
+.workflow-lifestyle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.workflow-system-grid article,
+.workflow-lifestyle-grid article {
+  padding: 14px;
+  border: 1px solid var(--workflow-border);
+  border-radius: 8px;
+  background: var(--workflow-surface-muted);
+}
+
+.workflow-system-grid article > span {
+  display: block;
+  margin-top: 4px;
+  color: var(--workflow-accent-strong);
+  font-size: 0.8rem;
+}
+
+.workflow-system-grid article p,
+.workflow-lifestyle-grid article ul {
+  margin-bottom: 0;
+  color: var(--workflow-muted);
+  line-height: 1.6;
+}
+
+.workflow-report-sections > summary {
+  cursor: pointer;
+  font-weight: 750;
 }
 
 .workflow-text-list {

@@ -5,6 +5,7 @@ import type {
   AttachmentBatchResponse,
   AttachmentType,
   CaseCreateRequest,
+  CaseListResponse,
   CaseResponse,
   ClinicalSummaryUpdateRequest,
   DraftResponse,
@@ -26,6 +27,7 @@ export interface DownloadedReport {
 }
 
 export interface WorkflowGateway {
+  listCases(offset?: number, limit?: number): Promise<CaseListResponse>;
   createCase(payload: CaseCreateRequest): Promise<CaseResponse>;
   getCase(caseId: string): Promise<CaseResponse>;
   updateClinicalSummary(caseId: string, payload: ClinicalSummaryUpdateRequest): Promise<CaseResponse>;
@@ -145,6 +147,13 @@ const CASE_RESPONSE_SHAPE: ResponseShape = {
   attachments: "array"
 };
 
+const CASE_LIST_RESPONSE_SHAPE: ResponseShape = {
+  items: "array",
+  total: "number",
+  offset: "number",
+  limit: "number"
+};
+
 const ATTACHMENT_BATCH_SHAPE: ResponseShape = {
   items: "array",
   meta: {
@@ -210,6 +219,13 @@ const DRAFT_RESPONSE_SHAPE: ResponseShape = {
   abstain_reason: "nullable-string",
   manual_review_required: "boolean",
   red_flags: "array",
+  core_health_portrait: "nullable-object",
+  structured_system_findings: "array",
+  lifestyle_plan: "nullable-object",
+  safety_decisions: "array",
+  uncovered_system_ids: "array",
+  uncovered_system_reasons: "object",
+  report_sections: "array",
   generated_at: "string"
 };
 
@@ -258,12 +274,19 @@ function parseFilename(disposition: string | null, fallback: string): string {
   return disposition.match(/filename="([^"]+)"/i)?.[1] ?? fallback;
 }
 
+function notifyExpiredSession(response: Response): void {
+  if (response.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new Event("fm-session-expired"));
+  }
+}
+
 export class HttpWorkflowGateway implements WorkflowGateway {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
   private async json<T>(url: string, shape: ResponseShape, init?: RequestInit): Promise<{ data: T; response: Response }> {
     const response = await this.fetchImpl(url, {
       cache: "no-store",
+      credentials: "include",
       ...init,
       headers: {
         Accept: "application/json, application/problem+json",
@@ -271,7 +294,10 @@ export class HttpWorkflowGateway implements WorkflowGateway {
         ...init?.headers
       }
     });
-    if (!response.ok) await throwProblem(response);
+    if (!response.ok) {
+      notifyExpiredSession(response);
+      await throwProblem(response);
+    }
     let payload: unknown;
     try {
       payload = await response.json();
@@ -280,6 +306,15 @@ export class HttpWorkflowGateway implements WorkflowGateway {
     }
     if (!matchesShape(payload, shape)) throw invalidSuccessProblem(url);
     return { data: payload as T, response };
+  }
+
+  async listCases(offset = 0, limit = 50): Promise<CaseListResponse> {
+    return (
+      await this.json<CaseListResponse>(
+        `${apiPath("cases")}?offset=${offset}&limit=${limit}`,
+        CASE_LIST_RESPONSE_SHAPE
+      )
+    ).data;
   }
 
   async createCase(payload: CaseCreateRequest): Promise<CaseResponse> {
@@ -359,9 +394,13 @@ export class HttpWorkflowGateway implements WorkflowGateway {
   async downloadReport(draftId: string): Promise<DownloadedReport> {
     const response = await this.fetchImpl(`${apiPath("drafts", draftId, "report")}.pdf`, {
       cache: "no-store",
+      credentials: "include",
       headers: { Accept: "application/pdf, application/problem+json" }
     });
-    if (!response.ok) await throwProblem(response);
+    if (!response.ok) {
+      notifyExpiredSession(response);
+      await throwProblem(response);
+    }
     const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
     if (contentType !== "application/pdf") throw invalidSuccessProblem(`${apiPath("drafts", draftId, "report")}.pdf`);
     return {

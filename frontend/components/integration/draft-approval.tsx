@@ -9,6 +9,7 @@ import { WorkflowNotice } from "./workflow-shell";
 export interface DraftApprovalProps {
   draft: DraftResponse;
   value: ApprovalDraftState;
+  reviewerName: string;
   onChange(value: ApprovalDraftState): void;
   busy: boolean;
   onApprove(): void;
@@ -24,7 +25,7 @@ function TextList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-export function DraftApproval({ draft, value, onChange, busy, onApprove }: DraftApprovalProps) {
+export function DraftApproval({ draft, value, reviewerName, onChange, busy, onApprove }: DraftApprovalProps) {
   const approved = draft.status === "approved";
   const includedCount = draft.recommended_skus.filter((item) => !value.excludedSkuIds.includes(item.sku_id)).length;
 
@@ -40,6 +41,33 @@ export function DraftApproval({ draft, value, onChange, busy, onApprove }: Draft
         <TextList title="缺失信息" items={draft.missing_info} />
         <TextList title="红旗提示" items={draft.red_flags} />
       </div>
+
+      {draft.core_health_portrait ? (
+        <section className="workflow-plan-block">
+          <div className="workflow-plan-block__header"><h3>三层核心健康画像</h3><span>{draft.core_health_portrait.status}</span></div>
+          <p className="workflow-prose">{draft.core_health_portrait.text}</p>
+          {draft.core_health_portrait.decision.intervention_steps.length ? <ol>{draft.core_health_portrait.decision.intervention_steps.map((step) => <li key={step.order}><strong>{step.label}</strong></li>)}</ol> : null}
+        </section>
+      ) : null}
+
+      {draft.structured_system_findings.length ? (
+        <section className="workflow-plan-block">
+          <div className="workflow-plan-block__header"><h3>功能医学系统优先级</h3><span>{draft.structured_system_findings.length} 个系统</span></div>
+          <div className="workflow-system-grid">{draft.structured_system_findings.map((item) => <article key={item.system_id}><strong>{item.system_name}</strong><span>{item.priority_level} · {item.priority_score.toFixed(1)}</span><p>{item.summary}</p></article>)}</div>
+        </section>
+      ) : null}
+
+      {draft.lifestyle_plan ? (
+        <section className="workflow-plan-block">
+          <div className="workflow-plan-block__header"><h3>四域生活方式方案</h3><span>{draft.lifestyle_plan.status}</span></div>
+          <div className="workflow-lifestyle-grid">{draft.lifestyle_plan.sections.map((section) => <article key={section.domain}><h4>{section.title}</h4><ul>{section.actions.map((action) => <li key={action.action_id}>{action.text}{action.quantity ? `（${action.quantity}）` : ""}</li>)}</ul></article>)}</div>
+          <TextList title="监测与复查" items={draft.lifestyle_plan.monitoring} />
+        </section>
+      ) : null}
+
+      {draft.safety_decisions.length ? <section className="workflow-plan-block"><div className="workflow-plan-block__header"><h3>医生安全审核</h3><span>{draft.safety_decisions.length} 项</span></div><ul>{draft.safety_decisions.map((item) => <li key={`${item.rule_id}-${item.sku_id ?? "case"}`}><strong>{item.action}</strong>：{item.message}</li>)}</ul></section> : null}
+
+      {draft.report_sections.length ? <details className="workflow-report-sections"><summary>查看规范化报告章节</summary>{draft.report_sections.map((section) => <TextList key={section.title} title={section.title} items={section.items} />)}</details> : null}
 
       {draft.manual_review_required ? (
         <WorkflowNotice tone="warning">该草案要求人工复核，发布前请逐项确认推荐、剂量和安全提示。</WorkflowNotice>
@@ -120,15 +148,7 @@ export function DraftApproval({ draft, value, onChange, busy, onApprove }: Draft
       </div>
 
       <div className="workflow-approval-panel">
-        <label className="workflow-field">
-          <span>审批医生 ID</span>
-          <input
-            value={value.reviewerId}
-            maxLength={160}
-            disabled={busy || approved}
-            onChange={(event) => onChange({ ...value, reviewerId: event.target.value })}
-          />
-        </label>
+        <div className="workflow-reviewer-identity"><span>当前批准医生</span><strong>{reviewerName}</strong><small>批准身份由登录会话写入审计日志。</small></div>
         <label className="workflow-check">
           <input
             type="checkbox"

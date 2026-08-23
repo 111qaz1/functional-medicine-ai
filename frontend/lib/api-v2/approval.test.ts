@@ -47,13 +47,12 @@ const draft = {
 describe("approval payload builder", () => {
   it("submits only exclusions and changed dosage options, leaving summary untouched by default", () => {
     const state = createApprovalDraft(draft);
-    state.reviewerId = "doctor_1";
     state.excludedSkuIds = ["SKU_2"];
     state.dosageSelections.SKU_1 = "alternate";
     state.dosageNotes.SKU_1 = "根据虚构复核条件调整";
 
     expect(buildApprovalRequest(draft, state)).toEqual({
-      reviewer_id: "doctor_1",
+      expected_revision: draft.revision,
       publishable_summary: null,
       excluded_sku_ids: ["SKU_2"],
       dosage_overrides: [
@@ -64,14 +63,12 @@ describe("approval payload builder", () => {
 
   it("rejects excluding every recommendation", () => {
     const state = createApprovalDraft(draft);
-    state.reviewerId = "doctor_1";
     state.excludedSkuIds = ["SKU_1", "SKU_2"];
     expect(() => buildApprovalRequest(draft, state)).toThrow("至少保留一项");
   });
 
   it("requires a note for a non-default dosage", () => {
     const state = createApprovalDraft(draft);
-    state.reviewerId = "doctor_1";
     state.dosageSelections.SKU_1 = "alternate";
     expect(() => buildApprovalRequest(draft, state)).toThrow("必须填写说明");
   });

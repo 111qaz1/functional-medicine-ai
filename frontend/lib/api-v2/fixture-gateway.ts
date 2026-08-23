@@ -8,6 +8,7 @@ import type {
   AttachmentResponse,
   AttachmentType,
   CaseCreateRequest,
+  CaseListResponse,
   CaseResponse,
   ClinicalSummaryUpdateRequest,
   DraftResponse,
@@ -245,6 +246,13 @@ function createFixtureDraft(caseId: string, draftId: string): DraftResponse {
     abstain_reason: null,
     manual_review_required: true,
     red_flags: [],
+    core_health_portrait: null,
+    structured_system_findings: [],
+    lifestyle_plan: null,
+    safety_decisions: [],
+    uncovered_system_ids: [],
+    uncovered_system_reasons: {},
+    report_sections: [],
     generated_at: isoNow()
   };
 }
@@ -416,6 +424,23 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     const state = database.cases[caseId];
     if (!state) throw problem("CASE_NOT_FOUND", 404, "Fixture 病例不存在。", instance);
     return state;
+  }
+
+  async listCases(offset = 0, limit = 50): Promise<CaseListResponse> {
+    this.authenticate("/api/v2/cases");
+    const items = Object.values(this.read().cases)
+      .map((state) => state.caseResource)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+      .map((item) => ({
+        id: item.id,
+        customer_name: item.customer_name,
+        consultant_id: item.consultant_id,
+        status: item.status,
+        attachment_count: item.attachments.length,
+        created_at: item.created_at,
+        updated_at: item.updated_at
+      }));
+    return { items: items.slice(offset, offset + limit), total: items.length, offset, limit };
   }
 
   async createCase(payload: CaseCreateRequest): Promise<CaseResponse> {
@@ -708,6 +733,9 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     const database = this.read();
     const state = Object.values(database.cases).find((item) => item.draft?.id === draftId);
     if (!state?.draft) throw problem("DRAFT_NOT_FOUND", 404, "Fixture 草案不存在。", instance);
+    if (payload.expected_revision !== state.draft.revision) {
+      throw problem("DRAFT_REVISION_CONFLICT", 409, "Fixture draft revision changed.", instance);
+    }
     state.draft = applyApprovalEdits(state.draft, payload, instance);
     state.caseResource.status = "approved";
     const approvedAt = isoNow();
@@ -724,7 +752,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     return {
       draft_id: draftId,
       status: "approved",
-      reviewer_id: payload.reviewer_id,
+      reviewer_id: "fixture-doctor",
       publishable_report: payload.publishable_summary ?? state.draft.public_summary.join("\n\n"),
       approved_at: approvedAt,
       report_ready: Boolean(state.report),

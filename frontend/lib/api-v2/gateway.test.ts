@@ -73,6 +73,13 @@ const draftResponse = {
   abstain_reason: null,
   manual_review_required: false,
   red_flags: [],
+  core_health_portrait: null,
+  structured_system_findings: [],
+  lifestyle_plan: null,
+  safety_decisions: [],
+  uncovered_system_ids: [],
+  uncovered_system_reasons: {},
+  report_sections: [],
   generated_at: "2026-08-22T00:00:00Z"
 };
 
@@ -95,8 +102,9 @@ const reportResponse = {
 };
 
 describe("HttpWorkflowGateway", () => {
-  it("uses the 13 declared v2 routes and preserves Location, multipart, and PDF metadata", async () => {
+  it("uses the 14 declared v2 routes and preserves Location, multipart, and PDF metadata", async () => {
     const responses = [
+      jsonResponse({ items: [], total: 0, offset: 0, limit: 50 }),
       jsonResponse(caseResponse, 201),
       jsonResponse(caseResponse),
       jsonResponse({ ...caseResponse, clinical_summary: "摘要" }),
@@ -126,6 +134,7 @@ describe("HttpWorkflowGateway", () => {
     }) as typeof fetch;
     const gateway = new HttpWorkflowGateway(fetchImpl);
 
+    await gateway.listCases();
     await gateway.createCase({ customer_name: "虚构用户", consultant_id: null, notes: null });
     await gateway.getCase("case_1");
     await gateway.updateClinicalSummary("case_1", { clinical_summary: "摘要" });
@@ -140,7 +149,6 @@ describe("HttpWorkflowGateway", () => {
     await gateway.getOperation("analysis_1");
     await gateway.getLatestAnalysis("case_1");
     const reviewOperation = await gateway.submitReview("case_1", "analysis_1", {
-      reviewer_id: "doctor_1",
       expected_revision: 1,
       finding_changes: [],
       supplement_changes: [],
@@ -149,7 +157,7 @@ describe("HttpWorkflowGateway", () => {
     await gateway.retryDraftGeneration("case_1", "analysis_1");
     await gateway.getDraft("draft_1");
     await gateway.approveDraft("draft_1", {
-      reviewer_id: "doctor_1",
+      expected_revision: 1,
       publishable_summary: null,
       excluded_sku_ids: [],
       dosage_overrides: []
@@ -158,6 +166,7 @@ describe("HttpWorkflowGateway", () => {
     const report = await gateway.downloadReport("draft_1");
 
     expect(calls.map(([url]) => String(url))).toEqual([
+      "/api/v2/cases?offset=0&limit=50",
       "/api/v2/cases",
       "/api/v2/cases/case_1",
       "/api/v2/cases/case_1/clinical-summary",
@@ -173,9 +182,9 @@ describe("HttpWorkflowGateway", () => {
       "/api/v2/drafts/draft_1/report.pdf"
     ]);
     expect(calls.map(([, init]) => init?.method ?? "GET")).toEqual([
-      "POST", "GET", "PUT", "POST", "POST", "GET", "GET", "POST", "POST", "GET", "POST", "GET", "GET"
+      "GET", "POST", "GET", "PUT", "POST", "POST", "GET", "GET", "POST", "POST", "GET", "POST", "GET", "GET"
     ]);
-    const form = calls[3][1]?.body;
+    const form = calls[4][1]?.body;
     expect(form).toBeInstanceOf(FormData);
     expect((form as FormData).get("attachment_type")).toBe("medical_record");
     expect(((form as FormData).get("files") as File).name).toBe("fixture.txt");
@@ -201,7 +210,6 @@ describe("HttpWorkflowGateway", () => {
 
     await expect(
       gateway.submitReview("case_1", "analysis_1", {
-        reviewer_id: "doctor_1",
         expected_revision: 1,
         finding_changes: [],
         supplement_changes: [],

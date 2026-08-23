@@ -11,11 +11,9 @@ import { buildBackendUrl, config, middleware } from "./middleware";
 
 describe("API proxy middleware", () => {
   const previousBaseUrl = process.env.INTERNAL_API_BASE_URL;
-  const previousV2Token = process.env.FM_API_V2_BEARER_TOKEN;
 
   beforeEach(() => {
     process.env.INTERNAL_API_BASE_URL = "http://backend:8000";
-    process.env.FM_API_V2_BEARER_TOKEN = "fixture-v2-token";
   });
 
   afterEach(() => {
@@ -23,11 +21,6 @@ describe("API proxy middleware", () => {
       delete process.env.INTERNAL_API_BASE_URL;
     } else {
       process.env.INTERNAL_API_BASE_URL = previousBaseUrl;
-    }
-    if (previousV2Token === undefined) {
-      delete process.env.FM_API_V2_BEARER_TOKEN;
-    } else {
-      process.env.FM_API_V2_BEARER_TOKEN = previousV2Token;
     }
   });
 
@@ -59,30 +52,58 @@ describe("API proxy middleware", () => {
     expect(buildBackendUrl(request).toString()).toBe(expected);
   });
 
-  it("injects the server-only bearer token into v2 upstream requests", () => {
+  it("converts the HttpOnly session into the upstream bearer identity and discards browser authorization", () => {
     const request = new NextRequest("https://fm.example.com/api/v2/cases/case_1", {
-      headers: { Authorization: "Bearer browser-controlled-value" }
+      headers: {
+        Authorization: "Bearer browser-controlled-value",
+        Cookie: "fm_session=doctor-session-token"
+      }
     });
     const response = middleware(request);
 
     expect(isRewrite(response)).toBe(true);
     expect(getRewrittenUrl(response)).toBe("http://backend:8000/api/v2/cases/case_1");
     expect(response.headers.get("x-middleware-request-authorization")).toBe(
-      "Bearer fixture-v2-token"
+      "Bearer doctor-session-token"
     );
     expect(response.headers.get("authorization")).toBeNull();
   });
 
-  it("returns an explicit problem response when the v2 token is missing", async () => {
-    delete process.env.FM_API_V2_BEARER_TOKEN;
+  it("returns an authentication problem when the session is missing", async () => {
     const request = new NextRequest("https://fm.example.com/api/v2/cases/case_1");
     const response = middleware(request);
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(401);
     expect(response.headers.get("content-type")).toContain("application/problem+json");
     await expect(response.json()).resolves.toMatchObject({
-      code: "FRONTEND_INTEGRATION_NOT_CONFIGURED",
-      status: 503
+      code: "AUTHENTICATION_REQUIRED",
+      status: 401
+    });
+  });
+
+  it("accepts same-origin writes and rejects cross-origin writes", async () => {
+    const accepted = middleware(new NextRequest("https://fm.example.com/api/v2/cases", {
+      method: "POST",
+      headers: {
+        Cookie: "fm_session=doctor-session-token",
+        Origin: "https://fm.example.com",
+        "Sec-Fetch-Site": "same-origin"
+      }
+    }));
+    expect(isRewrite(accepted)).toBe(true);
+
+    const rejected = middleware(new NextRequest("https://fm.example.com/api/v2/cases", {
+      method: "POST",
+      headers: {
+        Cookie: "fm_session=doctor-session-token",
+        Origin: "https://attacker.example",
+        "Sec-Fetch-Site": "cross-site"
+      }
+    }));
+    expect(rejected.status).toBe(403);
+    await expect(rejected.json()).resolves.toMatchObject({
+      code: "CROSS_ORIGIN_REQUEST_REJECTED",
+      status: 403
     });
   });
 

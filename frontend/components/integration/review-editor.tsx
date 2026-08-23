@@ -34,8 +34,7 @@ export interface ReviewEditorProps {
   analysis: AnalysisResponse;
   value: ReviewDraftState;
   onChange(value: ReviewDraftState): void;
-  reviewerId: string;
-  onReviewerIdChange(value: string): void;
+  reviewerName: string;
   sourceOptions: Array<{ id: string; name: string }>;
   busy: boolean;
   conflict: boolean;
@@ -47,8 +46,7 @@ export function ReviewEditor({
   analysis,
   value,
   onChange,
-  reviewerId,
-  onReviewerIdChange,
+  reviewerName,
   sourceOptions,
   busy,
   conflict,
@@ -139,15 +137,7 @@ export function ReviewEditor({
   return (
     <div className="workflow-stack">
       <div className="workflow-review-heading">
-        <label className="workflow-field">
-          <span>复核医生 ID</span>
-          <input
-            value={reviewerId}
-            onChange={(event) => onReviewerIdChange(event.target.value)}
-            maxLength={160}
-            autoComplete="off"
-          />
-        </label>
+        <div className="workflow-reviewer-identity"><span>当前复核医生</span><strong>{reviewerName}</strong><small>审核身份由登录会话确定，不能在请求中修改。</small></div>
         <p>当前分析修订号：{analysis.revision}</p>
       </div>
 
@@ -327,7 +317,7 @@ export function ReviewEditor({
         <button
           className="workflow-button workflow-button--primary"
           type="button"
-          disabled={busy || conflict || !reviewerId.trim()}
+          disabled={busy || conflict}
           onClick={onSubmit}
         >
           {busy ? "正在提交…" : "确认复核并生成草案"}

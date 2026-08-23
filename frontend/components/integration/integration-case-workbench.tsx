@@ -26,6 +26,7 @@ import type {
 } from "../../lib/api-v2/types";
 import { currentWorkflowStep, deriveWorkflowSteps, type WorkflowStepId } from "../../lib/api-v2/workflow-state";
 import { DraftApproval } from "./draft-approval";
+import { useIntegrationDoctor } from "./doctor-session";
 import { ReviewEditor } from "./review-editor";
 import { WorkflowOperation } from "./workflow-operation";
 import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell";
@@ -59,6 +60,7 @@ export function IntegrationCaseWorkbench({
     () => createWorkflowGateway(fixtureMode, fixtureScenario),
     [fixtureMode, fixtureScenario]
   );
+  const { doctor, logout } = useIntegrationDoctor();
   const pollerRef = useRef<OperationPoller | null>(null);
   const loadSequence = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -69,7 +71,6 @@ export function IntegrationCaseWorkbench({
   const [clinicalSummary, setClinicalSummary] = useState("");
   const [reviewDraft, setReviewDraft] = useState<ReviewDraftState | null>(null);
   const [reviewBaseline, setReviewBaseline] = useState("");
-  const [reviewerId, setReviewerId] = useState("");
   const [approvalDraft, setApprovalDraft] = useState<ApprovalDraftState | null>(null);
   const [approvalBaseline, setApprovalBaseline] = useState("");
   const [operation, setOperation] = useState<OperationResponse | null>(null);
@@ -101,7 +102,7 @@ export function IntegrationCaseWorkbench({
       } catch (cause) {
         if (!isWorkflowProblem(cause, "ANALYSIS_NOT_FOUND")) throw cause;
       }
-      if (loadedAnalysis?.draft_id) {
+      if (loadedAnalysis?.draft_id && loadedAnalysis.status !== "stale" && loadedAnalysis.status !== "failed") {
         try {
           loadedDraft = await gateway.getDraft(loadedAnalysis.draft_id);
         } catch (cause) {
@@ -152,6 +153,15 @@ export function IntegrationCaseWorkbench({
       pollerRef.current = null;
     };
   }, [gateway, loadWorkflow]);
+
+  useEffect(() => {
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      if (!(reviewDirty || approvalDirty || summaryDirty)) return;
+      event.preventDefault();
+    }
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [approvalDirty, reviewDirty, summaryDirty]);
 
   const trackOperation = useCallback((accepted: AcceptedOperation) => {
     setOperation(accepted.operation);
@@ -220,12 +230,11 @@ export function IntegrationCaseWorkbench({
     setAction("summary");
     setError(null);
     try {
-      const updated = await gateway.updateClinicalSummary(caseId, {
+      await gateway.updateClinicalSummary(caseId, {
         clinical_summary: clinicalSummary.trim() || null
       });
-      setCaseResource(updated);
-      setClinicalSummary(updated.clinical_summary ?? "");
-      setNotice("临床摘要已保存。");
+      await loadWorkflow(true);
+      setNotice("临床摘要已保存；此前分析和方案如已过期，需要重新分析。 ");
     } catch (cause) {
       setError(workflowErrorMessage(cause));
     } finally {
@@ -278,7 +287,6 @@ export function IntegrationCaseWorkbench({
     try {
       const changes = buildReviewChanges(analysis, reviewDraft);
       trackOperation(await gateway.submitReview(caseId, analysis.id, {
-        reviewer_id: reviewerId.trim(),
         expected_revision: analysis.revision,
         ...changes
       }));
@@ -300,7 +308,11 @@ export function IntegrationCaseWorkbench({
     try {
       trackOperation(await gateway.retryDraftGeneration(caseId, analysis.id));
     } catch (cause) {
-      setError(workflowErrorMessage(cause));
+      if (isWorkflowProblem(cause, "DRAFT_REVISION_CONFLICT", "DRAFT_STALE")) {
+        setError("草案或病例资料已更新。当前页面编辑已保留，请重新加载最新版本后再次确认。");
+      } else {
+        setError(workflowErrorMessage(cause));
+      }
     } finally {
       setAction(null);
     }
@@ -315,7 +327,11 @@ export function IntegrationCaseWorkbench({
       setNotice(approved.report_ready ? "审批完成，报告已可下载。" : "审批完成，正在等待报告生成。");
       await loadWorkflow(true);
     } catch (cause) {
-      setError(workflowErrorMessage(cause));
+      if (isWorkflowProblem(cause, "DRAFT_REVISION_CONFLICT", "DRAFT_STALE")) {
+        setError("草案或病例资料已经更新。当前审批编辑已保留，请重新加载最新版本后再次确认。");
+      } else {
+        setError(workflowErrorMessage(cause));
+      }
     } finally {
       setAction(null);
     }
@@ -389,6 +405,7 @@ export function IntegrationCaseWorkbench({
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases">返回病例入口</a>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}>重新加载全部状态</button>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void logout()}>退出 {doctor.display_name}</button>
         </>
       }
     >
@@ -506,8 +523,7 @@ export function IntegrationCaseWorkbench({
             analysis={analysis}
             value={reviewDraft}
             onChange={setReviewDraft}
-            reviewerId={reviewerId}
-            onReviewerIdChange={setReviewerId}
+            reviewerName={doctor.display_name}
             sourceOptions={sourceOptions}
             busy={busy}
             conflict={reviewConflict}
@@ -531,7 +547,7 @@ export function IntegrationCaseWorkbench({
 
       <WorkflowSection id="draft" title="草案审批" description="仅提交排除项、发生变化的剂量，以及医生主动开启的公开摘要覆盖。" state={sectionState(steps, "draft")}>
         {draft && approvalDraft ? (
-          <DraftApproval draft={draft} value={approvalDraft} onChange={setApprovalDraft} busy={busy} onApprove={() => void handleApprove()} />
+          <DraftApproval draft={draft} value={approvalDraft} reviewerName={doctor.display_name} onChange={setApprovalDraft} busy={busy} onApprove={() => void handleApprove()} />
         ) : <p className="workflow-empty">完成复核并生成草案后可审批。</p>}
       </WorkflowSection>
 
@@ -539,7 +555,15 @@ export function IntegrationCaseWorkbench({
         {draft?.status === "approved" ? (
           <div className="workflow-stack">
             {report ? (
-              <WorkflowNotice tone="success">报告已就绪：{report.filename}</WorkflowNotice>
+              <>
+                <WorkflowNotice tone="success">报告已就绪：{report.filename}</WorkflowNotice>
+                <dl className="workflow-definition-grid">
+                  <div><dt>报告状态</dt><dd>已批准，可下载</dd></div>
+                  <div><dt>批准医生</dt><dd>{doctor.display_name}</dd></div>
+                  <div><dt>批准时间</dt><dd>{new Date(report.approved_at).toLocaleString("zh-CN")}</dd></div>
+                  <div><dt>报告文件</dt><dd>{report.filename}</dd></div>
+                </dl>
+              </>
             ) : (
               <WorkflowNotice tone="info">审批已完成，报告状态尚未确认。</WorkflowNotice>
             )}

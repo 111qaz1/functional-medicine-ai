@@ -27,7 +27,7 @@
 | POST | `/api/v2/cases/{case_id}/analyses/{analysis_id}/draft-generation:retry` | 202 | `OperationResponse` |
 | GET | `/api/v2/drafts/{draft_id}` | 200 | `DraftResponse` |
 | POST | `/api/v2/drafts/{draft_id}/approval` | 200 | `ApprovalResponse` |
-| GET | `/api/v2/drafts/{draft_id}/report` | 200 | `ReportResponse` |
+| GET | `/api/v2/drafts/{draft_id}/report` | 200 | `ReportResponse`（含最终发布正文、批准医生及下载信息） |
 | GET | `/api/v2/drafts/{draft_id}/report.pdf` | 200 | `application/pdf` |
 
 除 PDF 外，成功响应都是直接资源 DTO，不使用 `data` 外壳。批量附件响应使用 `{items, meta}`。
@@ -142,8 +142,8 @@ Operation 不单独持久化：`operation_id` 等于 `analysis_id`，从现有�
   "progress": {
     "current": 1,
     "total": 3,
-    "percent": 33,
-    "current_item": "synthetic-labs.txt"
+    "percent": 37,
+    "current_item": "文件分析 1/3 处理中：synthetic-labs.txt"
   },
   "failure": null,
   "created_at": "2026-08-21T00:00:00Z",
@@ -155,6 +155,8 @@ Operation 不单独持久化：`operation_id` 等于 `analysis_id`，从现有�
 
 - `stage`：`analysis`、`draft_generation`
 - `status`：`queued`、`running`、`succeeded`、`failed`
+
+`progress.current` 与 `progress.total` 表示文件处理数量；`progress.percent` 表示完整业务进度，而不是文件完成率。分析阶段依次使用排队 5%、准备资料 12%、文件分析 18%–76%、病例级综合 82%、证据校验 94%，只有终态为 100%。`current_item` 在文件阶段展示处理情况，在后续阶段展示病例级综合或证据校验提示。草案生成阶段沿用真实 `final_generation_progress` 并返回对应业务阶段提示。
 
 Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳定错误码、公开消息和 `retryable`。HTTP 4xx/5xx 只表示轮询请求本身失败。
 
@@ -231,7 +233,7 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 ```json
 {
   "expected_revision": 3,
-  "publishable_summary": "医生确认后的公开总结",
+  "publishable_summary": "医生确认后的完整 Markdown 最终报告",
   "excluded_sku_ids": ["SKU-002"],
   "dosage_overrides": [
     {
@@ -249,7 +251,7 @@ Operation 业务执行失败仍返回 HTTP 200，并在 `failure` 中提供稳�
 - 选项必须属于对应 SKU。
 - 选择非当前剂量时必须填写说明。
 - 排除后至少保留一项推荐，否则返回 `409 EMPTY_PUBLISHABLE_RECOMMENDATIONS`。
-- `publishable_summary` 为 `null` 时沿用系统生成报告。
+- `publishable_summary` 为 `null` 时沿用系统生成报告；传值时应提交医生确认后的完整 Markdown 最终报告。
 
 审批成功后，`report_url` 指向同一版本的 PDF 下载接口。
 

@@ -234,11 +234,30 @@ class V2MapperTests(unittest.TestCase):
         self.assertEqual((operation.stage, operation.status), ("analysis", "succeeded"))
         self.assertEqual(operation.operation_id, analysis.id)
 
+        analysis.status = AnalysisStatus.analyzing_documents
+        analysis.progress_current = 1
+        analysis.progress_total = 1
+        operation = operation_to_response(analysis)
+        self.assertEqual(operation.progress.percent, 76)
+        self.assertIn("文件分析 1/1", operation.progress.current_item)
+
+        analysis.status = AnalysisStatus.synthesizing
+        operation = operation_to_response(analysis)
+        self.assertEqual(operation.progress.percent, 82)
+        self.assertIn("病例级综合", operation.progress.current_item)
+
+        analysis.status = AnalysisStatus.validating
+        operation = operation_to_response(analysis)
+        self.assertEqual(operation.progress.percent, 94)
+        self.assertIn("证据校验", operation.progress.current_item)
+        self.assertEqual(analysis_to_response(analysis).progress.percent, 94)
+
         analysis.final_generation_status = FinalGenerationStatus.generating_draft
         analysis.final_generation_progress = 64
         operation = operation_to_response(analysis)
         self.assertEqual((operation.stage, operation.status), ("draft_generation", "running"))
         self.assertEqual(operation.progress.percent, 64)
+        self.assertEqual(operation.progress.current_item, "生成营养素草案")
 
         analysis.final_generation_status = FinalGenerationStatus.failed
         analysis.final_generation_error = "Synthetic failure"

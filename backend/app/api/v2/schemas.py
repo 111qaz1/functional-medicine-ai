@@ -675,4 +675,6 @@ class ReportResponse(ContractModel):
     status: Literal["ready"] = "ready"
     filename: str
     download_url: str
+    reviewer_id: str
+    publishable_report: str
     approved_at: datetime

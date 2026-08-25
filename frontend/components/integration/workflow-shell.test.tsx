@@ -35,9 +35,9 @@ describe("WorkflowShell", () => {
     expect(html).toContain('data-current-step="attachments"');
     expect(html).toContain("测试品牌");
     expect(html).toContain("测试病例上下文");
-    expect(html).toContain("第 <strong>2</strong> / 6 步");
+    expect(html).toContain("第 <strong>2</strong> / 5 步");
     expect(html).toContain('aria-current="step"');
-    expect(html).toContain('aria-disabled="true" tabindex="-1"');
+    expect(html).toContain('type="button" disabled=""');
     expect(html).not.toContain('workflow-step-analysis');
     expect(html).toContain('data-step="attachments"');
     expect(html).toContain('role="alert"');
@@ -51,7 +51,6 @@ describe("WorkflowShell", () => {
         steps={[
           { id: "case", state: "current" },
           { id: "attachments", state: "blocked" },
-          { id: "analysis", state: "blocked" },
           { id: "review", state: "blocked" },
           { id: "draft", state: "blocked" },
           { id: "report", state: "blocked" }

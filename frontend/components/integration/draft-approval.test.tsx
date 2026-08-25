@@ -49,20 +49,19 @@ const draft = {
 } as unknown as DraftResponse;
 
 describe("DraftApproval", () => {
-  it("shows the authenticated approval doctor without an editable identity field", () => {
+  it("keeps step five focused on recommendation adjustments", () => {
     const html = renderToStaticMarkup(
       <DraftApproval
         draft={draft}
         value={createApprovalDraft(draft)}
-        reviewerName="测试医生"
         onChange={() => undefined}
         busy={false}
-        onApprove={() => undefined}
+        onContinue={() => undefined}
       />
     );
 
-    expect(html).toContain("当前批准医生");
-    expect(html).toContain("测试医生");
-    expect(html).not.toContain("审批医生 ID（必填）");
+    expect(html).toContain("继续编辑最终报告");
+    expect(html).toContain("虚构产品");
+    expect(html).not.toContain("三层核心健康画像");
   });
 });

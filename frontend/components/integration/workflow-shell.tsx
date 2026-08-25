@@ -1,7 +1,6 @@
 import React from "react";
 import type { ReactNode } from "react";
 import {
-  BeakerIcon,
   ClipboardDocumentCheckIcon,
   ClipboardDocumentListIcon,
   DocumentArrowDownIcon,
@@ -15,7 +14,6 @@ import type { WorkflowStep, WorkflowStepId, WorkflowStepState } from "../../lib/
 const workflowStepIcons = {
   case: ClipboardDocumentListIcon,
   attachments: FolderOpenIcon,
-  analysis: BeakerIcon,
   review: PencilSquareIcon,
   draft: ClipboardDocumentCheckIcon,
   report: DocumentArrowDownIcon
@@ -29,6 +27,7 @@ export interface WorkflowShellProps {
   caseId?: string;
   steps: WorkflowStep[];
   currentStep: WorkflowStepId;
+  onStepChange?: (step: WorkflowStepId) => void;
   headerActions?: ReactNode;
   brandSlot?: ReactNode;
   contextSlot?: ReactNode;
@@ -42,6 +41,7 @@ export function WorkflowShell({
   caseId,
   steps,
   currentStep,
+  onStepChange,
   headerActions,
   brandSlot,
   contextSlot,
@@ -80,19 +80,19 @@ export function WorkflowShell({
               const isBlocked = step.state === "blocked";
               return (
                 <li key={step.id} data-state={step.state}>
-                  <a
-                    href={isBlocked ? undefined : `#workflow-step-${step.id}`}
+                  <button
+                    type="button"
+                    disabled={isBlocked}
+                    onClick={() => onStepChange?.(step.id)}
                     aria-label={`${copy.label}：${workflowStepStateLabels[step.state]}`}
                     aria-current={isCurrent ? "step" : undefined}
-                    aria-disabled={isBlocked ? true : undefined}
-                    tabIndex={isBlocked ? -1 : undefined}
                   >
                     <span className="workflow-step__index" aria-hidden="true"><StepIcon className="workflow-step__icon" /></span>
                     <span className="workflow-step__copy">
                       <strong>{copy.label}</strong>
                       <small>{workflowStepStateLabels[step.state]}</small>
                     </span>
-                  </a>
+                  </button>
                 </li>
               );
             })}

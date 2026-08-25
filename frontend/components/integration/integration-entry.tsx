@@ -14,7 +14,6 @@ import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell
 const entrySteps = [
   { id: "case", state: "current" },
   { id: "attachments", state: "blocked" },
-  { id: "analysis", state: "blocked" },
   { id: "review", state: "blocked" },
   { id: "draft", state: "blocked" },
   { id: "report", state: "blocked" }
@@ -88,7 +87,7 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
       {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。数据只用于界面测试。</WorkflowNotice> : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
 
-      <WorkflowSection id="case" title="我的病例" description="按最近更新时间排列，可继续尚未完成的六步流程。" state="current" actions={<button className="workflow-button workflow-button--secondary" type="button" disabled={loadingCases} onClick={() => void loadCases()}><ArrowPathIcon className={`workflow-button__icon${loadingCases ? " workflow-icon--spin" : ""}`} />刷新列表</button>}>
+      <WorkflowSection id="case" title="我的病例" description="按最近更新时间排列，可继续尚未完成的五步流程。" state="current" actions={<button className="workflow-button workflow-button--secondary" type="button" disabled={loadingCases} onClick={() => void loadCases()}><ArrowPathIcon className={`workflow-button__icon${loadingCases ? " workflow-icon--spin" : ""}`} />刷新列表</button>}>
         {loadingCases ? <p className="workflow-placeholder">正在读取病例…</p> : cases.length ? (
           <div className="workflow-case-table-wrap">
             <table className="workflow-case-table">

@@ -10,6 +10,7 @@ export interface WorkflowShellProps {
   caseId?: string;
   steps: WorkflowStep[];
   currentStep: WorkflowStepId;
+  onStepChange?: (step: WorkflowStepId) => void;
   headerActions?: ReactNode;
   children: ReactNode;
   theme?: "default" | "test";
@@ -21,6 +22,7 @@ export function WorkflowShell({
   caseId,
   steps,
   currentStep,
+  onStepChange,
   headerActions,
   children,
   theme = "default"
@@ -47,18 +49,18 @@ export function WorkflowShell({
             const isBlocked = step.state === "blocked";
             return (
               <li key={step.id} data-state={step.state}>
-                <a
-                  href={isBlocked ? undefined : `#workflow-step-${step.id}`}
+                <button
+                  type="button"
+                  disabled={isBlocked}
+                  onClick={() => onStepChange?.(step.id)}
                   aria-current={isCurrent ? "step" : undefined}
-                  aria-disabled={isBlocked ? true : undefined}
-                  tabIndex={isBlocked ? -1 : undefined}
                 >
                   <span className="workflow-step__index" aria-hidden="true">{index + 1}</span>
                   <span>
                     <strong>{copy.label}</strong>
                     <small>{copy.description}</small>
                   </span>
-                </a>
+                </button>
               </li>
             );
           })}

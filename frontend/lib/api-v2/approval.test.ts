@@ -45,20 +45,21 @@ const draft = {
 } as unknown as DraftResponse;
 
 describe("approval payload builder", () => {
-  it("submits only exclusions and changed dosage options, leaving summary untouched by default", () => {
+  it("submits exclusions, changed dosage options, and the full publishable report", () => {
     const state = createApprovalDraft(draft);
     state.excludedSkuIds = ["SKU_2"];
     state.dosageSelections.SKU_1 = "alternate";
     state.dosageNotes.SKU_1 = "根据虚构复核条件调整";
 
-    expect(buildApprovalRequest(draft, state)).toEqual({
+    const request = buildApprovalRequest(draft, state);
+    expect(request).toMatchObject({
       expected_revision: draft.revision,
-      publishable_summary: null,
       excluded_sku_ids: ["SKU_2"],
       dosage_overrides: [
         { sku_id: "SKU_1", option_id: "alternate", note: "根据虚构复核条件调整" }
       ]
     });
+    expect(request.publishable_summary).toContain("功能医学综合分析与首月干预方案");
   });
 
   it("rejects excluding every recommendation", () => {

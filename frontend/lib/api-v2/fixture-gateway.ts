@@ -122,7 +122,7 @@ function createFixtureAnalysis(caseId: string, analysisId: string): AnalysisResp
     source_page: 1,
     source_text: "25-OH Vitamin D: 18 ng/mL",
     confidence: 0.92,
-    evidence_status: "verified",
+    evidence_status: "verified_text",
     evidence_notes: [],
     observed_at: null
   };
@@ -146,7 +146,7 @@ function createFixtureAnalysis(caseId: string, analysisId: string): AnalysisResp
     grading_basis: "Fixture 分级",
     source_page: 1,
     source_text: "Milk: grade 2",
-    evidence_status: "verified"
+    evidence_status: "verified_text"
   };
   return {
     id: analysisId,
@@ -154,7 +154,7 @@ function createFixtureAnalysis(caseId: string, analysisId: string): AnalysisResp
     version: 1,
     revision: 1,
     status: "queued",
-    progress: { current: 0, total: 2, percent: 0, current_file_name: null },
+    progress: { current: 0, total: 2, percent: 5, current_file_name: null },
     case_summary: "完全虚构的病例摘要，用于验证前端工作流，不代表医学建议。",
     system_findings: ["虚构系统发现：需要医生复核维生素 D 相关信息。"],
     abnormal_findings: [finding],
@@ -163,7 +163,39 @@ function createFixtureAnalysis(caseId: string, analysisId: string): AnalysisResp
       source_file_id: "file_fixture_questionnaire",
       source_file_name: "fixture-questionnaire.txt",
       source_page: 1,
-      items: [food],
+      items: [
+        food,
+        {
+          id: "food_fixture_corn",
+          name: "玉米",
+          raw_value: "83.9",
+          unit: "U/mL",
+          abnormal_flag: "positive",
+          severity: "mild",
+          reported_grade: "1",
+          reported_grade_meaning: "虚构轻度反应",
+          reference_range: "50-100 U/mL",
+          grading_basis: "Fixture 分级",
+          source_page: 1,
+          source_text: "Corn: 83.9 U/mL",
+          evidence_status: "verified_text"
+        },
+        {
+          id: "food_fixture_yeast",
+          name: "酵母",
+          raw_value: ">200",
+          unit: "U/mL",
+          abnormal_flag: "high",
+          severity: "high",
+          reported_grade: "3",
+          reported_grade_meaning: "虚构重度反应",
+          reference_range: ">200 U/mL",
+          grading_basis: "Fixture 分级",
+          source_page: 1,
+          source_text: "Yeast: >200 U/mL",
+          evidence_status: "verified_text"
+        }
+      ],
       interpretations: ["虚构食敏结果，仅用于界面测试。"],
       valid: true,
       warning: null
@@ -593,7 +625,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
         case_id: caseId,
         analysis_id: analysisId,
         draft_id: null,
-        progress: { current: 0, total: 2, percent: 0, current_item: null },
+        progress: { current: 0, total: 2, percent: 5, current_item: "排队中" },
         failure: null,
         created_at: isoNow(),
         updated_at: isoNow()
@@ -612,22 +644,34 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     state.operation.polls += 1;
     const operation = state.operation.response;
     operation.status = "running";
-    operation.progress = { current: 1, total: 2, percent: 50, current_item: "fixture-medical-record.txt" };
+    if (operation.stage === "analysis") {
+      operation.progress = { current: 1, total: 2, percent: 47, current_item: "文件分析 1/2 处理中：fixture-medical-record.txt" };
+      state.analysis.status = "analyzing_documents";
+      state.analysis.progress = { current: 1, total: 2, percent: 47, current_file_name: "fixture-medical-record.txt" };
+    } else {
+      operation.progress = { current: 50, total: 100, percent: 50, current_item: "最终病例深度综合" };
+      state.analysis.draft_generation = { status: "final_synthesizing", progress: 50, error: null };
+    }
     operation.updated_at = isoNow();
 
     if (state.operation.polls >= 2) {
       if (operation.stage === "analysis" && this.scenario === "analysis_failure") {
         operation.status = "failed";
         operation.failure = { code: "ANALYSIS_FAILED", message: "Fixture 模拟：综合分析失败。", retryable: true };
+        operation.progress = { current: 2, total: 2, percent: 100, current_item: "综合分析失败" };
         state.analysis.status = "failed";
+        state.analysis.progress = { current: 2, total: 2, percent: 100, current_file_name: null };
         state.analysis.error = operation.failure;
       } else if (operation.stage === "draft_generation" && this.scenario === "draft_generation_failure" && !state.draftRetried) {
         operation.status = "failed";
         operation.failure = { code: "DRAFT_GENERATION_FAILED", message: "Fixture 模拟：草案生成失败。", retryable: true };
-        state.analysis.draft_generation = { status: "failed", progress: 100, error: operation.failure.message };
+        operation.progress = { current: 50, total: 100, percent: 50, current_item: "草案生成失败" };
+        state.analysis.draft_generation = { status: "failed", progress: 50, error: operation.failure.message };
       } else {
         operation.status = "succeeded";
-        operation.progress = { current: 2, total: 2, percent: 100, current_item: null };
+        operation.progress = operation.stage === "analysis"
+          ? { current: 2, total: 2, percent: 100, current_item: "综合分析已完成，可以开始医生校对" }
+          : { current: 100, total: 100, percent: 100, current_item: "草案生成完成" };
         if (operation.stage === "analysis") {
           state.analysis.status = "ready_for_review";
           state.analysis.progress = { current: 2, total: 2, percent: 100, current_file_name: null };
@@ -667,7 +711,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     applyReviewDeltas(state.analysis, payload, instance);
     state.analysis.revision += 1;
     state.analysis.status = "reviewed";
-    state.analysis.draft_generation = { status: "queued", progress: 0, error: null };
+    state.analysis.draft_generation = { status: "queued", progress: 5, error: null };
     state.operation = {
       polls: 0,
       response: {
@@ -678,7 +722,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
         case_id: caseId,
         analysis_id: analysisId,
         draft_id: null,
-        progress: { current: 0, total: 2, percent: 0, current_item: null },
+        progress: { current: 5, total: 100, percent: 5, current_item: "医生校对已保存，任务排队中" },
         failure: null,
         created_at: isoNow(),
         updated_at: isoNow()
@@ -695,7 +739,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
     const state = this.caseState(database, caseId, instance);
     if (!state.analysis || state.analysis.id !== analysisId) throw problem("ANALYSIS_NOT_FOUND", 404, "Fixture 分析不存在。", instance);
     state.draftRetried = true;
-    state.analysis.draft_generation = { status: "queued", progress: 0, error: null };
+    state.analysis.draft_generation = { status: "queued", progress: 5, error: null };
     state.operation = {
       polls: 0,
       response: {
@@ -706,7 +750,7 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
         case_id: caseId,
         analysis_id: analysisId,
         draft_id: null,
-        progress: { current: 0, total: 2, percent: 0, current_item: null },
+        progress: { current: 5, total: 100, percent: 5, current_item: "医生校对已保存，任务排队中" },
         failure: null,
         created_at: isoNow(),
         updated_at: isoNow()
@@ -745,6 +789,8 @@ export class FixtureWorkflowGateway implements WorkflowGateway {
         status: "ready",
         filename: `fixture-report-${draftId}.pdf`,
         download_url: `/api/v2/drafts/${draftId}/report.pdf`,
+        reviewer_id: "fixture-doctor",
+        publishable_report: payload.publishable_summary ?? state.draft.public_summary.join("\n\n"),
         approved_at: approvedAt
       };
     }

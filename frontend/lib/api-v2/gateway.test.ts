@@ -98,10 +98,25 @@ const reportResponse = {
   status: "ready",
   filename: "fixture-report.pdf",
   download_url: "/api/v2/drafts/draft_1/report.pdf",
+  reviewer_id: "doctor_1",
+  publishable_report: "虚构报告",
   approved_at: "2026-08-22T00:00:00Z"
 };
 
 describe("HttpWorkflowGateway", () => {
+  it("calls the fetch implementation with the global receiver", async () => {
+    let receiver: unknown;
+    const fetchImpl = vi.fn(function (this: unknown) {
+      receiver = this;
+      return Promise.resolve(jsonResponse({ items: [], total: 0, offset: 0, limit: 50 }));
+    }) as typeof fetch;
+    const gateway = new HttpWorkflowGateway(fetchImpl);
+
+    await gateway.listCases();
+
+    expect(receiver).toBe(globalThis);
+  });
+
   it("uses the 14 declared v2 routes and preserves Location, multipart, and PDF metadata", async () => {
     const responses = [
       jsonResponse({ items: [], total: 0, offset: 0, limit: 50 }),

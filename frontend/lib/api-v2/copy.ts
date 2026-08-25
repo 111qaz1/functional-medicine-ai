@@ -13,11 +13,10 @@ export const workflowCopy = {
   },
   steps: {
     case: { label: "病例", description: "核对建档信息与临床摘要" },
-    attachments: { label: "资料", description: "上传病历与问卷" },
-    analysis: { label: "分析", description: "启动并跟踪综合分析" },
+    attachments: { label: "资料", description: "上传资料并启动综合分析" },
     review: { label: "复核", description: "提交医生差量修订" },
-    draft: { label: "审批", description: "审核推荐与剂量" },
-    report: { label: "报告", description: "确认状态并下载 PDF" }
+    draft: { label: "方案审核", description: "审核产品、剂量和安全提示" },
+    report: { label: "最终报告", description: "编辑、批准并导出 PDF" }
   },
   common: {
     loading: "正在读取病例工作流…",
@@ -25,7 +24,7 @@ export const workflowCopy = {
     save: "保存更改",
     cancel: "取消",
     configurationError: "对接访问令牌尚未在 Next 服务端配置。",
-    pollTimeout: "自动轮询已在 15 分钟后停止，业务状态未被判定为失败。请手动刷新状态。"
+    pollTimeout: "状态更新已暂停，后台任务仍在继续。请重新加载页面获取最新进度。"
   }
 } as const;
 

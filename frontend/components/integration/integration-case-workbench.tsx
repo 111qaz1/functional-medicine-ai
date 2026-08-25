@@ -6,7 +6,6 @@ import { buildApprovalRequest, createApprovalDraft, type ApprovalDraftState } fr
 import {
   analysisStatusLabels,
   caseStatusLabels,
-  draftGenerationStatusLabels,
   workflowCopy
 } from "../../lib/api-v2/copy";
 import { isWorkflowProblem, workflowErrorMessage } from "../../lib/api-v2/errors";
@@ -18,17 +17,17 @@ import { buildReviewChanges, createReviewDraft, type ReviewDraftState } from "..
 import type {
   AnalysisResponse,
   AttachmentBatchResponse,
-  AttachmentType,
   CaseResponse,
   DraftResponse,
   OperationResponse,
   ReportResponse
 } from "../../lib/api-v2/types";
-import { currentWorkflowStep, deriveWorkflowSteps, type WorkflowStepId } from "../../lib/api-v2/workflow-state";
+import { currentWorkflowStep, deriveWorkflowSteps, resolveRequestedWorkflowStep, type WorkflowStepId } from "../../lib/api-v2/workflow-state";
 import { DraftApproval } from "./draft-approval";
+import { FinalReportEditor } from "./final-report-editor";
+import { OperationProgress, type OperationProgressState } from "../operation-progress";
 import { useIntegrationDoctor } from "./doctor-session";
 import { ReviewEditor } from "./review-editor";
-import { WorkflowOperation } from "./workflow-operation";
 import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell";
 
 type LoadState = "loading" | "ready" | "error";
@@ -39,12 +38,25 @@ function sectionState(steps: ReturnType<typeof deriveWorkflowSteps>, id: Workflo
 
 function attachmentStatusLabel(status: string): string {
   return ({
-    parsed: "解析完成",
-    pending: "等待解析",
+    parsed: "预解析完成",
+    pending: "等待综合分析处理",
     questionnaire_imported: "问卷已导入",
     duplicate: "重复文件",
     failed: "处理失败"
   } as Record<string, string>)[status] ?? status;
+}
+
+function operationProgressState(operation: OperationResponse): OperationProgressState {
+  const failed = operation.status === "failed";
+  return {
+    placement: operation.stage === "analysis" ? "analysis" : "draft",
+    title: operation.stage === "analysis" ? "综合病例分析" : "生成结构化草案",
+    stage: failed
+      ? operation.failure?.message ?? "工作流执行失败"
+      : operation.progress.current_item ?? (operation.status === "queued" ? "任务已排队" : "正在更新任务状态"),
+    percent: operation.progress.percent,
+    status: failed ? "error" : operation.status === "succeeded" ? "success" : "running"
+  };
 }
 
 export function IntegrationCaseWorkbench({
@@ -75,7 +87,8 @@ export function IntegrationCaseWorkbench({
   const [approvalBaseline, setApprovalBaseline] = useState("");
   const [operation, setOperation] = useState<OperationResponse | null>(null);
   const [autoPolling, setAutoPolling] = useState(false);
-  const [attachmentResults, setAttachmentResults] = useState<Partial<Record<AttachmentType, AttachmentBatchResponse>>>({});
+  const [attachmentResults, setAttachmentResults] = useState<AttachmentBatchResponse | null>(null);
+  const [visibleStep, setVisibleStep] = useState<WorkflowStepId>("case");
   const [thirdPartyConfirmed, setThirdPartyConfirmed] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +98,10 @@ export function IntegrationCaseWorkbench({
   const reviewDirty = Boolean(reviewDraft && reviewBaseline && JSON.stringify(reviewDraft) !== reviewBaseline);
   const approvalDirty = Boolean(approvalDraft && approvalBaseline && JSON.stringify(approvalDraft) !== approvalBaseline);
   const summaryDirty = clinicalSummary !== (caseResource?.clinical_summary ?? "");
+  const analysisRunning = Boolean(analysis && ["queued", "preparing", "analyzing_documents", "synthesizing", "validating"].includes(analysis.status));
+  const analysisReady = analysis?.status === "ready_for_review" || analysis?.status === "reviewed";
+  const analysisRestartable = analysis?.status === "failed" || analysis?.status === "stale";
+  const analysisOperationVisible = operation?.stage === "analysis" && operation.status !== "failed" && !analysisReady;
   const operationBusy = autoPolling && (operation?.status === "queued" || operation?.status === "running");
   const busy = Boolean(action) || operationBusy;
 
@@ -130,6 +147,7 @@ export function IntegrationCaseWorkbench({
       }
       if (loadedDraft) {
         const nextApproval = createApprovalDraft(loadedDraft);
+        if (loadedReport?.publishable_report) nextApproval.publishableReport = loadedReport.publishable_report;
         setApprovalDraft(nextApproval);
         setApprovalBaseline(JSON.stringify(nextApproval));
       } else {
@@ -210,7 +228,45 @@ export function IntegrationCaseWorkbench({
   }, [analysis, gateway, operation, trackOperation]);
 
   const steps = deriveWorkflowSteps({ caseResource, analysis, draft, report });
-  const currentStep = currentWorkflowStep(steps);
+  const businessStep = currentWorkflowStep(steps);
+
+  const navigateToStep = useCallback((nextStep: WorkflowStepId, replace = false) => {
+    const target = steps.find((step) => step.id === nextStep);
+    if (!target || target.state === "blocked") return;
+    setVisibleStep(nextStep);
+    const url = new URL(window.location.href);
+    url.searchParams.set("step", nextStep);
+    window.history[replace ? "replaceState" : "pushState"]({}, "", url);
+  }, [steps]);
+
+  useEffect(() => {
+    if (!caseResource) return;
+    const restoreStep = () => {
+      const rawRequested = new URL(window.location.href).searchParams.get("step");
+      const nextStep = resolveRequestedWorkflowStep(rawRequested, steps, businessStep, analysisReady);
+      setVisibleStep(nextStep);
+      if (rawRequested !== nextStep) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("step", nextStep);
+        window.history.replaceState({}, "", url);
+      }
+    };
+    restoreStep();
+    window.addEventListener("popstate", restoreStep);
+    return () => window.removeEventListener("popstate", restoreStep);
+  }, [analysisReady, businessStep, caseResource, steps]);
+
+  useEffect(() => {
+    if (operation?.stage === "analysis" && operation.status === "succeeded" && analysisReady && visibleStep === "attachments") {
+      navigateToStep("review", true);
+    }
+  }, [analysisReady, navigateToStep, operation, visibleStep]);
+
+  useEffect(() => {
+    if (operation?.stage === "draft_generation" && operation.status === "succeeded" && draft && visibleStep === "review") {
+      navigateToStep("draft", true);
+    }
+  }, [draft, navigateToStep, operation, visibleStep]);
 
   const sourceOptions = useMemo(() => {
     const sources = new Map<string, string>();
@@ -242,7 +298,7 @@ export function IntegrationCaseWorkbench({
     }
   }
 
-  async function handleUpload(event: FormEvent<HTMLFormElement>, attachmentType: AttachmentType) {
+  async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!confirmDiscardEdits()) return;
     const form = event.currentTarget;
@@ -251,11 +307,11 @@ export function IntegrationCaseWorkbench({
       setError("请选择至少一个有效文件。");
       return;
     }
-    setAction(`upload-${attachmentType}`);
+    setAction("upload");
     setError(null);
     try {
-      const result = await gateway.uploadAttachments(caseId, attachmentType, files);
-      setAttachmentResults((current) => ({ ...current, [attachmentType]: result }));
+      const result = await gateway.uploadAttachments(caseId, "medical_record", files);
+      setAttachmentResults(result);
       form.reset();
       await loadWorkflow(true);
     } catch (cause) {
@@ -326,6 +382,12 @@ export function IntegrationCaseWorkbench({
       const approved = await gateway.approveDraft(draft.id, buildApprovalRequest(draft, approvalDraft));
       setNotice(approved.report_ready ? "审批完成，报告已可下载。" : "审批完成，正在等待报告生成。");
       await loadWorkflow(true);
+      navigateToStep("report", true);
+      if (approved.report_ready) {
+        const readyReport = await gateway.getReport(draft.id);
+        setReport(readyReport);
+        await downloadReportFile(draft.id);
+      }
     } catch (cause) {
       if (isWorkflowProblem(cause, "DRAFT_REVISION_CONFLICT", "DRAFT_STALE")) {
         setError("草案或病例资料已经更新。当前审批编辑已保留，请重新加载最新版本后再次确认。");
@@ -337,23 +399,16 @@ export function IntegrationCaseWorkbench({
     }
   }
 
-  async function handleCheckReport() {
-    if (!draft) return;
-    setAction("report-status");
-    setError(null);
-    try {
-      setReport(await gateway.getReport(draft.id));
-      setNotice("报告已就绪。");
-    } catch (cause) {
-      if (isWorkflowProblem(cause, "REPORT_NOT_READY", "REPORT_NOT_FOUND")) {
-        setReport(null);
-        setNotice("报告尚未就绪，请稍后重新检查。");
-      } else {
-        setError(workflowErrorMessage(cause));
-      }
-    } finally {
-      setAction(null);
-    }
+  async function downloadReportFile(draftId: string) {
+    const downloaded = await gateway.downloadReport(draftId);
+    const url = URL.createObjectURL(downloaded.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = downloaded.filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function handleDownloadReport() {
@@ -363,15 +418,7 @@ export function IntegrationCaseWorkbench({
     try {
       const readyReport = await gateway.getReport(draft.id);
       setReport(readyReport);
-      const downloaded = await gateway.downloadReport(draft.id);
-      const url = URL.createObjectURL(downloaded.blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = downloaded.filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await downloadReportFile(draft.id);
     } catch (cause) {
       setError(workflowErrorMessage(cause));
     } finally {
@@ -399,13 +446,14 @@ export function IntegrationCaseWorkbench({
       description={`病例状态：${caseStatusLabels[caseResource.status]}`}
       caseId={caseResource.id}
       steps={steps}
-      currentStep={currentStep}
+      currentStep={visibleStep}
+      onStepChange={navigateToStep}
       theme={fixtureMode ? "test" : "default"}
       headerActions={
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases">返回病例入口</a>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}>重新加载全部状态</button>
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void logout()}>退出 {doctor.display_name}</button>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void logout(); }}>退出 {doctor.display_name}</button>
         </>
       }
     >
@@ -413,7 +461,7 @@ export function IntegrationCaseWorkbench({
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       {notice ? <WorkflowNotice tone="info" live>{notice}</WorkflowNotice> : null}
 
-      <WorkflowSection id="case" title="病例信息与临床摘要" description="临床摘要可更新或清空，病例基本字段保持只读。" state={sectionState(steps, "case")}>
+      {visibleStep === "case" ? <WorkflowSection id="case" title="病例信息与临床摘要" description="临床摘要可更新或清空，病例基本字段保持只读。" state={sectionState(steps, "case")}>
         <dl className="workflow-definition-grid">
           <div><dt>客户名称</dt><dd>{caseResource.customer_name}</dd></div>
           <div><dt>顾问 ID</dt><dd>{caseResource.consultant_id ?? "未填写"}</dd></div>
@@ -427,157 +475,159 @@ export function IntegrationCaseWorkbench({
         <button className="workflow-button workflow-button--primary" type="button" disabled={busy} onClick={() => void handleSaveClinicalSummary()}>
           {action === "summary" ? "正在保存…" : "保存临床摘要"}
         </button>
-      </WorkflowSection>
+      </WorkflowSection> : null}
 
-      <WorkflowSection id="attachments" title="病例资料" description="病历与问卷分开提交；批次内单个文件失败不会回滚其他文件。" state={sectionState(steps, "attachments")}>
+      {visibleStep === "attachments" ? <WorkflowSection id="attachments" title="病例资料" description="病历、检查报告和问卷通过同一个入口提交；批次内单个文件失败不会回滚其他文件。" state={sectionState(steps, "attachments")}>
         <div className="workflow-upload-grid">
-          {(["medical_record", "questionnaire"] as AttachmentType[]).map((type) => (
-            <form className="workflow-upload-panel" key={type} onSubmit={(event) => void handleUpload(event, type)}>
-              <div>
-                <h3>{type === "medical_record" ? "上传病历资料" : "上传问卷资料"}</h3>
-                <p>{type === "medical_record" ? "用于检查结果、报告与补充说明。" : "按问卷附件类型导入，不与病历入口混用。"}</p>
-              </div>
-              <label className="workflow-field">
-                <span>选择文件</span>
-                <input name="files" type="file" multiple required disabled={busy} />
-              </label>
-              <button className="workflow-button workflow-button--secondary" type="submit" disabled={busy}>
-                {action === `upload-${type}` ? "正在上传…" : type === "medical_record" ? "上传病历" : "上传问卷"}
-              </button>
-              {attachmentResults[type] ? (
-                <ul className="workflow-upload-results" aria-live="polite">
-                  {attachmentResults[type]?.items.map((item, index) => (
-                    <li key={`${item.filename}-${index}`} data-state={item.status}>
-                      <strong>{item.filename}</strong>
-                      <span>{attachmentStatusLabel(item.status)}</span>
-                      {item.failure ? <small>{item.failure.message}</small> : null}
-                      {item.warnings.map((warning) => <small key={warning}>{warning}</small>)}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </form>
-          ))}
+          <form className="workflow-upload-panel" onSubmit={(event) => void handleUpload(event)}>
+            <div>
+              <h3>上传病例资料</h3>
+              <p>上传后先做文本预解析：普通文档使用本地文本提取，扫描件和图片可能调用已配置的视觉 OCR；病例级综合分析仅在下方确认后开始。</p>
+            </div>
+            <label className="workflow-field">
+              <span>选择一个或多个文件</span>
+              <input name="files" type="file" multiple required disabled={busy} />
+            </label>
+            <button className="workflow-button workflow-button--secondary" type="submit" disabled={busy}>
+              {action === "upload" ? "正在上传…" : "上传所选资料"}
+            </button>
+            {attachmentResults ? (
+              <ul className="workflow-upload-results" aria-live="polite">
+                {attachmentResults.items.map((item, index) => (
+                  <li key={`${item.filename}-${index}`} data-state={item.status}>
+                    <strong>{item.filename}</strong>
+                    <span>{attachmentStatusLabel(item.status)}</span>
+                    {item.failure ? <small>{item.failure.message}</small> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </form>
         </div>
         {caseResource.attachments.length ? (
           <div className="workflow-attachment-list">
-            <h3>已接收病历附件</h3>
+            <h3>已接收病例资料</h3>
             <ul>
               {caseResource.attachments.map((item) => (
                 <li key={item.id} data-state={item.parse_status}>
                   <div><strong>{item.filename}</strong><small>{item.media_type}，{item.size_bytes.toLocaleString("zh-CN")} 字节</small></div>
-                  <span>{item.parse_status}{item.needs_manual_review ? "，需人工复核" : ""}</span>
+                  <span>{attachmentStatusLabel(item.parse_status)}</span>
                 </li>
               ))}
             </ul>
           </div>
-        ) : <p className="workflow-empty">尚未从病例资源读取到病历附件；问卷批次结果以上传返回为准。</p>}
-      </WorkflowSection>
+        ) : <p className="workflow-empty">尚未上传病例资料。</p>}
 
-      <WorkflowSection id="analysis" title="综合分析" description="确认第三方处理后启动，Operation 失败通过业务状态展示。" state={sectionState(steps, "analysis")}>
-        {analysis ? (
-          <div className="workflow-stack">
-            <div className="workflow-status-line" data-state={analysis.status}>
-              <strong>{analysisStatusLabels[analysis.status]}</strong>
-              <span>{analysis.progress.percent}%</span>
+        <div className="workflow-analysis-launch">
+          <div className="workflow-analysis-launch__header">
+            <h3>开始综合分析</h3>
+            <p>确认资料无误后调用已配置的第三方模型服务；分析进度会在本页持续更新。</p>
+          </div>
+          {analysisReady ? (
+            <div className="workflow-analysis-launch__complete">
+              <WorkflowNotice tone="success">综合分析已完成，可以进入医生复核。</WorkflowNotice>
+              <button className="workflow-button workflow-button--primary" type="button" onClick={() => navigateToStep("review")}>进入医生复核</button>
             </div>
-            {analysis.case_summary ? <p className="workflow-prose">{analysis.case_summary}</p> : null}
-            {analysis.system_findings.length ? <ul>{analysis.system_findings.map((item, index) => <li key={index}>{item}</li>)}</ul> : null}
-            {analysis.warnings.map((warning) => <WorkflowNotice tone="warning" key={warning}>{warning}</WorkflowNotice>)}
-            {analysis.error ? <WorkflowNotice tone="error">{analysis.error.message}（{analysis.error.code}）</WorkflowNotice> : null}
-            <p>{draftGenerationStatusLabels[analysis.draft_generation.status]}，{analysis.draft_generation.progress}%</p>
-            {analysis.draft_generation.status === "failed" ? (
-              <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void handleRetryDraft()}>
-                {action === "retry-draft" ? "正在重试…" : "重试草案生成"}
+          ) : analysisRunning || analysisOperationVisible ? (
+            operation?.stage === "analysis" ? (
+              <OperationProgress operation={operationProgressState(operation)} />
+            ) : (
+              <div className="workflow-analysis-status" data-state={analysis?.status}>
+                <div><small>分析状态</small><strong>{analysis ? analysisStatusLabels[analysis.status] : "正在读取分析状态"}</strong></div>
+                <span>{analysis?.progress.percent ?? 0}%</span>
+              </div>
+            )
+          ) : (
+            <div className="workflow-stack">
+              {analysisRestartable ? (
+                analysis?.status === "stale"
+                  ? <WorkflowNotice tone="warning">病例资料已发生变化，需要重新进行综合分析。</WorkflowNotice>
+                  : <WorkflowNotice tone="error">{analysis?.error?.message ?? "综合分析失败，可以确认资料后重新开始。"}</WorkflowNotice>
+              ) : null}
+              <label className="workflow-check">
+                <input type="checkbox" checked={thirdPartyConfirmed} disabled={busy} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} />
+                <span>已确认本病例资料可发送至已配置的第三方模型服务处理</span>
+              </label>
+              <button className="workflow-button workflow-button--primary" type="button" disabled={busy || !thirdPartyConfirmed || caseResource.attachments.length === 0 || Boolean(analysis && !analysisRestartable)} onClick={() => void handleStartAnalysis()}>
+                {action === "analysis" ? "正在启动…" : analysisRestartable ? "重新开始综合分析" : "确认资料并开始综合分析"}
               </button>
-            ) : null}
-          </div>
-        ) : (
-          <div className="workflow-stack">
-            <label className="workflow-check">
-              <input type="checkbox" checked={thirdPartyConfirmed} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} />
-              <span>已确认本病例资料可发送至已配置的第三方模型服务处理</span>
-            </label>
-            <button className="workflow-button workflow-button--primary" type="button" disabled={busy || !thirdPartyConfirmed || sectionState(steps, "analysis") === "blocked"} onClick={() => void handleStartAnalysis()}>
-              {action === "analysis" ? "正在启动…" : "启动综合分析"}
-            </button>
-          </div>
-        )}
-        {operation?.stage === "analysis" ? (
-          <WorkflowOperation
-            operation={operation}
-            polling={autoPolling}
-            onStopPolling={() => {
-              pollerRef.current?.cancel(false);
-              setAutoPolling(false);
-              setNotice("已停止自动轮询，服务端任务不会被取消。");
-            }}
-            onResumePolling={() => trackOperation({ operation, location: null })}
-          />
-        ) : null}
-      </WorkflowSection>
+              {operation?.stage === "analysis" && operation.status === "failed" ? <OperationProgress operation={operationProgressState(operation)} /> : null}
+            </div>
+          )}
+        </div>
+      </WorkflowSection> : null}
 
-      <WorkflowSection id="review" title="医生差量复核" description="本地编辑只转换为 add、update、remove 差量，未修改字段不发送。" state={sectionState(steps, "review")}>
+      {visibleStep === "review" ? <WorkflowSection id="review" title="医生复核" description="核对异常指标、当前补充剂和食敏结果，确认后生成方案草案。" state={sectionState(steps, "review")}>
         {analysis && reviewDraft && (analysis.status === "ready_for_review" || analysis.status === "reviewed") ? (
-          <ReviewEditor
-            analysis={analysis}
-            value={reviewDraft}
-            onChange={setReviewDraft}
-            reviewerName={doctor.display_name}
-            sourceOptions={sourceOptions}
-            busy={busy}
-            conflict={reviewConflict}
-            onSubmit={() => void handleReview()}
-            onDiscardAndReload={() => void loadWorkflow(true)}
-          />
+          <div className="workflow-review-content">
+            <div className="workflow-analysis-overview">
+              <div className="workflow-analysis-status" data-state={analysis.status}>
+                <div><small>分析状态</small><strong>{analysisStatusLabels[analysis.status]}</strong></div>
+                <span>{analysis.progress.percent}%</span>
+              </div>
+              <div className="workflow-analysis-grid">
+                <article className="workflow-analysis-card workflow-analysis-card--summary">
+                  <h3>病例综合摘要</h3>
+                  {analysis.case_summary ? <p className="workflow-prose">{analysis.case_summary}</p> : <p className="workflow-empty">当前分析未生成病例综合摘要。</p>}
+                </article>
+                <article className="workflow-analysis-card">
+                  <h3>系统发现</h3>
+                  {analysis.system_findings.length ? <ul>{analysis.system_findings.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p className="workflow-empty">当前分析未生成独立系统发现。</p>}
+                </article>
+              </div>
+              {analysis.warnings.map((warning) => <WorkflowNotice tone="warning" key={warning}>{warning}</WorkflowNotice>)}
+              {analysis.error ? <WorkflowNotice tone="error">{analysis.error.message}（{analysis.error.code}）</WorkflowNotice> : null}
+            </div>
+            <ReviewEditor
+              analysis={analysis}
+              value={reviewDraft}
+              onChange={setReviewDraft}
+              reviewerName={doctor.display_name}
+              sourceOptions={sourceOptions}
+              busy={busy}
+              conflict={reviewConflict}
+              draftReady={Boolean(draft)}
+              onSubmit={() => void handleReview()}
+              onContinue={() => navigateToStep("draft")}
+              onDiscardAndReload={() => void loadWorkflow(true)}
+            />
+          </div>
         ) : <p className="workflow-empty">分析完成后可进行医生复核。</p>}
         {operation?.stage === "draft_generation" ? (
-          <WorkflowOperation
-            operation={operation}
-            polling={autoPolling}
-            onStopPolling={() => {
-              pollerRef.current?.cancel(false);
-              setAutoPolling(false);
-              setNotice("已停止自动轮询，服务端任务不会被取消。");
-            }}
-            onResumePolling={() => trackOperation({ operation, location: null })}
-          />
+          <OperationProgress operation={operationProgressState(operation)} />
         ) : null}
-      </WorkflowSection>
-
-      <WorkflowSection id="draft" title="草案审批" description="仅提交排除项、发生变化的剂量，以及医生主动开启的公开摘要覆盖。" state={sectionState(steps, "draft")}>
-        {draft && approvalDraft ? (
-          <DraftApproval draft={draft} value={approvalDraft} reviewerName={doctor.display_name} onChange={setApprovalDraft} busy={busy} onApprove={() => void handleApprove()} />
-        ) : <p className="workflow-empty">完成复核并生成草案后可审批。</p>}
-      </WorkflowSection>
-
-      <WorkflowSection id="report" title="报告下载" description="先确认报告资源状态，再请求 PDF，并保留服务端文件名。" state={sectionState(steps, "report")}>
-        {draft?.status === "approved" ? (
-          <div className="workflow-stack">
-            {report ? (
-              <>
-                <WorkflowNotice tone="success">报告已就绪：{report.filename}</WorkflowNotice>
-                <dl className="workflow-definition-grid">
-                  <div><dt>报告状态</dt><dd>已批准，可下载</dd></div>
-                  <div><dt>批准医生</dt><dd>{doctor.display_name}</dd></div>
-                  <div><dt>批准时间</dt><dd>{new Date(report.approved_at).toLocaleString("zh-CN")}</dd></div>
-                  <div><dt>报告文件</dt><dd>{report.filename}</dd></div>
-                </dl>
-              </>
-            ) : (
-              <WorkflowNotice tone="info">审批已完成，报告状态尚未确认。</WorkflowNotice>
+        {analysis?.draft_generation.status === "failed" ? (
+          <div className="workflow-retry-panel">
+            {operation?.stage === "draft_generation" && operation.status === "failed" ? null : (
+              <WorkflowNotice tone="error">{analysis.draft_generation.error ?? "草案生成失败，可直接重试。"}</WorkflowNotice>
             )}
-            <div className="workflow-action-row">
-              <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void handleCheckReport()}>
-                {action === "report-status" ? "正在检查…" : "检查报告状态"}
-              </button>
-              <button className="workflow-button workflow-button--primary" type="button" disabled={busy} onClick={() => void handleDownloadReport()}>
-                {action === "report-download" ? "正在下载…" : "下载 PDF"}
-              </button>
-            </div>
+            <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void handleRetryDraft()}>
+              {action === "retry-draft" ? "正在重试…" : "重试草案生成"}
+            </button>
           </div>
-        ) : <p className="workflow-empty">草案审批发布后可获取报告。</p>}
-      </WorkflowSection>
+        ) : null}
+      </WorkflowSection> : null}
+
+      {visibleStep === "draft" ? <WorkflowSection id="draft" title="方案审核" description="调整产品纳入、剂量和备注；最终报告正文在下一步统一编辑。" state={sectionState(steps, "draft")}>
+        {draft && approvalDraft ? (
+          <DraftApproval draft={draft} value={approvalDraft} onChange={setApprovalDraft} busy={busy} onContinue={() => navigateToStep("report")} />
+        ) : <p className="workflow-empty">完成复核并生成草案后可审批。</p>}
+      </WorkflowSection> : null}
+
+      {visibleStep === "report" ? <WorkflowSection id="report" title="最终报告" description="编辑完整报告正文，确认后由当前登录医生批准并生成 PDF。" state={sectionState(steps, "report")}>
+        {draft && approvalDraft ? (
+          <FinalReportEditor
+            draft={draft}
+            value={approvalDraft}
+            report={report}
+            reviewerName={doctor.display_name}
+            busy={busy}
+            onChange={setApprovalDraft}
+            onApprove={() => void handleApprove()}
+            onDownload={() => void handleDownloadReport()}
+          />
+        ) : <p className="workflow-empty">完成复核并生成方案后可编辑最终报告。</p>}
+      </WorkflowSection> : null}
     </WorkflowShell>
   );
 }

@@ -97,7 +97,7 @@ export function DoctorSessionGate({ children }: { children: ReactNode }) {
         <section className="workflow-auth__card" aria-labelledby="doctor-login-title">
           <p className="workflow-auth__eyebrow">Paracelsus AI</p>
           <h1 id="doctor-login-title">{bootstrapRequired ? "初始化系统管理员" : "医生登录"}</h1>
-          <p>{bootstrapRequired ? "首次部署需要创建管理员，后续医生账号由管理员统一维护。" : "登录后进入本人病例列表和六步 AI 工作台。"}</p>
+          <p>{bootstrapRequired ? "首次部署需要创建管理员，后续医生账号由管理员统一维护。" : "登录后进入本人病例列表和五步 AI 工作台。"}</p>
           {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
           <form className="workflow-form" onSubmit={(event) => void handleSubmit(event)}>
             <label className="workflow-field"><span>医生账号</span><input name="username" required autoComplete="username" /></label>

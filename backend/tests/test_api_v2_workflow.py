@@ -434,6 +434,8 @@ class V2WorkflowApiTests(unittest.TestCase):
         report = self.client.get("/api/v2/drafts/draft-v2/report", headers=self.headers)
         self.assertEqual(report.status_code, 200, report.text)
         self.assertEqual(report.json()["filename"], "synthetic-report.pdf")
+        self.assertEqual(report.json()["reviewer_id"], "doctor-v2")
+        self.assertEqual(report.json()["publishable_report"], "Synthetic publishable report")
 
         with patch.object(
             self.container.review_service,

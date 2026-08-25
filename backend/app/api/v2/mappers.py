@@ -57,10 +57,53 @@ def _value(value: Any) -> str:
     return str(getattr(value, "value", value))
 
 
-def _percentage(current: int, total: int) -> int:
-    if total <= 0:
-        return 0
-    return max(0, min(100, round((current / total) * 100)))
+def _analysis_progress_percent(analysis: CaseAnalysis) -> int:
+    if analysis.status == AnalysisStatus.queued:
+        return 5
+    if analysis.status == AnalysisStatus.preparing:
+        return 12
+    if analysis.status == AnalysisStatus.analyzing_documents:
+        ratio = analysis.progress_current / max(analysis.progress_total, 1)
+        return 18 + int((max(0.0, min(1.0, ratio)) * 58) + 0.5)
+    if analysis.status == AnalysisStatus.synthesizing:
+        return 82
+    if analysis.status == AnalysisStatus.validating:
+        return 94
+    return 100
+
+
+def _analysis_progress_detail(analysis: CaseAnalysis) -> str:
+    total = max(analysis.progress_total, 0)
+    completed = min(max(analysis.progress_current, 0), total)
+    if analysis.status == AnalysisStatus.queued:
+        return "排队中"
+    if analysis.status == AnalysisStatus.preparing:
+        return "正在准备资料"
+    if analysis.status == AnalysisStatus.analyzing_documents:
+        detail = f"文件分析 {completed}/{total} {'已完成' if completed >= total and total > 0 else '处理中'}"
+        return f"{detail}：{analysis.current_file_name}" if analysis.current_file_name else detail
+    if analysis.status == AnalysisStatus.synthesizing:
+        return f"文件分析 {total}/{total} 已完成，正在进行病例级综合"
+    if analysis.status == AnalysisStatus.validating:
+        return "病例级综合已完成，正在进行证据校验"
+    if analysis.status in {AnalysisStatus.ready_for_review, AnalysisStatus.reviewed}:
+        return "综合分析已完成，可以开始医生校对"
+    if analysis.status == AnalysisStatus.stale:
+        return "病例资料已变化，需要重新分析"
+    return "综合分析失败"
+
+
+def _draft_progress_detail(status: FinalGenerationStatus) -> str:
+    return {
+        FinalGenerationStatus.queued: "医生校对已保存，任务排队中",
+        FinalGenerationStatus.final_synthesizing: "最终病例深度综合",
+        FinalGenerationStatus.validating_support_needs: "支持需求校验",
+        FinalGenerationStatus.mapping_products: "产品能力匹配",
+        FinalGenerationStatus.checking_safety: "禁忌与安全检查",
+        FinalGenerationStatus.generating_draft: "生成营养素草案",
+        FinalGenerationStatus.ready: "草案生成完成",
+        FinalGenerationStatus.failed: "草案生成失败",
+    }.get(status, "等待医生校对")
 
 
 def doctor_workspace_scope() -> WorkspaceScope:
@@ -347,7 +390,7 @@ def analysis_to_response(analysis: CaseAnalysis) -> AnalysisResponse:
         progress=AnalysisProgress(
             current=analysis.progress_current,
             total=analysis.progress_total,
-            percent=_percentage(analysis.progress_current, analysis.progress_total),
+            percent=_analysis_progress_percent(analysis),
             current_file_name=analysis.current_file_name,
         ),
         case_summary=case_summary,
@@ -387,7 +430,7 @@ def operation_to_response(analysis: CaseAnalysis) -> OperationResponse:
             current=analysis.final_generation_progress,
             total=100,
             percent=analysis.final_generation_progress,
-            current_item=None,
+            current_item=_draft_progress_detail(final_status),
         )
         failure = (
             _draft_failure_to_response(analysis.final_generation_error)
@@ -412,8 +455,8 @@ def operation_to_response(analysis: CaseAnalysis) -> OperationResponse:
         progress = OperationProgress(
             current=analysis.progress_current,
             total=analysis.progress_total,
-            percent=_percentage(analysis.progress_current, analysis.progress_total),
-            current_item=analysis.current_file_name,
+            percent=_analysis_progress_percent(analysis),
+            current_item=_analysis_progress_detail(analysis),
         )
         failure = _analysis_failure_to_response(analysis) if status == "failed" else None
     return OperationResponse(
@@ -532,6 +575,8 @@ def report_to_response(review: ReviewDecision) -> ReportResponse:
         draft_id=review.draft_id,
         filename=review.pdf_report_filename or f"report-{review.draft_id}.pdf",
         download_url=f"/api/v2/drafts/{review.draft_id}/report.pdf",
+        reviewer_id=review.reviewer_id,
+        publishable_report=review.publishable_report,
         approved_at=review.approved_at,
     )
 

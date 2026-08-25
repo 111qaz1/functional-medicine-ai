@@ -504,5 +504,7 @@ export interface ReportResponse {
   status: "ready";
   filename: string;
   download_url: string;
+  reviewer_id: string;
+  publishable_report: string;
   approved_at: IsoDateTime;
 }

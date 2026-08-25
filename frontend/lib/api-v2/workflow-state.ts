@@ -1,6 +1,6 @@
 import type { AnalysisResponse, CaseResponse, DraftResponse, ReportResponse } from "./types";
 
-export type WorkflowStepId = "case" | "attachments" | "analysis" | "review" | "draft" | "report";
+export type WorkflowStepId = "case" | "attachments" | "review" | "draft" | "report";
 export type WorkflowStepState = "complete" | "current" | "available" | "blocked" | "error";
 
 export interface WorkflowResources {
@@ -18,7 +18,6 @@ export interface WorkflowStep {
 export const workflowStepOrder: WorkflowStepId[] = [
   "case",
   "attachments",
-  "analysis",
   "review",
   "draft",
   "report"
@@ -35,17 +34,18 @@ export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[
 
   const states: Record<WorkflowStepId, WorkflowStepState> = {
     case: caseResource ? "complete" : "current",
-    attachments: !caseResource ? "blocked" : hasAttachments ? "complete" : "current",
-    analysis: !hasAttachments
+    attachments: !caseResource
       ? "blocked"
-      : analysisFailed
-        ? "error"
-        : reviewReady
-          ? "complete"
-          : "current",
+      : !hasAttachments
+        ? "current"
+        : analysisFailed
+          ? "error"
+          : reviewReady
+            ? "complete"
+            : "current",
     review: !analysis ? "blocked" : analysisFailed ? "blocked" : reviewReady ? (draft ? "complete" : "current") : "blocked",
     draft: !reviewReady ? "blocked" : draftFailed ? "error" : draft ? (draft.status === "approved" ? "complete" : "current") : "blocked",
-    report: draft?.status !== "approved" ? "blocked" : report ? "complete" : "current"
+    report: !draft ? "blocked" : draft.status !== "approved" ? "available" : report ? "complete" : "current"
   };
 
   return workflowStepOrder.map((id) => ({ id, state: states[id] }));
@@ -53,4 +53,17 @@ export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[
 
 export function currentWorkflowStep(steps: WorkflowStep[]): WorkflowStepId {
   return steps.find((step) => step.state === "current" || step.state === "error")?.id ?? "report";
+}
+
+export function resolveRequestedWorkflowStep(
+  requested: string | null,
+  steps: WorkflowStep[],
+  fallback: WorkflowStepId,
+  analysisReady: boolean
+): WorkflowStepId {
+  const normalized = requested === "analysis"
+    ? (analysisReady ? "review" : "attachments")
+    : requested;
+  const target = steps.find((step) => step.id === normalized);
+  return target && target.state !== "blocked" ? target.id : fallback;
 }

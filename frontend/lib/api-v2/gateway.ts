@@ -244,6 +244,8 @@ const REPORT_RESPONSE_SHAPE: ResponseShape = {
   status: { oneOf: ["ready"] },
   filename: "string",
   download_url: "string",
+  reviewer_id: "string",
+  publishable_report: "string",
   approved_at: "string"
 };
 
@@ -281,7 +283,15 @@ function notifyExpiredSession(response: Response): void {
 }
 
 export class HttpWorkflowGateway implements WorkflowGateway {
-  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(fetchImpl: typeof fetch = globalThis.fetch) {
+    // Browser-native fetch requires the global object as its receiver. Keeping an
+    // unbound fetch as a class property makes `this.fetchImpl(...)` use the
+    // gateway instance as the receiver and Chromium rejects it as an illegal
+    // invocation before the request is sent.
+    this.fetchImpl = fetchImpl.bind(globalThis);
+  }
 
   private async json<T>(url: string, shape: ResponseShape, init?: RequestInit): Promise<{ data: T; response: Response }> {
     const response = await this.fetchImpl(url, {

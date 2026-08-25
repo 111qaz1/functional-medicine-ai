@@ -19,24 +19,31 @@ async function createCaseWithAttachment(gateway: FixtureWorkflowGateway) {
 
 async function completeAnalysis(gateway: FixtureWorkflowGateway, caseId: string) {
   const accepted = await gateway.startAnalysis(caseId, { third_party_processing_confirmed: true });
-  await gateway.getOperation(accepted.operation.operation_id);
+  const intermediate = await gateway.getOperation(accepted.operation.operation_id);
   const terminal = await gateway.getOperation(accepted.operation.operation_id);
-  return { accepted, terminal, analysis: await gateway.getLatestAnalysis(caseId) };
+  return { accepted, intermediate, terminal, analysis: await gateway.getLatestAnalysis(caseId) };
 }
 
 async function prepareDraft(gateway: FixtureWorkflowGateway) {
   const created = await createCaseWithAttachment(gateway);
-  const { analysis } = await completeAnalysis(gateway, created.id);
+  const { analysis, intermediate: analysisIntermediate } = await completeAnalysis(gateway, created.id);
   const accepted = await gateway.submitReview(created.id, analysis.id, {
     expected_revision: analysis.revision,
     finding_changes: [],
     supplement_changes: [],
     food_sensitivity_changes: []
   });
-  await gateway.getOperation(accepted.operation.operation_id);
+  const draftIntermediate = await gateway.getOperation(accepted.operation.operation_id);
   const terminal = await gateway.getOperation(accepted.operation.operation_id);
   const latest = await gateway.getLatestAnalysis(created.id);
-  return { created, analysis: latest, terminal, draft: latest.draft_id ? await gateway.getDraft(latest.draft_id) : null };
+  return {
+    created,
+    analysis: latest,
+    analysisIntermediate,
+    draftIntermediate,
+    terminal,
+    draft: latest.draft_id ? await gateway.getDraft(latest.draft_id) : null
+  };
 }
 
 function gateway(scenario: FixtureScenario = "success") {
@@ -45,6 +52,23 @@ function gateway(scenario: FixtureScenario = "success") {
 
 describe("FixtureWorkflowGateway", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("reports overall business-stage progress for analysis and draft generation", async () => {
+    const prepared = await prepareDraft(gateway());
+
+    expect(prepared.analysisIntermediate.progress).toMatchObject({
+      current: 1,
+      total: 2,
+      percent: 47,
+      current_item: expect.stringContaining("文件分析 1/2")
+    });
+    expect(prepared.draftIntermediate.progress).toMatchObject({
+      current: 50,
+      total: 100,
+      percent: 50,
+      current_item: "最终病例深度综合"
+    });
+  });
 
   it("runs the complete case-to-PDF flow without making a network request", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network must not be used"));

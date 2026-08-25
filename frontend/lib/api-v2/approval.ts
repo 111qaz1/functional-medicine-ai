@@ -1,11 +1,11 @@
 import type { ApprovalRequest, DraftResponse } from "./types";
+import { buildPublishableReport } from "./report-editor";
 
 export interface ApprovalDraftState {
   excludedSkuIds: string[];
   dosageSelections: Record<string, string>;
   dosageNotes: Record<string, string>;
-  editSummary: boolean;
-  publishableSummary: string;
+  publishableReport: string;
 }
 
 export function createApprovalDraft(draft: DraftResponse): ApprovalDraftState {
@@ -15,8 +15,7 @@ export function createApprovalDraft(draft: DraftResponse): ApprovalDraftState {
       draft.recommended_skus.map((item) => [item.sku_id, item.dosage_option_id ?? ""])
     ),
     dosageNotes: {},
-    editSummary: false,
-    publishableSummary: draft.public_summary.join("\n\n")
+    publishableReport: buildPublishableReport(draft)
   };
 }
 
@@ -40,12 +39,12 @@ export function buildApprovalRequest(draft: DraftResponse, state: ApprovalDraftS
     return [{ sku_id: item.sku_id, option_id: optionId, note }];
   });
 
-  const summary = state.publishableSummary.trim();
-  if (state.editSummary && !summary) throw new Error("公开摘要开启编辑后不能为空。");
+  const publishableReport = state.publishableReport.trim();
+  if (!publishableReport) throw new Error("最终发布报告不能为空。");
 
   return {
     expected_revision: draft.revision,
-    publishable_summary: state.editSummary ? summary : null,
+    publishable_summary: publishableReport,
     excluded_sku_ids: excludedSkuIds,
     dosage_overrides: dosageOverrides
   };

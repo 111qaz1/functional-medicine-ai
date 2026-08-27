@@ -1,4 +1,4 @@
-import type { AnalysisResponse, CaseResponse, DraftResponse, ReportResponse } from "./types";
+import type { AnalysisResponse, CaseResponse, DraftResponse, OperationResponse, ReportResponse } from "./types";
 
 export type WorkflowStepId = "case" | "attachments" | "review" | "draft" | "report";
 export type WorkflowStepState = "complete" | "current" | "available" | "blocked" | "error";
@@ -66,4 +66,31 @@ export function resolveRequestedWorkflowStep(
     : requested;
   const target = steps.find((step) => step.id === normalized);
   return target && target.state !== "blocked" ? target.id : fallback;
+}
+
+export interface DraftCompletionNavigation {
+  operationId: string;
+  nextStep: "draft" | null;
+}
+
+export function resolveDraftCompletionNavigation(
+  operation: OperationResponse | null,
+  draftAvailable: boolean,
+  visibleStep: WorkflowStepId,
+  handledOperationId: string | null
+): DraftCompletionNavigation | null {
+  if (
+    !operation ||
+    operation.stage !== "draft_generation" ||
+    operation.status !== "succeeded" ||
+    !draftAvailable ||
+    operation.operation_id === handledOperationId
+  ) {
+    return null;
+  }
+
+  return {
+    operationId: operation.operation_id,
+    nextStep: visibleStep === "review" ? "draft" : null
+  };
 }

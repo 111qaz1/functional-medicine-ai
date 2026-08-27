@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { AnalysisResponse, CaseResponse, DraftResponse, ReportResponse } from "./types";
-import { currentWorkflowStep, deriveWorkflowSteps, resolveRequestedWorkflowStep } from "./workflow-state";
+import type { AnalysisResponse, CaseResponse, DraftResponse, OperationResponse, ReportResponse } from "./types";
+import {
+  currentWorkflowStep,
+  deriveWorkflowSteps,
+  resolveDraftCompletionNavigation,
+  resolveRequestedWorkflowStep
+} from "./workflow-state";
 
 const caseResource = {
   id: "case_1",
@@ -72,5 +77,36 @@ describe("workflow state", () => {
     const draft = { id: "draft_1", status: "pending_review" } as DraftResponse;
     const steps = deriveWorkflowSteps({ caseResource, analysis, draft, report: null });
     expect(steps.find((step) => step.id === "report")?.state).toBe("available");
+  });
+
+  it("auto-advances a completed draft operation only once", () => {
+    const operation = {
+      operation_id: "operation_draft_1",
+      stage: "draft_generation",
+      status: "succeeded"
+    } as OperationResponse;
+
+    const firstCompletion = resolveDraftCompletionNavigation(operation, true, "review", null);
+    expect(firstCompletion).toEqual({
+      operationId: "operation_draft_1",
+      nextStep: "draft"
+    });
+
+    expect(
+      resolveDraftCompletionNavigation(operation, true, "review", firstCompletion?.operationId ?? null)
+    ).toBeNull();
+  });
+
+  it("marks a completed draft operation handled without stealing later navigation", () => {
+    const operation = {
+      operation_id: "operation_draft_2",
+      stage: "draft_generation",
+      status: "succeeded"
+    } as OperationResponse;
+
+    expect(resolveDraftCompletionNavigation(operation, true, "case", null)).toEqual({
+      operationId: "operation_draft_2",
+      nextStep: null
+    });
   });
 });

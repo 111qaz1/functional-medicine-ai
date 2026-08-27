@@ -28,7 +28,13 @@ import type {
   OperationResponse,
   ReportResponse
 } from "../../lib/api-v2/types";
-import { currentWorkflowStep, deriveWorkflowSteps, resolveRequestedWorkflowStep, type WorkflowStepId } from "../../lib/api-v2/workflow-state";
+import {
+  currentWorkflowStep,
+  deriveWorkflowSteps,
+  resolveDraftCompletionNavigation,
+  resolveRequestedWorkflowStep,
+  type WorkflowStepId
+} from "../../lib/api-v2/workflow-state";
 import { DraftApproval } from "./draft-approval";
 import { FinalReportEditor } from "./final-report-editor";
 import { OperationProgress, type OperationProgressState } from "../operation-progress";
@@ -81,6 +87,7 @@ export function IntegrationCaseWorkbench({
   const { doctor, logout } = useIntegrationDoctor();
   const pollerRef = useRef<OperationPoller | null>(null);
   const loadSequence = useRef(0);
+  const handledDraftCompletion = useRef<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [caseResource, setCaseResource] = useState<CaseResponse | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
@@ -269,9 +276,15 @@ export function IntegrationCaseWorkbench({
   }, [analysisReady, navigateToStep, operation, visibleStep]);
 
   useEffect(() => {
-    if (operation?.stage === "draft_generation" && operation.status === "succeeded" && draft && visibleStep === "review") {
-      navigateToStep("draft", true);
-    }
+    const resolution = resolveDraftCompletionNavigation(
+      operation,
+      Boolean(draft),
+      visibleStep,
+      handledDraftCompletion.current
+    );
+    if (!resolution) return;
+    handledDraftCompletion.current = resolution.operationId;
+    if (resolution.nextStep) navigateToStep(resolution.nextStep, true);
   }, [draft, navigateToStep, operation, visibleStep]);
 
   const sourceOptions = useMemo(() => {

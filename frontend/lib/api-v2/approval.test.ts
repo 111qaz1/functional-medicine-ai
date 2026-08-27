@@ -21,8 +21,15 @@ const regimen = {
 
 const draft = {
   id: "draft_1",
+  revision: 1,
   status: "pending_review",
   public_summary: ["虚构公开摘要"],
+  report_sections: [
+    {
+      title: "核心结论与健康画像",
+      items: ["虚构报告正文"]
+    }
+  ],
   recommended_skus: [
     {
       sku_id: "SKU_1",

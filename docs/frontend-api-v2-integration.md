@@ -1,168 +1,202 @@
-# `/api/v2` 前端对接工作台
+# 新版五步工作台使用与对接说明
 
-## 1. 本轮范围
+本文说明 `/integration` 新版医生工作台的入口、身份处理、五步业务流程、运行方式和验收要点。旧工作台和 `/api/v1` 保持兼容，新版工作台通过稳定的 `/api/v2` 契约连接同一后端。
 
-新增独立前端入口，覆盖：
+## 1. 页面入口
 
-`病例建档 → 病历/问卷上传 → 综合分析 → 医生差量复核 → 草案审批 → 报告状态 → PDF 下载`
+- 病例列表与创建入口：`/integration/cases`
+- 单病例工作台：`/integration/cases/{case_id}`
+- 管理员医生账号管理：`/doctors`
+- 根路径仍是旧工作台，不用于验收新版五步流程。
 
-- 入口：`/integration/cases`
-- 病例工作流：`/integration/cases/{case_id}`
-- 现有内部首页、`/cases/{id}`、产品配置、助手页面及 `/api/internal` 客户端保持不变。
-- 未修改后端、数据库或 `/api/v2` 契约。
-- 未引用或复制甲方 `dist` 中的压缩代码、资源和样式。
+本地开发时必须使用同一个主机名访问页面。例如服务启动在 `localhost:3000`，浏览器也应打开：
 
-## 2. 运行方式
-
-### 2.1 连接真实 `/api/v2`
-
-浏览器只请求同源 `/api/v2`。Next 中间件从服务端环境读取预签发 Token，并覆盖浏览器可能传入的 `Authorization`：
-
-```env
-INTERNAL_API_BASE_URL=http://backend:8000
-FM_API_V2_BEARER_TOKEN=由服务端预签发的访问令牌
+```text
+http://localhost:3000/integration/cases
 ```
 
-Token 不会进入客户端脚本、URL、日志、Local Storage、Session Storage 或 Fixture 数据。Token 签发与共享密钥签名不属于前端职责；缺少 Token 时 `/api/v2` 返回 `503 application/problem+json` 和 `FRONTEND_INTEGRATION_NOT_CONFIGURED`。
+不要在同一次登录中混用 `localhost` 和 `127.0.0.1`。新版工作台的写操作执行同源检查，混用主机名会被视为不同来源。
 
-### 2.2 Fixture 验收
+## 2. 身份与病例隔离
 
-Fixture 只在非生产 `next dev` 中启用，使用完全虚构数据，不访问网络、后端、模型或真实病例：
+- 浏览器登录后使用 HttpOnly `fm_session` Cookie，不在前端保存固定 Bearer Token。
+- Next 中间层丢弃浏览器自行传入的 `Authorization`，再把当前医生会话转换为后端 Bearer 请求。
+- 写操作只接受同源请求；会话失效统一回到医生登录状态。
+- 医生只能查看和处理本人病例。管理员可以维护医生账号，但不会默认越权查看其他医生病例。
+- 首次部署且系统没有账号时，登录页会显示“初始化系统管理员”；初始化完成后，后续医生账号由管理员创建、启停或重置密码。
+
+## 3. 五步工作流
+
+新版工作台一次只显示一个业务步骤，当前步骤保存在 URL 的 `step` 查询参数中：
+
+```text
+case → attachments → review → draft → report
+```
+
+已完成且未失效的步骤可以从左侧导航返回查看；尚未满足前置条件的步骤保持锁定。
+
+### 第 1 步：病例
+
+- 查看客户名称、顾问 ID、备注和病例更新时间。
+- 编辑并保存临床摘要。
+- 临床摘要变化后，以后端返回的病例状态为准重新判断旧分析、草案和报告是否仍有效。
+
+### 第 2 步：资料
+
+- 病历、检查报告、医疗问卷、MSQ、慢性食物敏感报告和图片共用一个多文件上传入口。
+- 每个文件分别显示成功、重复或失败结果；同批次单个文件失败不会回滚其他已保存文件。
+- 上传阶段先执行文件预检和文本解析。普通可提取文档优先使用本地解析；扫描件或图片可能使用已配置的视觉识别能力。
+- 病例级综合分析不会在上传时自动开始。医生必须确认资料可发送至已配置的第三方模型服务，再点击“确认资料并开始综合分析”。
+- 分析进度在本步骤持续显示，包括准备资料、文件分析、病例级综合和证据校验；分析完成后自动进入复核。
+
+### 第 3 步：复核
+
+- 顶部展示病例综合摘要、系统发现、警告和分析状态。
+- 异常指标卡片显示结果、单位、已有参考范围、来源文件、页码、原文证据、报告解释和中性医学解释。
+- 医生可新增、修改或删除异常指标；缺少结构化数值时保留原报告结论，不生成虚假参考范围。
+- 当前营养素显示真实来源文件；医生补充项目标记为“医生补充”。
+- 只有分析识别到食敏指标时才显示慢性食物敏感区域，并按轻度、中度、重度和待确认分组。
+- 点击“保存校对并生成营养素草案”后启动草案生成，进度仍在复核页显示；首次生成成功后自动进入方案审核。
+- 草案生成成功后，医生仍可从左侧返回复核查看已提交的分析与校对内容。相同的已完成任务不会再次把页面强制跳回方案审核。
+
+### 第 4 步：方案审核
+
+- 审核推荐产品、营养素纳入或排除、批准剂量、调整备注、产品证据和安全提示。
+- 本步骤不单独展开完整健康画像和四域生活方式报告正文；这些内容在最终报告中统一编辑。
+- “继续编辑最终报告”只切换到下一步，不会在本步骤直接批准或发布报告。
+
+### 第 5 步：最终报告
+
+- 将结构化报告章节转换为完整 Markdown 报告。
+- 支持编辑、编辑与预览分栏、纯预览和放大编辑。
+- 最终批准同时提交报告正文、产品排除项、剂量调整和草案版本。
+- 批准医生取当前登录医生，不能由浏览器填写或伪造。
+- 批准成功后报告锁定，显示批准医生、批准时间和报告状态，并支持 PDF 下载。
+- 遇到 `409` 版本冲突时保留本地编辑，医生应重新加载最新草案后再确认。
+
+## 4. 导航与状态恢复
+
+- 分析成功和草案生成成功只在对应任务首次完成时自动前进一次。
+- 医生主动返回已完成步骤时，自动前进逻辑不得抢占导航。
+- 浏览器刷新后从服务端恢复病例、最新分析、草案和报告；运行中的任务会恢复轮询，但不会重复启动。
+- 浏览器前进和后退会同步 `step` 参数。
+- 旧地址 `?step=analysis` 会根据分析状态迁移到 `attachments` 或 `review`。
+- 离开病例、刷新状态或退出登录前，如存在未保存的临床摘要、复核或方案编辑，页面会要求确认。
+
+## 5. 连接真实后端
+
+### Docker Compose
+
+项目根目录准备 `.env` 后执行：
+
+```powershell
+docker compose config
+docker compose up -d --build --remove-orphans
+docker compose ps
+```
+
+默认示例端口为：
+
+- 新旧前端：`http://localhost:3100`
+- 新版工作台：`http://localhost:3100/integration/cases`
+- 后端健康检查：`http://127.0.0.1:7800/health`
+
+实际端口以 `.env` 中的 `FRONTEND_PORT` 和 `BACKEND_PORT` 为准。Compose 中的前端通过 `INTERNAL_API_BASE_URL=http://backend:8000` 访问后端。
+
+### 本地 Next 开发服务器连接 Docker 后端
+
+后端已经运行在宿主机 `7800` 端口时：
+
+```powershell
+cd frontend
+$env:INTERNAL_API_BASE_URL='http://127.0.0.1:7800'
+Remove-Item Env:FM_WORKFLOW_FIXTURE_MODE -ErrorAction SilentlyContinue
+npm.cmd install
+npm.cmd run dev -- --hostname localhost --port 3000
+```
+
+打开：
+
+```text
+http://localhost:3000/integration/cases
+```
+
+## 6. Fixture 界面验收
+
+Fixture 只允许在非生产 `next dev` 中启用，不访问后端、模型或真实病例：
 
 ```powershell
 cd frontend
 $env:FM_WORKFLOW_FIXTURE_MODE='1'
 $env:FM_WORKFLOW_FIXTURE_SCENARIO='success'
-npm.cmd run dev
+npm.cmd run dev -- --hostname localhost --port 3000
 ```
-
-打开 `http://127.0.0.1:3000/integration/cases`。生产构建即使设置 `FM_WORKFLOW_FIXTURE_MODE=1` 也会强制关闭 Fixture。
 
 可选场景：
 
-| 场景 | 目的 |
+| 场景 | 用途 |
 |---|---|
-| `success` | 建档到 PDF 的完整成功流 |
-| `attachment_partial_failure` | 同批附件部分成功、部分失败 |
-| `analysis_failure` | Operation 以公开分析错误结束 |
-| `draft_generation_failure` | 草案失败并通过重试恢复 |
-| `revision_conflict` | 复核返回 `409`，保留本地编辑 |
-| `approval_validation_error` | 审批返回类型化 `422` |
-| `report_not_ready` | 审批后报告仍返回 `409` |
-| `authentication_failure` | 所有资源请求返回 `401` |
+| `success` | 建档到 PDF 的完整成功流程 |
+| `attachment_partial_failure` | 同批资料部分成功、部分失败 |
+| `analysis_failure` | 综合分析任务失败 |
+| `draft_generation_failure` | 草案生成失败并重试 |
+| `revision_conflict` | 复核版本冲突并保留本地编辑 |
+| `approval_validation_error` | 最终批准请求校验失败 |
+| `report_not_ready` | 批准后报告暂未就绪 |
+| `authentication_failure` | 资源请求返回未登录 |
 
-Fixture 状态仅保存在当前标签页的 `sessionStorage`，键为 `fm-ai-v2-workflow-fixture`，内容只包含虚构病例状态。
+Fixture 状态只保存在当前标签页的 `sessionStorage`，不作为真实后端验收结果。
 
-## 3. 页面与契约
+## 7. API v2 路由
 
-`WorkflowGateway` 完整覆盖 13 条 v2 路由：
+`WorkflowGateway` 使用以下公开工作流接口：
 
-| 方法 | 路径 |
-|---|---|
-| POST | `/api/v2/cases` |
-| GET | `/api/v2/cases/{case_id}` |
-| PUT | `/api/v2/cases/{case_id}/clinical-summary` |
-| POST | `/api/v2/cases/{case_id}/attachments` |
-| POST | `/api/v2/cases/{case_id}/analyses` |
-| GET | `/api/v2/operations/{operation_id}` |
-| GET | `/api/v2/cases/{case_id}/analyses/latest` |
-| POST | `/api/v2/cases/{case_id}/analyses/{analysis_id}/reviews` |
-| POST | `/api/v2/cases/{case_id}/analyses/{analysis_id}/draft-generation:retry` |
-| GET | `/api/v2/drafts/{draft_id}` |
-| POST | `/api/v2/drafts/{draft_id}/approval` |
-| GET | `/api/v2/drafts/{draft_id}/report` |
-| GET | `/api/v2/drafts/{draft_id}/report.pdf` |
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/v2/cases` | 当前医生病例列表 |
+| POST | `/api/v2/cases` | 创建病例 |
+| GET | `/api/v2/cases/{case_id}` | 读取病例和资料状态 |
+| PUT | `/api/v2/cases/{case_id}/clinical-summary` | 保存临床摘要 |
+| POST | `/api/v2/cases/{case_id}/attachments` | 批量上传病例资料 |
+| POST | `/api/v2/cases/{case_id}/analyses` | 启动综合分析 |
+| GET | `/api/v2/operations/{operation_id}` | 读取分析或草案任务进度 |
+| GET | `/api/v2/cases/{case_id}/analyses/latest` | 读取最新分析和复核数据 |
+| POST | `/api/v2/cases/{case_id}/analyses/{analysis_id}/reviews` | 提交医生差量复核 |
+| POST | `/api/v2/cases/{case_id}/analyses/{analysis_id}/draft-generation:retry` | 重试草案生成 |
+| GET | `/api/v2/drafts/{draft_id}` | 读取方案和报告章节 |
+| POST | `/api/v2/drafts/{draft_id}/approval` | 批准最终报告 |
+| GET | `/api/v2/drafts/{draft_id}/report` | 恢复已批准报告状态和正文 |
+| GET | `/api/v2/drafts/{draft_id}/report.pdf` | 下载 PDF |
 
-实现要点：
+严格 DTO、Problem Details 和请求示例见 [`api-v2-standardization.md`](api-v2-standardization.md)。
 
-- 建档只提交 `customer_name`、`consultant_id`、`notes`。
-- 病历与问卷各有独立 multipart 上传入口，逐项显示批次结果，不提供契约未支持的删除操作。
-- Operation 轮询不重叠；页面隐藏时暂停，恢复后继续；15 分钟仅停止自动轮询，不把业务状态改成失败。用户可手动停止和继续轮询。
-- 页面刷新后按病例 ID 恢复病例、最新分析、草案和报告；发现运行中 Operation 时重新加入轮询。
-- 复核保存服务端修订快照，只发送 `add`、`update`、`remove` 差量。空差量表示确认当前结果；`409` 不自动合并医学内容。
-- 审批默认发送 `publishable_summary: null`；只发送排除 SKU 和改选剂量，非默认剂量必须填写说明，至少保留一项推荐。
-- PDF 下载前先读取报告状态，并使用服务端 `Content-Disposition` 文件名。
-- HTTP 错误统一映射 `ProblemDetails`；业务执行失败保留在 HTTP 200 的 Operation `status="failed"` 中。
+## 8. 验收清单
 
-## 4. 风格适配边界
+1. 使用管理员初始化系统，并创建两个独立医生账号。
+2. 两个医生分别登录，确认病例列表相互隔离。
+3. 创建病例并在同一入口上传病历、检查报告和问卷。
+4. 确认上传成功后启动真实综合分析，观察业务阶段进度。
+5. 复核异常指标、营养素来源和识别到的食敏指标。
+6. 保存复核并等待草案生成，进入方案审核。
+7. 从方案审核返回复核，确认页面停留在复核且原分析内容仍可查看。
+8. 进入最终报告，修改一处唯一测试文字，批准并下载 PDF。
+9. 刷新页面，确认最终正文、批准医生、批准时间和下载状态可以恢复。
+10. 使用另一医生直接访问该病例 ID，确认返回 `403 CASE_ACCESS_DENIED`。
 
-新增样式全部限定在 `.workflow-app` 命名空间。2026-08-22 对甲方 `dist` 和风格参考页进行只读对照后，确认两者共享 PARACELSUS 视觉语言：224px 深色侧栏、56px 顶栏、红色主操作、浅蓝灰页面、白色内容面板和紧凑的 14px 信息密度。当前默认主题为 `paracelsus`，核心变量包括：
+## 9. 常见问题
 
-```css
---workflow-bg
---workflow-surface
---workflow-surface-muted
---workflow-ink
---workflow-muted
---workflow-border
---workflow-accent
---workflow-accent-hover
---workflow-accent-strong
---workflow-accent-surface
---workflow-focus
---workflow-success
---workflow-success-surface
---workflow-warning
---workflow-warning-surface
---workflow-danger
---workflow-danger-surface
---workflow-info
---workflow-info-surface
---workflow-sidebar-bg
---workflow-sidebar-ink
---workflow-sidebar-muted
---workflow-radius-sm
---workflow-radius-md
---workflow-radius-lg
---workflow-sidebar-width
---workflow-header-height
---workflow-content-width
-```
+### 登录返回 `Internal Server Error`
 
-`WorkflowShell` 提供 `title`、`description`、`caseId`、`steps`、`currentStep`、`headerActions`、`brandSlot`、`contextSlot`、`children` 和 `theme` 属性。`brandSlot` 和 `contextSlot` 是甲方源码到位后的品牌及患者上下文接入点；当前使用文字回退和 v2 已有病例字段，不复制构建产物中的图片。步骤、区块、通知和业务状态通过稳定的 `workflow-*` class、`data-step`、`data-state`、`data-current-step` 暴露；按钮与状态文案集中在 `frontend/lib/api-v2/copy.ts`。
+先检查后端健康状态和前端 `INTERNAL_API_BASE_URL`。如果后端数据库被重建，原账号可能不存在，应根据登录页提示重新初始化管理员，而不是继续使用旧数据库中的密码。
 
-Fixture 与主题已解耦，开发 Fixture 和真实 Gateway 均默认使用 `data-theme="paracelsus"`；`test` 主题只通过 `WorkflowShell` 显式注入，用于证明换主题不需要修改 Gateway、差量构建或工作流状态机。后续甲方源码适配应优先替换：
+### 可以登录但创建病例提示“写操作只允许从当前医生工作台发起”
 
-1. `WorkflowShell` 页面外壳与导航容器。
-2. `.workflow-app` 主题变量和布局令牌。
-3. `copy.ts` 中的术语与状态文案。
-4. `brandSlot`、`contextSlot` 及甲方患者、医生上下文到 `case_id`、`consultant_id`、`reviewer_id` 的启动参数映射。
+确认浏览器地址与启动主机名完全一致，不要混用 `localhost`、`127.0.0.1` 或不同端口；清除旧页面后从 `/integration/cases` 重新进入。
 
-不得通过重写 `review-diff.ts`、`approval.ts`、`workflow-state.ts` 或 `WorkflowGateway` 来完成纯视觉适配。
+### 点击“复核”后又回到“方案审核”
 
-甲方当前提供的 `C:\Users\21547\Downloads\dist` 仍是 409 个生产构建文件，无源码、Source Map 或 `package.json`。本仓库未修改该目录，也未复制其中的压缩代码、样式或图片；当前结果是独立工作台的同风格实现，不等于已经嵌入甲方 Vue 工程。
+正确行为是草案首次生成完成时自动前进一次，之后允许手动返回复核。若仍出现重复跳转，请确认运行的是包含该导航修复的最新前端构建，并重新构建前端容器。
 
-## 5. 可访问性与响应式
+## 10. 甲方融合边界
 
-- 桌面目标：1440×900；平板目标：768×1024。
-- 主流程使用原生表单、按钮、链接、`details`、`progress` 和语义化标题。
-- 错误使用 `role="alert"`；动态状态使用 `aria-live="polite"`；焦点使用高对比可见轮廓。
-- 状态同时使用文字与 `data-state`，不只依赖颜色。
-- 桌面使用 224px 步骤侧栏；768×1024 平板将侧栏缩为 176px，并把表单、上传和审批布局折叠为单列。
-- 低于 768px 时侧栏转为顶部横向步骤导航；粗指针设备交互控件最小高度 44px。
-- `prefers-reduced-motion` 下取消非必要过渡与动画。
-
-## 6. 验证
-
-```powershell
-cd frontend
-npm.cmd test
-npx.cmd tsc --noEmit
-npm.cmd run build
-```
-
-自动化覆盖 HTTP 路径与请求体、Problem Details、服务端 Token 注入、Operation 生命周期、差量复核、审批校验、Fixture 完整流和七类错误场景。Fixture 测试显式断言完整成功流未调用 `fetch`。
-
-当前边界：已获得甲方生产构建产物和风格参考页，但尚未获得可编辑前端源码、真实后端测试环境、真实 Token 获取方式、患者上下文和权限指令。因此本轮只能证明独立工作台的视觉适配和 Fixture 行为，不能证明甲方真实鉴权、病例归属、上传限制、轮询延迟、PDF 网关行为或源码级嵌入。
-
-## 7. 下一轮甲方适配门槛
-
-拿到甲方源码和测试环境后，先形成证据化差异清单：
-
-- 真实路由容器、菜单与页面权限指令。
-- 请求封装、Token 生命周期和跨域/同源策略。
-- 患者与医生上下文字段、病例归属和错误映射。
-- 甲方后端运行时 OpenAPI 与当前 `/api/v2` 的差异。
-- 甲方设计令牌、组件库、密度、断点和术语。
-
-只修正已确认差异；未提供能力继续标记待确认，不新增猜测性后端接口。
+当前实现是独立的同风格五步工作台，并未反编译或复制甲方构建产物。后续拿到甲方可编辑源码、SSO、患者/就诊映射、回传和权限协议后，应优先替换页面外壳、身份映射和主题变量，不应为纯视觉适配重写 `/api/v2`、差量构建或工作流状态机。

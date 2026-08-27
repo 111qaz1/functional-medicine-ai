@@ -176,7 +176,7 @@ docker compose config
 - [Nginx 正式环境部署](docs/nginx-production-deployment.md)
 - [生产环境推荐配置](docs/production-recommended-config.md)
 - [外部 API 交付指南](docs/customer-api-delivery-guide.md)
-- [`/api/v2` 前端对接工作台](docs/frontend-api-v2-integration.md)
+- [新版五步工作台使用与 `/api/v2` 对接说明](docs/frontend-api-v2-integration.md)
 
 ## 安全与数据管理
 

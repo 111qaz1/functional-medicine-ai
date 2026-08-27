@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
-import { fetchCurrentUser, loginDoctor, logoutDoctor, registerDoctor } from "../lib/api";
+import { fetchAuthBootstrap, fetchCurrentUser, loginDoctor, logoutDoctor, registerDoctor } from "../lib/api";
 import { DoctorAccount, WorkspaceScope } from "../lib/types";
 import { DashboardLocal } from "./dashboard-local";
 
@@ -13,6 +13,7 @@ export function WorkspaceHome() {
   const [doctor, setDoctor] = useState<DoctorAccount | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceScope | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [bootstrapRequired, setBootstrapRequired] = useState(false);
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -23,8 +24,10 @@ export function WorkspaceHome() {
   useEffect(() => {
     async function loadCurrentUser() {
       try {
-        const response = await fetchCurrentUser();
+        const [response, bootstrap] = await Promise.all([fetchCurrentUser(), fetchAuthBootstrap()]);
         setDoctor(response.doctor ?? null);
+        setBootstrapRequired(bootstrap.required);
+        setAuthMode(bootstrap.required ? "register" : "login");
       } catch {
         setDoctor(null);
       } finally {
@@ -43,6 +46,7 @@ export function WorkspaceHome() {
           ? await registerDoctor(username.trim(), password, displayName.trim() || undefined)
           : await loginDoctor(username.trim(), password);
       setDoctor(response.doctor);
+      setBootstrapRequired(false);
       setWorkspace("doctor");
       setPassword("");
       setAuthError(null);
@@ -115,13 +119,15 @@ export function WorkspaceHome() {
                 >
                   医生登录
                 </button>
-                <button
-                  type="button"
-                  className={`auth-tab${authMode === "register" ? " auth-tab--active" : ""}`}
-                  onClick={() => setAuthMode("register")}
-                >
-                  注册账号
-                </button>
+                {bootstrapRequired ? (
+                  <button
+                    type="button"
+                    className={`auth-tab${authMode === "register" ? " auth-tab--active" : ""}`}
+                    onClick={() => setAuthMode("register")}
+                  >
+                    初始化管理员
+                  </button>
+                ) : null}
               </div>
               <form className="stack" onSubmit={handleAuthSubmit}>
                 <label className="field">
@@ -170,6 +176,10 @@ export function WorkspaceHome() {
                   <strong>模型</strong>
                   <span>API 配置</span>
                 </Link>
+                <a href="/doctors" className="hero__stat hero__stat--link">
+                  <strong>账号</strong>
+                  <span>医生管理</span>
+                </a>
               </>
             ) : (
               <div className="hero__stat">

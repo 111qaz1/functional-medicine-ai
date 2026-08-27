@@ -1,11 +1,10 @@
 "use client";
 
-import React, { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
-  ArrowRightStartOnRectangleIcon,
-  ArrowUpTrayIcon
+  ArrowRightStartOnRectangleIcon
 } from "@heroicons/react/24/outline";
 
 import { buildApprovalRequest, createApprovalDraft, type ApprovalDraftState } from "../../lib/api-v2/approval";
@@ -58,6 +57,16 @@ function attachmentStatusLabel(status: string): string {
   } as Record<string, string>)[status] ?? status;
 }
 
+function attachmentBatchCounts(result: AttachmentBatchResponse) {
+  const duplicate = result.items.filter((item) => item.status === "duplicate").length;
+  const failed = result.items.filter((item) => item.status === "failed").length;
+  return {
+    success: result.items.length - duplicate - failed,
+    duplicate,
+    failed
+  };
+}
+
 function operationProgressState(operation: OperationResponse): OperationProgressState {
   const failed = operation.status === "failed";
   return {
@@ -101,6 +110,8 @@ export function IntegrationCaseWorkbench({
   const [operation, setOperation] = useState<OperationResponse | null>(null);
   const [autoPolling, setAutoPolling] = useState(false);
   const [attachmentResults, setAttachmentResults] = useState<AttachmentBatchResponse | null>(null);
+  const [uploadingFileCount, setUploadingFileCount] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [visibleStep, setVisibleStep] = useState<WorkflowStepId>("case");
   const [thirdPartyConfirmed, setThirdPartyConfirmed] = useState(false);
   const [action, setAction] = useState<string | null>(null);
@@ -117,8 +128,9 @@ export function IntegrationCaseWorkbench({
   const analysisOperationVisible = operation?.stage === "analysis" && operation.status !== "failed" && !analysisReady;
   const operationBusy = autoPolling && (operation?.status === "queued" || operation?.status === "running");
   const busy = Boolean(action) || operationBusy;
+  const uploadCounts = attachmentResults ? attachmentBatchCounts(attachmentResults) : null;
 
-  const loadWorkflow = useCallback(async (discardLocalReview: boolean) => {
+  const loadWorkflow = useCallback(async (discardLocalReview: boolean, preserveClinicalSummary = false) => {
     const sequence = ++loadSequence.current;
     setLoadState("loading");
     setError(null);
@@ -148,7 +160,7 @@ export function IntegrationCaseWorkbench({
       }
       if (sequence !== loadSequence.current) return;
       setCaseResource(loadedCase);
-      setClinicalSummary(loadedCase.clinical_summary ?? "");
+      if (!preserveClinicalSummary) setClinicalSummary(loadedCase.clinical_summary ?? "");
       setAnalysis(loadedAnalysis);
       setDraft(loadedDraft);
       setReport(loadedReport);
@@ -212,10 +224,10 @@ export function IntegrationCaseWorkbench({
           setError(workflowErrorMessage(event.error));
           return;
         }
-        if (event.reason === "terminal") void loadWorkflow(true);
+        if (event.reason === "terminal") void loadWorkflow(true, summaryDirty);
       }
     );
-  }, [loadWorkflow]);
+  }, [loadWorkflow, summaryDirty]);
 
   useEffect(() => {
     if (!analysis || operation) return;
@@ -309,7 +321,7 @@ export function IntegrationCaseWorkbench({
         clinical_summary: clinicalSummary.trim() || null
       });
       await loadWorkflow(true);
-      setNotice("临床摘要已保存；此前分析和方案如已过期，需要重新分析。 ");
+      setNotice("医生病例总结已保存；病例资料变化可能使此前分析或方案过期，需要时请重新分析。");
     } catch (cause) {
       setError(workflowErrorMessage(cause));
     } finally {
@@ -317,25 +329,29 @@ export function IntegrationCaseWorkbench({
     }
   }
 
-  async function handleUpload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!confirmDiscardEdits()) return;
-    const form = event.currentTarget;
-    const files = new FormData(form).getAll("files").filter((item): item is File => item instanceof File && item.size > 0);
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const files = Array.from(input.files ?? []).filter((file) => file.size > 0);
     if (!files.length) {
-      setError("请选择至少一个有效文件。");
+      input.value = "";
       return;
     }
+
+    const preserveClinicalSummary = summaryDirty;
     setAction("upload");
+    setUploadingFileCount(files.length);
+    setAttachmentResults(null);
+    setUploadError(null);
     setError(null);
     try {
       const result = await gateway.uploadAttachments(caseId, "medical_record", files);
       setAttachmentResults(result);
-      form.reset();
-      await loadWorkflow(true);
+      await loadWorkflow(true, preserveClinicalSummary);
     } catch (cause) {
-      setError(workflowErrorMessage(cause));
+      setUploadError(workflowErrorMessage(cause));
     } finally {
+      input.value = "";
+      setUploadingFileCount(0);
       setAction(null);
     }
   }
@@ -487,50 +503,59 @@ export function IntegrationCaseWorkbench({
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       {notice ? <WorkflowNotice tone="info" live>{notice}</WorkflowNotice> : null}
 
-      {visibleStep === "case" ? <WorkflowSection id="case" title="病例信息与临床摘要" description="临床摘要可更新或清空，病例基本字段保持只读。" state={sectionState(steps, "case")}>
+      {visibleStep === "case" ? <WorkflowSection id="case" title="病例信息" description="核对病例基本字段；医生病例总结在资料步骤填写和保存。" state={sectionState(steps, "case")}>
         <dl className="workflow-definition-grid">
           <div><dt>客户名称</dt><dd>{caseResource.customer_name}</dd></div>
           <div><dt>顾问 ID</dt><dd>{caseResource.consultant_id ?? "未填写"}</dd></div>
           <div><dt>备注</dt><dd>{caseResource.notes ?? "未填写"}</dd></div>
           <div><dt>更新时间</dt><dd>{new Date(caseResource.updated_at).toLocaleString("zh-CN")}</dd></div>
         </dl>
-        <label className="workflow-field">
-          <span>临床摘要</span>
-          <textarea rows={6} maxLength={20000} value={clinicalSummary} onChange={(event) => setClinicalSummary(event.target.value)} />
-        </label>
-        <button className="workflow-button workflow-button--primary" type="button" disabled={busy} onClick={() => void handleSaveClinicalSummary()}>
-          {action === "summary" ? "正在保存…" : "保存临床摘要"}
-        </button>
       </WorkflowSection> : null}
 
-      {visibleStep === "attachments" ? <WorkflowSection id="attachments" title="病例资料" description="病历、检查报告和问卷通过同一个入口提交；批次内单个文件失败不会回滚其他文件。" state={sectionState(steps, "attachments")}>
+      {visibleStep === "attachments" ? <WorkflowSection id="attachments" title="病例资料" description="选择文件后立即上传并预解析；医生病例总结保存后，再确认授权并开始综合分析。" state={sectionState(steps, "attachments")}>
         <div className="workflow-upload-grid">
-          <form className="workflow-upload-panel" onSubmit={(event) => void handleUpload(event)}>
+          <label className="workflow-upload-panel" aria-disabled={busy}>
             <div>
-              <h3>上传病例资料</h3>
-              <p>上传后先做文本预解析：普通文档使用本地文本提取，扫描件和图片可能调用已配置的视觉 OCR；病例级综合分析仅在下方确认后开始。</p>
+              <h3>上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图</h3>
+              <p>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、单个 PDF 最多 50 页。</p>
             </div>
-            <label className="workflow-field">
-              <span>选择一个或多个文件</span>
-              <input name="files" type="file" multiple required disabled={busy} />
-            </label>
-            <button className="workflow-button workflow-button--secondary" type="submit" disabled={busy}>
-              <ArrowUpTrayIcon className="workflow-button__icon" />
-              {action === "upload" ? "正在上传…" : "上传所选资料"}
-            </button>
-            {attachmentResults ? (
-              <ul className="workflow-upload-results" aria-live="polite">
-                {attachmentResults.items.map((item, index) => (
-                  <li key={`${item.filename}-${index}`} data-state={item.status}>
-                    <strong>{item.filename}</strong>
-                    <span>{attachmentStatusLabel(item.status)}</span>
-                    {item.failure ? <small>{item.failure.message}</small> : null}
-                  </li>
-                ))}
-              </ul>
+            <input
+              className="workflow-visually-hidden"
+              name="files"
+              type="file"
+              multiple
+              disabled={busy}
+              aria-label="选择病例资料文件，选择后立即上传并预解析"
+              onChange={(event) => void handleUpload(event)}
+            />
+            <span className="workflow-help">选择一个或多个文件后会立即开始上传，无需再次确认。</span>
+            {action === "upload" ? (
+              <WorkflowNotice tone="info" live>正在上传并预解析 {uploadingFileCount} 个文件……</WorkflowNotice>
             ) : null}
-          </form>
+            {uploadError ? <WorkflowNotice tone="error" live>{uploadError}</WorkflowNotice> : null}
+            {attachmentResults && uploadCounts ? (
+              <>
+                <WorkflowNotice tone={uploadCounts.failed ? "warning" : "success"} live>
+                  本批处理完成：成功 {uploadCounts.success} 个，重复 {uploadCounts.duplicate} 个，失败 {uploadCounts.failed} 个。
+                  {uploadCounts.failed ? "失败文件可重新选择后再次上传，已成功文件不受影响。" : ""}
+                </WorkflowNotice>
+                <div>
+                  <h3>本批上传处理结果</h3>
+                  <ul className="workflow-upload-results" aria-live="polite">
+                    {attachmentResults.items.map((item, index) => (
+                      <li key={`${item.filename}-${index}`} data-state={item.status}>
+                        <strong>{item.filename}</strong>
+                        <span>{attachmentStatusLabel(item.status)}</span>
+                        {item.failure ? <small>{item.failure.message}</small> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            ) : null}
+          </label>
         </div>
+
         {caseResource.attachments.length ? (
           <div className="workflow-attachment-list">
             <h3>已接收病例资料</h3>
@@ -547,15 +572,38 @@ export function IntegrationCaseWorkbench({
           </div>
         ) : <p className="workflow-empty">尚未上传病例资料。</p>}
 
+        <div className="workflow-editor-group">
+          <div className="workflow-editor-group__header">
+            <div>
+              <h3>医生事先填写的病例总结</h3>
+              <p>该原文与模型病例总结分开保存，模型不会覆盖它。</p>
+            </div>
+          </div>
+          <label className="workflow-field">
+            <span>病例总结原文</span>
+            <textarea
+              rows={8}
+              maxLength={20000}
+              value={clinicalSummary}
+              disabled={busy}
+              onChange={(event) => setClinicalSummary(event.target.value)}
+            />
+          </label>
+          {summaryDirty ? <p className="workflow-help">当前总结有未保存修改。上传资料不会覆盖这些文字。</p> : null}
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy || !summaryDirty} onClick={() => void handleSaveClinicalSummary()}>
+            {action === "summary" ? "正在保存…" : "保存医生病例总结"}
+          </button>
+        </div>
+
         <div className="workflow-analysis-launch">
           <div className="workflow-analysis-launch__header">
             <h3>开始综合分析</h3>
-            <p>确认资料无误后调用已配置的第三方模型服务；分析进度会在本页持续更新。</p>
+            <p>确认资料无误后调用已配置的第三方模型服务；只有下方确认操作会启动病例级综合分析。</p>
           </div>
           {analysisReady ? (
             <div className="workflow-analysis-launch__complete">
               <WorkflowNotice tone="success">综合分析已完成，可以进入医生复核。</WorkflowNotice>
-              <button className="workflow-button workflow-button--primary" type="button" onClick={() => navigateToStep("review")}>进入医生复核</button>
+              <button className="workflow-button workflow-button--secondary" type="button" onClick={() => navigateToStep("review")}>进入医生复核</button>
             </div>
           ) : analysisRunning || analysisOperationVisible ? (
             operation?.stage === "analysis" ? (

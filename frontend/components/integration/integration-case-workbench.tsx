@@ -1,6 +1,12 @@
 "use client";
 
 import React, { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeftIcon,
+  ArrowPathIcon,
+  ArrowRightStartOnRectangleIcon,
+  ArrowUpTrayIcon
+} from "@heroicons/react/24/outline";
 
 import { buildApprovalRequest, createApprovalDraft, type ApprovalDraftState } from "../../lib/api-v2/approval";
 import {
@@ -429,7 +435,7 @@ export function IntegrationCaseWorkbench({
   if (!caseResource) {
     const emptySteps = deriveWorkflowSteps({ caseResource: null, analysis: null, draft: null, report: null });
     return (
-      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case" theme={fixtureMode ? "test" : "default"}>
+      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case">
         {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式：{fixtureScenario}</WorkflowNotice> : null}
         {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
         <WorkflowSection id="case" title={loadState === "loading" ? "正在读取病例" : "病例无法加载"} state={loadState === "error" ? "error" : "current"}>
@@ -448,12 +454,19 @@ export function IntegrationCaseWorkbench({
       steps={steps}
       currentStep={visibleStep}
       onStepChange={navigateToStep}
-      theme={fixtureMode ? "test" : "default"}
+      contextSlot={
+        <div className="workflow-case-context">
+          <span>当前病例</span>
+          <strong>{caseResource.customer_name}</strong>
+          <small>{caseStatusLabels[caseResource.status]}</small>
+          <code>{caseResource.id}</code>
+        </div>
+      }
       headerActions={
         <>
-          <a className="workflow-button workflow-button--secondary" href="/integration/cases">返回病例入口</a>
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}>重新加载全部状态</button>
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void logout(); }}>退出 {doctor.display_name}</button>
+          <a className="workflow-button workflow-button--secondary" href="/integration/cases"><ArrowLeftIcon className="workflow-button__icon" />返回病例入口</a>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}><ArrowPathIcon className="workflow-button__icon" />重新加载全部状态</button>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void logout(); }}><ArrowRightStartOnRectangleIcon className="workflow-button__icon" />退出 {doctor.display_name}</button>
         </>
       }
     >
@@ -489,6 +502,7 @@ export function IntegrationCaseWorkbench({
               <input name="files" type="file" multiple required disabled={busy} />
             </label>
             <button className="workflow-button workflow-button--secondary" type="submit" disabled={busy}>
+              <ArrowUpTrayIcon className="workflow-button__icon" />
               {action === "upload" ? "正在上传…" : "上传所选资料"}
             </button>
             {attachmentResults ? (
@@ -511,7 +525,9 @@ export function IntegrationCaseWorkbench({
               {caseResource.attachments.map((item) => (
                 <li key={item.id} data-state={item.parse_status}>
                   <div><strong>{item.filename}</strong><small>{item.media_type}，{item.size_bytes.toLocaleString("zh-CN")} 字节</small></div>
-                  <span>{attachmentStatusLabel(item.parse_status)}</span>
+                  <span className="workflow-status-badge">
+                    {attachmentStatusLabel(item.parse_status)}
+                  </span>
                 </li>
               ))}
             </ul>

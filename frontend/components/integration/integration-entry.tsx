@@ -1,6 +1,7 @@
 "use client";
 
 import React, { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowPathIcon, ArrowRightStartOnRectangleIcon, PlusIcon, UserGroupIcon } from "@heroicons/react/24/outline";
 
 import { caseStatusLabels, workflowCopy } from "../../lib/api-v2/copy";
 import { workflowErrorMessage } from "../../lib/api-v2/errors";
@@ -75,18 +76,18 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
       description={`当前医生：${doctor.display_name}。病例仅对本人可见。`}
       steps={[...entrySteps]}
       currentStep="case"
-      theme={fixtureMode ? "test" : "default"}
+      theme={fixtureMode ? "test" : "paracelsus"}
       headerActions={
         <>
-          {doctor.role === "admin" ? <a className="workflow-button workflow-button--secondary" href="/doctors">账号管理</a> : null}
-          <button className="workflow-button workflow-button--secondary" type="button" onClick={() => void logout()}>退出登录</button>
+          {doctor.role === "admin" ? <a className="workflow-button workflow-button--secondary" href="/doctors"><UserGroupIcon className="workflow-button__icon" />账号管理</a> : null}
+          <button className="workflow-button workflow-button--secondary" type="button" onClick={() => void logout()}><ArrowRightStartOnRectangleIcon className="workflow-button__icon" />退出登录</button>
         </>
       }
     >
       {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，场景：{fixtureScenario}。数据只用于界面测试。</WorkflowNotice> : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
 
-      <WorkflowSection id="case" title="我的病例" description="按最近更新时间排列，可继续尚未完成的五步流程。" state="current" actions={<button className="workflow-button workflow-button--secondary" type="button" disabled={loadingCases} onClick={() => void loadCases()}>刷新列表</button>}>
+      <WorkflowSection id="case" title="我的病例" description="按最近更新时间排列，可继续尚未完成的五步流程。" state="current" actions={<button className="workflow-button workflow-button--secondary" type="button" disabled={loadingCases} onClick={() => void loadCases()}><ArrowPathIcon className={`workflow-button__icon${loadingCases ? " workflow-icon--spin" : ""}`} />刷新列表</button>}>
         {loadingCases ? <p className="workflow-placeholder">正在读取病例…</p> : cases.length ? (
           <div className="workflow-case-table-wrap">
             <table className="workflow-case-table">
@@ -120,7 +121,7 @@ export function IntegrationEntry({ fixtureMode, fixtureScenario }: { fixtureMode
             <label className="workflow-field"><span>客户名称</span><input name="customer_name" required maxLength={160} autoComplete="off" /></label>
             <label className="workflow-field"><span>顾问 ID（可选）</span><input name="consultant_id" maxLength={160} autoComplete="off" /></label>
             <label className="workflow-field"><span>备注（可选）</span><textarea name="notes" rows={4} maxLength={4000} /></label>
-            <button className="workflow-button workflow-button--primary" disabled={busy} type="submit">{busy ? "正在创建…" : workflowCopy.entry.createAction}</button>
+            <button className="workflow-button workflow-button--primary" disabled={busy} type="submit"><PlusIcon className="workflow-button__icon" />{busy ? "正在创建…" : workflowCopy.entry.createAction}</button>
           </form>
           </div>
         </section>

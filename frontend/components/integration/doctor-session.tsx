@@ -88,12 +88,12 @@ export function DoctorSessionGate({ children }: { children: ReactNode }) {
   }
 
   if (loading) {
-    return <main className="workflow-auth"><p>正在确认医生登录状态…</p></main>;
+    return <main className="workflow-app workflow-auth"><p>正在确认医生登录状态…</p></main>;
   }
 
   if (!doctor) {
     return (
-      <main className="workflow-auth">
+      <main className="workflow-app workflow-auth">
         <section className="workflow-auth__card" aria-labelledby="doctor-login-title">
           <p className="workflow-auth__eyebrow">Paracelsus AI</p>
           <h1 id="doctor-login-title">{bootstrapRequired ? "初始化系统管理员" : "医生登录"}</h1>

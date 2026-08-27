@@ -233,7 +233,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>异常指标</h3>
+            <h3>异常指标 <span className="workflow-count">{value.findings.length} 项</span></h3>
             <p>核对指标结果、参考范围和来源证据；未修改内容将保持原分析结果。</p>
           </div>
           <button
@@ -253,25 +253,10 @@ export function ReviewEditor({
               ["needs_review", `待确认 ${value.findings.filter(findingNeedsReview).length}`],
               ["verified", `已核对 ${value.findings.filter(findingIsVerified).length}`]
             ] as Array<[FindingFilter, string]>).map(([filter, label]) => (
-              <button
-                className="workflow-finding-filter"
-                data-active={findingFilter === filter}
-                key={filter}
-                type="button"
-                onClick={() => setFindingFilter(filter)}
-              >
-                {label}
-              </button>
+              <button className="workflow-finding-filter" data-active={findingFilter === filter} key={filter} type="button" onClick={() => setFindingFilter(filter)}>{label}</button>
             ))}
           </div>
-          <input
-            className="workflow-finding-search"
-            type="search"
-            value={findingSearch}
-            onChange={(event) => setFindingSearch(event.target.value)}
-            placeholder="搜索指标、结果或证据"
-            aria-label="搜索异常指标"
-          />
+          <input className="workflow-finding-search" type="search" value={findingSearch} onChange={(event) => setFindingSearch(event.target.value)} placeholder="搜索指标、结果或证据" aria-label="搜索异常指标" />
         </div>
         <div className="workflow-finding-grid">
           {visibleFindings.map((item) => {
@@ -327,34 +312,18 @@ export function ReviewEditor({
                     <div className="workflow-form-grid">
                       <label className="workflow-field">
                         <span>来源文件</span>
-                        <select
-                          value={item.source_file_id}
-                          onChange={(event) => {
-                            const selectedSource = sourceOptions.find((option) => option.id === event.target.value);
-                            updateFinding(item.id, {
-                              source_file_id: event.target.value,
-                              source_file_name: selectedSource?.name ?? item.source_file_name
-                            });
-                          }}
-                        >
+                        <select value={item.source_file_id} onChange={(event) => {
+                          const selectedSource = sourceOptions.find((option) => option.id === event.target.value);
+                          updateFinding(item.id, { source_file_id: event.target.value, source_file_name: selectedSource?.name ?? item.source_file_name });
+                        }}>
                           {sourceOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
                         </select>
                       </label>
-                      <label className="workflow-field">
-                        <span>页码</span>
-                        <input type="number" min={1} value={item.source_page} onChange={(event) => updateFinding(item.id, { source_page: Number(event.target.value) || 1 })} />
-                      </label>
+                      <label className="workflow-field"><span>页码</span><input type="number" min={1} value={item.source_page} onChange={(event) => updateFinding(item.id, { source_page: Number(event.target.value) || 1 })} /></label>
                     </div>
-                    <label className="workflow-field">
-                      <span>原文证据</span>
-                      <textarea rows={3} required value={item.source_text} onChange={(event) => updateFinding(item.id, { source_text: event.target.value })} />
-                    </label>
-                    {source?.report_explanation ? (
-                      <p className="workflow-readonly-explanation"><strong>报告解释：</strong>{source.report_explanation}</p>
-                    ) : null}
-                    {source?.neutral_interpretation ? (
-                      <p className="workflow-readonly-explanation"><strong>中性医学解释：</strong>{source.neutral_interpretation}</p>
-                    ) : null}
+                    <label className="workflow-field"><span>原文证据</span><textarea rows={3} required value={item.source_text} onChange={(event) => updateFinding(item.id, { source_text: event.target.value })} /></label>
+                    {source?.report_explanation ? <p className="workflow-readonly-explanation"><strong>报告解释：</strong>{source.report_explanation}</p> : null}
+                    {source?.neutral_interpretation ? <p className="workflow-readonly-explanation"><strong>中性医学解释：</strong>{source.neutral_interpretation}</p> : null}
                     <p className="workflow-evidence-status">{evidenceStatusLabel(source?.evidence_status)}</p>
                   </div>
                 </details>
@@ -377,7 +346,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>当前补充剂</h3>
+            <h3>当前补充剂 <span className="workflow-count">{value.supplements.length} 项</span></h3>
             <p>医生可以更名、移除或新增患者当前使用的补充剂。</p>
           </div>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={addSupplement}>
@@ -412,7 +381,7 @@ export function ReviewEditor({
       <div className="workflow-editor-group">
         <div className="workflow-editor-group__header">
           <div>
-            <h3>慢性食物敏感</h3>
+            <h3>慢性食物敏感 <span className="workflow-count">{value.foodSensitivityItems.length} 项</span></h3>
             <p>按原报告结果分级核对，食敏项目不会混入普通异常指标。</p>
           </div>
         </div>
@@ -487,14 +456,7 @@ export function ReviewEditor({
           </section>
         ) : null}
         {analysis.food_sensitivity?.warning ? <WorkflowNotice tone="warning">{analysis.food_sensitivity.warning}</WorkflowNotice> : null}
-        <button
-          className="workflow-button workflow-button--secondary workflow-add-food"
-          type="button"
-          disabled={busy}
-          onClick={addFoodSensitivity}
-        >
-          新增食敏条目
-        </button>
+        <button className="workflow-button workflow-button--secondary workflow-add-food" type="button" disabled={busy} onClick={addFoodSensitivity}>新增食敏条目</button>
       </div>
       ) : null}
 

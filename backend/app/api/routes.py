@@ -15,10 +15,15 @@ from starlette.responses import Response
 from app.api.schemas import (
     AssistantCaseChatRequest,
     AssistantCaseChatResponse,
+    AuthBootstrapResponse,
     AuthLoginRequest,
     AuthMeResponse,
     AuthRegisterRequest,
     AuthResponse,
+    DoctorCreateRequest,
+    DoctorListResponse,
+    DoctorPasswordResetRequest,
+    DoctorUpdateRequest,
     PasswordChangeRequest,
     ApproveDraftRequest,
     CaseDetailResponse,
@@ -317,9 +322,16 @@ def auth_me(request: Request):
     return AuthMeResponse(doctor=_doctor_response(doctor) if doctor else None)
 
 
+@router.get("/auth/bootstrap", response_model=AuthBootstrapResponse)
+def auth_bootstrap(request: Request):
+    return AuthBootstrapResponse(required=_container(request).repository.count_doctors() == 0)
+
+
 @router.post("/auth/register", response_model=AuthResponse)
 def auth_register(payload: AuthRegisterRequest, request: Request, response: Response):
     container = _container(request)
+    if container.repository.count_doctors() != 0:
+        raise HTTPException(status_code=403, detail="Public doctor registration is closed.")
     try:
         doctor = container.auth_service.register(
             username=payload.username,
@@ -330,6 +342,67 @@ def auth_register(payload: AuthRegisterRequest, request: Request, response: Resp
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _set_session_cookie(response, session.session.id)
+    return AuthResponse(doctor=_doctor_response(doctor))
+
+
+@router.get("/auth/doctors", response_model=DoctorListResponse)
+def auth_list_doctors(request: Request):
+    _require_admin(request)
+    return DoctorListResponse(
+        doctors=[_doctor_response(doctor) for doctor in _container(request).auth_service.list_doctors()]
+    )
+
+
+@router.post("/auth/doctors", response_model=AuthResponse, status_code=201)
+def auth_create_doctor(payload: DoctorCreateRequest, request: Request):
+    _require_admin(request)
+    container = _container(request)
+    try:
+        doctor = container.auth_service.register(
+            username=payload.username,
+            password=payload.password,
+            display_name=payload.display_name,
+            role=DoctorRole.doctor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AuthResponse(doctor=_doctor_response(doctor))
+
+
+@router.patch("/auth/doctors/{doctor_id}", response_model=AuthResponse)
+def auth_update_doctor(doctor_id: str, payload: DoctorUpdateRequest, request: Request):
+    administrator = _require_admin(request)
+    if doctor_id == administrator.id and payload.enabled is False:
+        raise HTTPException(status_code=409, detail="An administrator cannot disable their own account.")
+    try:
+        doctor = _container(request).auth_service.update_doctor(
+            doctor_id,
+            display_name=payload.display_name,
+            enabled=payload.enabled,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Doctor not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AuthResponse(doctor=_doctor_response(doctor))
+
+
+@router.put("/auth/doctors/{doctor_id}/password", response_model=AuthResponse)
+def auth_reset_doctor_password(
+    doctor_id: str,
+    payload: DoctorPasswordResetRequest,
+    request: Request,
+):
+    _require_admin(request)
+    try:
+        doctor = _container(request).auth_service.reset_password(
+            doctor_id,
+            new_password=payload.new_password,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Doctor not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return AuthResponse(doctor=_doctor_response(doctor))
 
 

@@ -1,0 +1,561 @@
+{
+  "info": {
+    "_postman_id": "71988279-62c9-4ca3-8b37-f6cf1f7e38fb",
+    "name": "Functional Medicine API v2 - Synthetic Live HTTP",
+    "description": "真实 HTTP 第一阶段契约测试。仅使用虚构数据，不读取本机模型密钥，不调用真实模型；草案、审批和报告成功闭环留待模型额度审批后执行。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01. Unauthenticated v2 request is Problem Details",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 401', () => pm.response.to.have.status(401));",
+          "pm.test('uses problem+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+          "const body = pm.response.json();",
+          "pm.test('problem shape and code are stable', () => {",
+          "  pm.expect(body).to.have.all.keys('type', 'title', 'status', 'detail', 'instance', 'code', 'errors');",
+          "  pm.expect(body.status).to.eql(401);",
+          "  pm.expect(body.code).to.eql('AUTHENTICATION_REQUIRED');",
+          "  pm.expect(body.errors).to.be.an('array');",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v2/cases/not-a-real-case"
+      }
+    },
+    {
+      "name": "02. Exchange owner identity for Bearer token",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {"type": "text/javascript", "exec": [
+            "const cryptoJs = require('crypto-js');",
+            "const timestamp = Math.floor(Date.now() / 1000).toString();",
+            "const nonce = `nonce-owner-${Date.now()}`;",
+            "const canonical = [pm.environment.get('issuer'), pm.environment.get('doctor_id'), pm.environment.get('doctor_name'), timestamp, nonce].join('\\n');",
+            "const signature = cryptoJs.HmacSHA256(canonical, pm.environment.get('shared_secret')).toString(cryptoJs.enc.Hex);",
+            "pm.environment.set('timestamp', timestamp);",
+            "pm.environment.set('nonce', nonce);",
+            "pm.environment.set('signature', signature);"
+          ]}
+        },
+        {
+          "listen": "test",
+          "script": {"type": "text/javascript", "exec": [
+            "pm.test('token exchange succeeds', () => pm.response.to.have.status(200));",
+            "const body = pm.response.json();",
+            "pm.test('returns bearer token for owner', () => {",
+            "  pm.expect(body.token_type).to.eql('bearer');",
+            "  pm.expect(body.access_token).to.be.a('string').and.not.empty;",
+            "  pm.expect(body.doctor_id).to.be.a('string').and.not.empty;",
+            "});",
+            "pm.environment.set('access_token', body.access_token);",
+            "pm.environment.set('authenticated_doctor_id', body.doctor_id);"
+          ]}
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"issuer\": \"{{issuer}}\",\n  \"doctor_id\": \"{{doctor_id}}\",\n  \"doctor_name\": \"{{doctor_name}}\",\n  \"timestamp\": {{timestamp}},\n  \"nonce\": \"{{nonce}}\",\n  \"signature\": \"{{signature}}\"\n}"},
+        "url": "{{base_url}}/api/v1/auth/token"
+      }
+    },
+    {
+      "name": "03. Exchange other identity for ownership test",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {"type": "text/javascript", "exec": [
+            "const cryptoJs = require('crypto-js');",
+            "const timestamp = Math.floor(Date.now() / 1000).toString();",
+            "const nonce = `nonce-other-${Date.now()}`;",
+            "const canonical = [pm.environment.get('issuer'), pm.environment.get('other_doctor_id'), pm.environment.get('other_doctor_name'), timestamp, nonce].join('\\n');",
+            "const signature = cryptoJs.HmacSHA256(canonical, pm.environment.get('shared_secret')).toString(cryptoJs.enc.Hex);",
+            "pm.environment.set('other_timestamp', timestamp);",
+            "pm.environment.set('other_nonce', nonce);",
+            "pm.environment.set('other_signature', signature);"
+          ]}
+        },
+        {
+          "listen": "test",
+          "script": {"type": "text/javascript", "exec": [
+            "pm.test('second token exchange succeeds', () => pm.response.to.have.status(200));",
+            "const body = pm.response.json();",
+            "pm.test('second identity is distinct', () => pm.expect(body.doctor_id).to.not.eql(pm.environment.get('authenticated_doctor_id')));",
+            "pm.environment.set('other_access_token', body.access_token);"
+          ]}
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"issuer\": \"{{issuer}}\",\n  \"doctor_id\": \"{{other_doctor_id}}\",\n  \"doctor_name\": \"{{other_doctor_name}}\",\n  \"timestamp\": {{other_timestamp}},\n  \"nonce\": \"{{other_nonce}}\",\n  \"signature\": \"{{other_signature}}\"\n}"},
+        "url": "{{base_url}}/api/v1/auth/token"
+      }
+    },
+    {
+      "name": "04. Strict create DTO rejects extra field",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 422', () => pm.response.to.have.status(422));",
+          "const body = pm.response.json();",
+          "pm.test('validation error is typed', () => {",
+          "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json');",
+          "  pm.expect(body.code).to.eql('REQUEST_VALIDATION_FAILED');",
+          "  pm.expect(body.errors).to.be.an('array').and.not.empty;",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"customer_name\": \"虚构额外字段病例\",\n  \"unexpected_internal_field\": true\n}"},
+        "url": "{{base_url}}/api/v2/cases"
+      }
+    },
+    {
+      "name": "05. Create synthetic case",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('case is created with 201', () => pm.response.to.have.status(201));",
+          "const body = pm.response.json();",
+          "pm.test('case response is public and normalized', () => {",
+          "  pm.expect(body).to.have.all.keys('id', 'customer_name', 'consultant_id', 'status', 'notes', 'clinical_summary', 'created_at', 'updated_at', 'attachments');",
+          "  pm.expect(body.customer_name).to.eql('虚构病例 API-V2-NEWMAN');",
+          "  pm.expect(body.clinical_summary).to.eql(null);",
+          "  pm.expect(body.attachments).to.be.an('array').and.empty;",
+          "  pm.expect(body.created_at).to.match(/Z$/);",
+          "});",
+          "pm.environment.set('case_id', body.id);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"customer_name\": \"虚构病例 API-V2-NEWMAN\",\n  \"consultant_id\": null,\n  \"notes\": \"仅供本地接口测试，不对应任何真实患者\"\n}"},
+        "url": "{{base_url}}/api/v2/cases"
+      }
+    },
+    {
+      "name": "06. Other doctor cannot read case",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 403', () => pm.response.to.have.status(403));",
+          "const body = pm.response.json();",
+          "pm.test('ownership denial is typed', () => {",
+          "  pm.expect(body.code).to.eql('CASE_ACCESS_DENIED');",
+          "  pm.expect(body.instance).to.eql(`/api/v2/cases/${pm.environment.get('case_id')}`);",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{other_access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}"
+      }
+    },
+    {
+      "name": "07. Get empty case",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('case id and empty collection are stable', () => {",
+          "  pm.expect(body.id).to.eql(pm.environment.get('case_id'));",
+          "  pm.expect(body.attachments).to.eql([]);",
+          "});",
+          "pm.test('no storage or model internals leak', () => {",
+          "  const raw = pm.response.text();",
+          "  ['storage_uri', 'snapshot_hash', 'model_version', 'prompt_version', 'internal_audit'].forEach(key => pm.expect(raw).to.not.include(key));",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}"
+      }
+    },
+    {
+      "name": "08. Update clinical summary",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 200', () => pm.response.to.have.status(200));",
+          "pm.test('summary is trimmed and persisted', () => pm.expect(pm.response.json().clinical_summary).to.eql('虚构临床摘要：仅用于接口契约测试。'));"
+        ]}
+      }],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"clinical_summary\": \"  虚构临床摘要：仅用于接口契约测试。  \"\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/clinical-summary"
+      }
+    },
+    {
+      "name": "09. Clear clinical summary",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 200', () => pm.response.to.have.status(200));",
+          "pm.test('nullable field remains explicit null', () => pm.expect(pm.response.json().clinical_summary).to.eql(null));"
+        ]}
+      }],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"clinical_summary\": null\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/clinical-summary"
+      }
+    },
+    {
+      "name": "10. Multipart partial success preserves order",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('batch returns 201', () => pm.response.to.have.status(201));",
+          "const body = pm.response.json();",
+          "pm.test('mixed batch is ordered and partially accepted', () => {",
+          "  pm.expect(body.items).to.have.length(2);",
+          "  pm.expect(body.items[0].filename).to.eql('api-v2-synthetic-labs.txt');",
+          "  pm.expect(['parsed', 'pending']).to.include(body.items[0].status);",
+          "  pm.expect(body.items[0].file_id).to.be.a('string').and.not.empty;",
+          "  pm.expect(body.items[1].filename).to.eql('api-v2-invalid.exe');",
+          "  pm.expect(body.items[1].status).to.eql('failed');",
+          "  pm.expect(body.items[1].failure.code).to.eql('ATTACHMENT_REJECTED');",
+          "  pm.expect(body.meta.accepted_count).to.eql(1);",
+          "  pm.expect(body.meta.failed_count).to.eql(1);",
+          "});",
+          "pm.environment.set('file_id', body.items[0].file_id);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "body": {"mode": "formdata", "formdata": [
+          {"key": "attachment_type", "value": "medical_record", "type": "text"},
+          {"key": "files", "type": "file", "src": "postman/fixtures/api-v2-synthetic-labs.txt"},
+          {"key": "files", "type": "file", "src": "postman/fixtures/api-v2-invalid.exe"}
+        ]},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/attachments"
+      }
+    },
+    {
+      "name": "11. Case exposes typed attachment summary only",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('accepted file appears in public summary', () => {",
+          "  pm.expect(body.attachments).to.have.length(1);",
+          "  pm.expect(body.attachments[0].id).to.eql(pm.environment.get('file_id'));",
+          "  pm.expect(body.attachments[0].attachment_type).to.eql('medical_record');",
+          "  pm.expect(body.attachments[0].missing_fields).to.be.an('array');",
+          "});",
+          "pm.test('internal object fields are absent', () => {",
+          "  const raw = pm.response.text();",
+          "  ['storage_uri', 'raw_extracted_text', 'content_sha256', 'source_spans', 'lab_items'].forEach(key => pm.expect(raw).to.not.include(key));",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}"
+      }
+    },
+    {
+      "name": "12. All-invalid attachment batch is rejected",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 422', () => pm.response.to.have.status(422));",
+          "const body = pm.response.json();",
+          "pm.test('batch rejection is typed', () => {",
+          "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json');",
+          "  pm.expect(body.code).to.eql('ATTACHMENT_BATCH_REJECTED');",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "body": {"mode": "formdata", "formdata": [
+          {"key": "attachment_type", "value": "medical_record", "type": "text"},
+          {"key": "files", "type": "file", "src": "postman/fixtures/api-v2-invalid.exe"}
+        ]},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/attachments"
+      }
+    },
+    {
+      "name": "13. Invalid attachment type is contract validation error",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 422', () => pm.response.to.have.status(422));",
+          "const body = pm.response.json();",
+          "pm.test('invalid enum is rejected before workflow', () => {",
+          "  pm.expect(body.code).to.eql('REQUEST_VALIDATION_FAILED');",
+          "  pm.expect(body.errors).to.be.an('array').and.not.empty;",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "body": {"mode": "formdata", "formdata": [
+          {"key": "attachment_type", "value": "case", "type": "text"},
+          {"key": "files", "type": "file", "src": "postman/fixtures/api-v2-synthetic-labs.txt"}
+        ]},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/attachments"
+      }
+    },
+    {
+      "name": "14. Analysis requires processing confirmation",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 422', () => pm.response.to.have.status(422));",
+          "pm.test('confirmation failure is typed', () => pm.expect(pm.response.json().code).to.eql('THIRD_PARTY_PROCESSING_CONFIRMATION_REQUIRED'));"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"third_party_processing_confirmed\": false\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses"
+      }
+    },
+    {
+      "name": "15. Start analysis operation without model call",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('analysis is accepted with 202', () => pm.response.to.have.status(202));",
+          "const body = pm.response.json();",
+          "pm.test('operation resource and Location agree', () => {",
+          "  pm.expect(body.kind).to.eql('case_workflow');",
+          "  pm.expect(body.stage).to.eql('analysis');",
+          "  pm.expect(['queued', 'running', 'failed']).to.include(body.status);",
+          "  pm.expect(pm.response.headers.get('Location')).to.eql(`/api/v2/operations/${body.operation_id}`);",
+          "  pm.expect(body.operation_id).to.eql(body.analysis_id);",
+          "});",
+          "pm.environment.set('analysis_id', body.analysis_id);",
+          "pm.environment.set('poll_count', '0');"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"third_party_processing_confirmed\": true\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses"
+      }
+    },
+    {
+      "name": "16. Poll analysis operation to terminal failure",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('poll returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('operation identity is stable', () => {",
+          "  pm.expect(body.operation_id).to.eql(pm.environment.get('analysis_id'));",
+          "  pm.expect(body.analysis_id).to.eql(pm.environment.get('analysis_id'));",
+          "  pm.expect(body.progress.percent).to.be.within(0, 100);",
+          "});",
+          "if (['queued', 'running'].includes(body.status)) {",
+          "  const count = Number(pm.environment.get('poll_count') || '0') + 1;",
+          "  pm.environment.set('poll_count', String(count));",
+          "  if (count < 20) { postman.setNextRequest(pm.info.requestName); }",
+          "  else { pm.test('operation reaches terminal state within poll budget', () => pm.expect.fail('operation remained non-terminal')); }",
+          "} else {",
+          "  pm.test('unconfigured model becomes typed failed operation', () => {",
+          "    pm.expect(body.status).to.eql('failed');",
+          "    pm.expect(body.failure.code).to.eql('ANALYSIS_FAILED');",
+          "    pm.expect(body.failure.message).to.be.a('string').and.not.empty;",
+          "    pm.expect(pm.response.text()).to.not.include('大模型病例分析未配置');",
+          "  });",
+          "}"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/operations/{{analysis_id}}"
+      }
+    },
+    {
+      "name": "17. Other doctor cannot poll operation",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 403', () => pm.response.to.have.status(403));",
+          "pm.test('operation ownership follows case', () => pm.expect(pm.response.json().code).to.eql('CASE_ACCESS_DENIED'));"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{other_access_token}}"}],
+        "url": "{{base_url}}/api/v2/operations/{{analysis_id}}"
+      }
+    },
+    {
+      "name": "18. Latest analysis is public and resumable",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('latest failed analysis is typed', () => {",
+          "  pm.expect(body.id).to.eql(pm.environment.get('analysis_id'));",
+          "  pm.expect(body.status).to.eql('failed');",
+          "  pm.expect(body.error.code).to.eql('ANALYSIS_FAILED');",
+          "  pm.expect(body.abnormal_findings).to.be.an('array');",
+          "  pm.expect(body.current_supplements).to.be.an('array');",
+          "  pm.expect(body.warnings).to.be.an('array');",
+          "});",
+          "pm.test('analysis internals do not leak', () => {",
+          "  const raw = pm.response.text();",
+          "  ['snapshot_hash', 'model_version', 'prompt_version', 'standardization_version', 'candidate_mapping', 'internal_audit'].forEach(key => pm.expect(raw).to.not.include(key));",
+          "});",
+          "pm.environment.set('analysis_revision', String(body.revision));"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses/latest"
+      }
+    },
+    {
+      "name": "19. Failed analysis cannot be reviewed",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 409', () => pm.response.to.have.status(409));",
+          "pm.test('workflow conflict is typed', () => pm.expect(pm.response.json().code).to.eql('ANALYSIS_REVIEW_CONFLICT'));"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"reviewer_id\": \"synthetic-reviewer\",\n  \"expected_revision\": {{analysis_revision}},\n  \"finding_changes\": [],\n  \"supplement_changes\": [],\n  \"food_sensitivity_changes\": []\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses/{{analysis_id}}/reviews"
+      }
+    },
+    {
+      "name": "20. Failed analysis cannot retry unstarted draft generation",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('returns 409', () => pm.response.to.have.status(409));",
+          "pm.test('retry conflict is typed', () => pm.expect(pm.response.json().code).to.eql('DRAFT_GENERATION_RETRY_CONFLICT'));"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses/{{analysis_id}}/draft-generation:retry"
+      }
+    },
+    {
+      "name": "21. Unknown draft read and approval are typed 404",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('draft read returns 404', () => pm.response.to.have.status(404));",
+          "pm.test('draft miss is typed', () => pm.expect(pm.response.json().code).to.eql('DRAFT_NOT_FOUND'));"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{unknown_draft_id}}"
+      }
+    },
+    {
+      "name": "22. Unknown draft approval is typed 404",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('approval returns 404', () => pm.response.to.have.status(404));",
+          "pm.test('approval miss is typed', () => pm.expect(pm.response.json().code).to.eql('DRAFT_NOT_FOUND'));"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"reviewer_id\": \"synthetic-reviewer\",\n  \"excluded_sku_ids\": [],\n  \"dosage_overrides\": []\n}"},
+        "url": "{{base_url}}/api/v2/drafts/{{unknown_draft_id}}/approval"
+      }
+    },
+    {
+      "name": "23. Unknown report metadata is typed 404",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('report metadata returns 404', () => pm.response.to.have.status(404));",
+          "pm.test('report miss is typed', () => pm.expect(pm.response.json().code).to.eql('DRAFT_NOT_FOUND'));"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{unknown_draft_id}}/report"
+      }
+    },
+    {
+      "name": "24. Unknown PDF error remains Problem Details",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('PDF route returns 404', () => pm.response.to.have.status(404));",
+          "const body = pm.response.json();",
+          "pm.test('PDF failure is not mislabeled as PDF', () => {",
+          "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json');",
+          "  pm.expect(body.code).to.eql('DRAFT_NOT_FOUND');",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{unknown_draft_id}}/report.pdf"
+      }
+    }
+  ]
+}

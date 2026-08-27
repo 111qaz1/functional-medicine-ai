@@ -1,0 +1,320 @@
+{
+  "info": {
+    "_postman_id": "2f8d34b1-a71c-4ed5-959f-7620c97e6841",
+    "name": "Functional Medicine API v2 - Approved Model E2E",
+    "description": "经明确授权后执行的单病例真实模型闭环。集合不包含病例内容或模型密钥，病例文件必须位于 Newman working directory 并命名为 case-input.pdf。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01. Exchange approved model-test doctor identity",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {"type": "text/javascript", "exec": [
+            "const cryptoJs = require('crypto-js');",
+            "const timestamp = Math.floor(Date.now() / 1000).toString();",
+            "const nonce = `nonce-model-e2e-${Date.now()}`;",
+            "const canonical = [pm.environment.get('issuer'), pm.environment.get('doctor_id'), pm.environment.get('doctor_name'), timestamp, nonce].join('\\n');",
+            "const signature = cryptoJs.HmacSHA256(canonical, pm.environment.get('shared_secret')).toString(cryptoJs.enc.Hex);",
+            "pm.environment.set('timestamp', timestamp);",
+            "pm.environment.set('nonce', nonce);",
+            "pm.environment.set('signature', signature);"
+          ]}
+        },
+        {
+          "listen": "test",
+          "script": {"type": "text/javascript", "exec": [
+            "pm.test('token exchange succeeds', () => pm.response.to.have.status(200));",
+            "const body = pm.response.json();",
+            "pm.test('bearer token is returned', () => pm.expect(body.access_token).to.be.a('string').and.not.empty);",
+            "pm.environment.set('access_token', body.access_token);"
+          ]}
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"issuer\": \"{{issuer}}\",\n  \"doctor_id\": \"{{doctor_id}}\",\n  \"doctor_name\": \"{{doctor_name}}\",\n  \"timestamp\": {{timestamp}},\n  \"nonce\": \"{{nonce}}\",\n  \"signature\": \"{{signature}}\"\n}"},
+        "url": "{{base_url}}/api/v1/auth/token"
+      }
+    },
+    {
+      "name": "02. Create isolated real-sample case",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('case is created', () => pm.response.to.have.status(201));",
+          "const body = pm.response.json();",
+          "pm.test('case starts without attachments', () => pm.expect(body.attachments).to.eql([]));",
+          "pm.environment.set('case_id', body.id);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"customer_name\": \"隔离真实样例验证\",\n  \"notes\": \"仅用于已审批的 API v2 模型闭环测试\"\n}"},
+        "url": "{{base_url}}/api/v2/cases"
+      }
+    },
+    {
+      "name": "03. Upload authorized real sample",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('attachment batch is accepted', () => pm.response.to.have.status(201));",
+          "const body = pm.response.json();",
+          "pm.test('single PDF is registered', () => {",
+          "  pm.expect(body.meta.accepted_count).to.eql(1);",
+          "  pm.expect(body.meta.failed_count).to.eql(0);",
+          "  pm.expect(body.items).to.have.length(1);",
+          "  pm.expect(body.items[0].file_id).to.be.a('string').and.not.empty;",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "body": {"mode": "formdata", "formdata": [
+          {"key": "attachment_type", "value": "medical_record", "type": "text"},
+          {"key": "files", "type": "file", "src": "case-input.pdf"}
+        ]},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/attachments"
+      }
+    },
+    {
+      "name": "04. Start approved model analysis",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('analysis is accepted', () => pm.response.to.have.status(202));",
+          "const body = pm.response.json();",
+          "pm.test('analysis operation is normalized', () => {",
+          "  pm.expect(body.stage).to.eql('analysis');",
+          "  pm.expect(body.operation_id).to.eql(body.analysis_id);",
+          "});",
+          "pm.environment.set('analysis_id', body.analysis_id);",
+          "pm.environment.set('analysis_poll_count', '0');"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"third_party_processing_confirmed\": true\n}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses"
+      }
+    },
+    {
+      "name": "05. Poll model analysis to success",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('operation poll returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "if (['queued', 'running'].includes(body.status)) {",
+          "  const count = Number(pm.environment.get('analysis_poll_count') || '0') + 1;",
+          "  pm.environment.set('analysis_poll_count', String(count));",
+          "  if (count < 600) { pm.execution.setNextRequest(pm.info.requestName); }",
+          "  else { pm.test('analysis completes within poll budget', () => pm.expect.fail('analysis poll budget exhausted')); pm.execution.setNextRequest(null); }",
+          "} else {",
+          "  pm.test('analysis succeeds', () => pm.expect(body.status).to.eql('succeeded'));",
+          "  if (body.status !== 'succeeded') { pm.execution.setNextRequest(null); }",
+          "}"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/operations/{{analysis_id}}"
+      }
+    },
+    {
+      "name": "06. Read analysis and capture a safe no-op delta target",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('latest analysis is readable', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('analysis is ready for review with findings', () => {",
+          "  pm.expect(body.status).to.eql('ready_for_review');",
+          "  pm.expect(body.abnormal_findings).to.be.an('array').and.not.empty;",
+          "});",
+          "pm.test('internal model metadata remains hidden', () => {",
+          "  const raw = pm.response.text();",
+          "  ['snapshot_hash', 'model_version', 'prompt_version', 'internal_audit'].forEach(key => pm.expect(raw).to.not.include(key));",
+          "});",
+          "if (body.abnormal_findings.length) {",
+          "  pm.environment.set('analysis_revision', String(body.revision));",
+          "  pm.environment.set('finding_id', body.abnormal_findings[0].id);",
+          "  pm.environment.set('finding_name', body.abnormal_findings[0].name);",
+          "}"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses/latest"
+      }
+    },
+    {
+      "name": "07. Submit typed finding delta and start draft generation",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {"type": "text/javascript", "exec": [
+            "const payload = {",
+            "  reviewer_id: 'approved-model-reviewer',",
+            "  expected_revision: Number(pm.environment.get('analysis_revision')),",
+            "  finding_changes: [{",
+            "    op: 'update',",
+            "    id: pm.environment.get('finding_id'),",
+            "    changes: {name: pm.environment.get('finding_name')}",
+            "  }],",
+            "  supplement_changes: [],",
+            "  food_sensitivity_changes: []",
+            "};",
+            "pm.request.body.update(JSON.stringify(payload));"
+          ]}
+        },
+        {
+          "listen": "test",
+          "script": {"type": "text/javascript", "exec": [
+            "pm.test('review delta is accepted', () => pm.response.to.have.status(202));",
+            "const body = pm.response.json();",
+            "pm.test('operation advances to draft generation', () => {",
+            "  pm.expect(body.stage).to.eql('draft_generation');",
+            "  pm.expect(body.operation_id).to.eql(pm.environment.get('analysis_id'));",
+            "});",
+            "pm.environment.set('draft_poll_count', '0');"
+          ]}
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{}"},
+        "url": "{{base_url}}/api/v2/cases/{{case_id}}/analyses/{{analysis_id}}/reviews"
+      }
+    },
+    {
+      "name": "08. Poll draft generation to success",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('draft operation poll returns 200', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "if (['queued', 'running'].includes(body.status)) {",
+          "  const count = Number(pm.environment.get('draft_poll_count') || '0') + 1;",
+          "  pm.environment.set('draft_poll_count', String(count));",
+          "  if (count < 600) { pm.execution.setNextRequest(pm.info.requestName); }",
+          "  else { pm.test('draft generation completes within poll budget', () => pm.expect.fail('draft poll budget exhausted')); pm.execution.setNextRequest(null); }",
+          "} else {",
+          "  pm.test('draft generation succeeds', () => pm.expect(body.status).to.eql('succeeded'));",
+          "  if (body.status === 'succeeded') { pm.environment.set('draft_id', body.draft_id); }",
+          "  else { pm.execution.setNextRequest(null); }",
+          "}"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/operations/{{analysis_id}}"
+      }
+    },
+    {
+      "name": "09. Read generated public draft",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('draft is readable', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('draft has publishable recommendations', () => {",
+          "  pm.expect(body.status).to.eql('pending_review');",
+          "  pm.expect(body.recommended_skus).to.be.an('array').and.not.empty;",
+          "});",
+          "pm.test('draft internals remain hidden', () => {",
+          "  const raw = pm.response.text();",
+          "  ['model_version', 'prompt_version', 'rule_version', 'internal_audit', 'pdf_report_path'].forEach(key => pm.expect(raw).to.not.include(key));",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{draft_id}}"
+      }
+    },
+    {
+      "name": "10. Approve generated draft",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('draft approval succeeds', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('approval publishes a report URL', () => {",
+          "  pm.expect(body.status).to.eql('approved');",
+          "  pm.expect(body.report_ready).to.eql(true);",
+          "  pm.expect(body.report_url).to.eql(`/api/v2/drafts/${pm.environment.get('draft_id')}/report.pdf`);",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{access_token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {"mode": "raw", "raw": "{\n  \"reviewer_id\": \"approved-model-reviewer\",\n  \"excluded_sku_ids\": [],\n  \"dosage_overrides\": []\n}"},
+        "url": "{{base_url}}/api/v2/drafts/{{draft_id}}/approval"
+      }
+    },
+    {
+      "name": "11. Read published report metadata",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('report metadata is ready', () => pm.response.to.have.status(200));",
+          "const body = pm.response.json();",
+          "pm.test('download URL identifies approved draft', () => {",
+          "  pm.expect(body.status).to.eql('ready');",
+          "  pm.expect(body.draft_id).to.eql(pm.environment.get('draft_id'));",
+          "  pm.expect(body.download_url).to.eql(`/api/v2/drafts/${pm.environment.get('draft_id')}/report.pdf`);",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{draft_id}}/report"
+      }
+    },
+    {
+      "name": "12. Download published PDF",
+      "event": [{
+        "listen": "test",
+        "script": {"type": "text/javascript", "exec": [
+          "pm.test('PDF download succeeds', () => pm.response.to.have.status(200));",
+          "pm.test('response is a named PDF binary', () => {",
+          "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf');",
+          "  pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment');",
+          "  pm.expect(pm.response.stream.slice(0, 4).toString()).to.eql('%PDF');",
+          "});"
+        ]}
+      }],
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "url": "{{base_url}}/api/v2/drafts/{{draft_id}}/report.pdf"
+      }
+    }
+  ]
+}

@@ -529,31 +529,32 @@ export function IntegrationCaseWorkbench({
               onChange={(event) => void handleUpload(event)}
             />
             <span className="workflow-help">选择一个或多个文件后会立即开始上传，无需再次确认。</span>
-            {action === "upload" ? (
-              <WorkflowNotice tone="info" live>正在上传并预解析 {uploadingFileCount} 个文件……</WorkflowNotice>
-            ) : null}
-            {uploadError ? <WorkflowNotice tone="error" live>{uploadError}</WorkflowNotice> : null}
-            {attachmentResults && uploadCounts ? (
-              <>
-                <WorkflowNotice tone={uploadCounts.failed ? "warning" : "success"} live>
-                  本批处理完成：成功 {uploadCounts.success} 个，重复 {uploadCounts.duplicate} 个，失败 {uploadCounts.failed} 个。
-                  {uploadCounts.failed ? "失败文件可重新选择后再次上传，已成功文件不受影响。" : ""}
-                </WorkflowNotice>
-                <div>
-                  <h3>本批上传处理结果</h3>
-                  <ul className="workflow-upload-results" aria-live="polite">
-                    {attachmentResults.items.map((item, index) => (
-                      <li key={`${item.filename}-${index}`} data-state={item.status}>
-                        <strong>{item.filename}</strong>
-                        <span>{attachmentStatusLabel(item.status)}</span>
-                        {item.failure ? <small>{item.failure.message}</small> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </>
-            ) : null}
           </label>
+
+          {action === "upload" ? (
+            <WorkflowNotice tone="info" live>正在上传并预解析 {uploadingFileCount} 个文件……</WorkflowNotice>
+          ) : null}
+          {uploadError ? <WorkflowNotice tone="error" live>{uploadError}</WorkflowNotice> : null}
+          {attachmentResults && uploadCounts ? (
+            <div className="workflow-stack">
+              <WorkflowNotice tone={uploadCounts.failed ? "warning" : "success"} live>
+                本批处理完成：成功 {uploadCounts.success} 个，重复 {uploadCounts.duplicate} 个，失败 {uploadCounts.failed} 个。
+                {uploadCounts.failed ? "失败文件可重新选择后再次上传，已成功文件不受影响。" : ""}
+              </WorkflowNotice>
+              <div>
+                <h3>本批上传处理结果</h3>
+                <ul className="workflow-upload-results" aria-live="polite">
+                  {attachmentResults.items.map((item, index) => (
+                    <li key={`${item.filename}-${index}`} data-state={item.status}>
+                      <strong>{item.filename}</strong>
+                      <span>{attachmentStatusLabel(item.status)}</span>
+                      {item.failure ? <small>{item.failure.message}</small> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {caseResource.attachments.length ? (

@@ -1,4 +1,5 @@
 import React from "react";
+import type { ReactNode } from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -80,5 +81,15 @@ describe("WorkflowShell", () => {
     expect(styles).toContain(".workflow-button { display: inline-flex; width: fit-content; min-height: 44px;");
     expect(styles).toContain(".workflow-action-dock { position: sticky; bottom: 12px;");
     expect(styles).toContain(".workflow-upload-panel:focus-within");
+  });
+
+  it("reserves red for clinical abnormal status instead of the whole finding card", () => {
+    const refinements = readFileSync(join(process.cwd(), "app/integration/workflow-refinements.css"), "utf8");
+
+    expect(refinements).toContain(".workflow-finding-card__summary strong {\n  color: var(--workflow-ink);");
+    expect(refinements).toContain(".workflow-finding-card__summary p {\n  color: var(--workflow-ink-soft);");
+    expect(refinements).toContain('span[data-flag="high"]');
+    expect(refinements).toContain("background: var(--workflow-danger-surface)");
+    expect(refinements).toContain('content: "收起校对 ˄"');
   });
 });

@@ -1,0 +1,55 @@
+.workflow-upload-failures { display: grid; gap: 10px; }
+.workflow-upload-failures > h3 { margin: 0; color: var(--workflow-ink); font-size: 0.9rem; }
+
+.workflow-attachment-list li {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.workflow-attachment-warning { color: var(--workflow-warning) !important; }
+.workflow-attachment-error { color: var(--workflow-danger) !important; }
+
+/* Review cards use neutral surfaces; color is reserved for the clinical status badge. */
+.workflow-finding-card {
+  border-color: var(--workflow-border);
+  background: var(--workflow-surface);
+}
+.workflow-finding-card__summary strong {
+  color: var(--workflow-ink);
+}
+.workflow-finding-card__summary p {
+  color: var(--workflow-ink-soft);
+}
+.workflow-finding-card__summary > span {
+  background: var(--workflow-warning-surface);
+  color: var(--workflow-warning);
+}
+.workflow-finding-card__summary > span[data-flag="high"],
+.workflow-finding-card__summary > span[data-flag="low"],
+.workflow-finding-card__summary > span[data-flag="positive"] {
+  background: var(--workflow-danger-surface);
+  color: var(--workflow-danger);
+}
+.workflow-finding-card__summary > span[data-flag="normal"] {
+  background: var(--workflow-success-surface);
+  color: var(--workflow-success);
+}
+.workflow-finding-card__summary > span[data-flag="patient_reported"] {
+  background: var(--workflow-info-surface);
+  color: var(--workflow-info);
+}
+.workflow-finding-card__action {
+  border-top-color: var(--workflow-border);
+  background: var(--workflow-surface-muted);
+  color: var(--workflow-ink-soft);
+  font-size: 0;
+}
+.workflow-finding-card__action::after {
+  content: "展开校对 ›";
+  font-size: 0.8rem;
+}
+.workflow-finding-card[open] .workflow-finding-card__action::after {
+  content: "收起校对 ˄";
+}
+.workflow-finding-card > summary:hover .workflow-finding-card__action {
+  color: var(--workflow-ink);
+}

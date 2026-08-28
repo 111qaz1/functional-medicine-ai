@@ -136,6 +136,33 @@ export function resolveRequestedWorkflowStep(
   return target && target.state !== "blocked" ? target.id : fallback;
 }
 
+export interface AnalysisCompletionNavigation {
+  operationId: string;
+  nextStep: "review" | null;
+}
+
+export function resolveAnalysisCompletionNavigation(
+  operation: OperationResponse | null,
+  analysisReady: boolean,
+  visibleStep: WorkflowStepId,
+  handledOperationId: string | null
+): AnalysisCompletionNavigation | null {
+  if (
+    !operation ||
+    operation.stage !== "analysis" ||
+    operation.status !== "succeeded" ||
+    !analysisReady ||
+    operation.operation_id === handledOperationId
+  ) {
+    return null;
+  }
+
+  return {
+    operationId: operation.operation_id,
+    nextStep: visibleStep === "attachments" ? "review" : null
+  };
+}
+
 export interface DraftCompletionNavigation {
   operationId: string;
   nextStep: "draft" | null;

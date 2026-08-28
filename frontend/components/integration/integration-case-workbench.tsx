@@ -30,6 +30,7 @@ import type {
 import {
   currentWorkflowStep,
   deriveWorkflowSteps,
+  resolveAnalysisCompletionNavigation,
   resolveDraftCompletionNavigation,
   resolveRequestedWorkflowStep,
   resolveWorkflowBlockGuidance,
@@ -81,6 +82,16 @@ function attachmentBatchCounts(result: AttachmentBatchResponse) {
   };
 }
 
+function formatAttachmentSize(sizeBytes: number): string {
+  if (sizeBytes >= 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MB`;
+  }
+  if (sizeBytes >= 1024) {
+    return `${Math.round(sizeBytes / 1024).toLocaleString("zh-CN")} KB`;
+  }
+  return `${sizeBytes.toLocaleString("zh-CN")} 字节`;
+}
+
 function operationProgressState(operation: OperationResponse): OperationProgressState {
   const failed = operation.status === "failed";
   return {
@@ -110,6 +121,7 @@ export function IntegrationCaseWorkbench({
   const { doctor, logout } = useIntegrationDoctor();
   const pollerRef = useRef<OperationPoller | null>(null);
   const loadSequence = useRef(0);
+  const handledAnalysisCompletion = useRef<string | null>(null);
   const handledDraftCompletion = useRef<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [caseResource, setCaseResource] = useState<CaseResponse | null>(null);
@@ -152,6 +164,7 @@ export function IntegrationCaseWorkbench({
   const operationBusy = autoPolling && (operation?.status === "queued" || operation?.status === "running");
   const busy = Boolean(action) || operationBusy;
   const uploadCounts = attachmentResults ? attachmentBatchCounts(attachmentResults) : null;
+  const failedAttachmentResults = attachmentResults?.items.filter((item) => item.status === "failed") ?? [];
 
   const loadWorkflow = useCallback(async (discardLocalReview: boolean, preserveClinicalSummary = false) => {
     const sequence = ++loadSequence.current;
@@ -337,9 +350,15 @@ export function IntegrationCaseWorkbench({
   }, [blockedGuidance, workflowResources]);
 
   useEffect(() => {
-    if (operation?.stage === "analysis" && operation.status === "succeeded" && analysisReady && visibleStep === "attachments") {
-      navigateToStep("review", true);
-    }
+    const resolution = resolveAnalysisCompletionNavigation(
+      operation,
+      analysisReady,
+      visibleStep,
+      handledAnalysisCompletion.current
+    );
+    if (!resolution) return;
+    handledAnalysisCompletion.current = resolution.operationId;
+    if (resolution.nextStep) navigateToStep(resolution.nextStep, true);
   }, [analysisReady, navigateToStep, operation, visibleStep]);
 
   useEffect(() => {
@@ -620,37 +639,41 @@ export function IntegrationCaseWorkbench({
           ) : null}
           {uploadError ? <WorkflowNotice tone="error" live>{uploadError}</WorkflowNotice> : null}
           {attachmentResults && uploadCounts ? (
-            <div className="workflow-stack">
-              <WorkflowNotice tone={uploadCounts.failed ? "warning" : "success"} live>
-                本批处理完成：成功 {uploadCounts.success} 个，重复 {uploadCounts.duplicate} 个，失败 {uploadCounts.failed} 个。
-                {uploadCounts.failed ? "失败文件可重新选择后再次上传，已成功文件不受影响。" : ""}
-              </WorkflowNotice>
-              <div>
-                <h3>本批上传处理结果</h3>
-                <ul className="workflow-upload-results" aria-live="polite">
-                  {attachmentResults.items.map((item, index) => (
-                    <li key={`${item.filename}-${index}`} data-state={item.status}>
-                      <strong>{item.filename}</strong>
-                      <span>{attachmentStatusLabel(item.status)}</span>
-                      {item.failure ? <small>{item.failure.message}</small> : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            <WorkflowNotice tone={uploadCounts.failed ? "warning" : "success"} live>
+              本批处理完成：成功 {uploadCounts.success} 个，重复 {uploadCounts.duplicate} 个，失败 {uploadCounts.failed} 个。
+              {uploadCounts.failed ? "失败文件可重新选择后再次上传，已成功文件不受影响。" : "成功文件已进入下方病例资料清单。"}
+            </WorkflowNotice>
+          ) : null}
+          {failedAttachmentResults.length ? (
+            <div className="workflow-upload-failures">
+              <h3>本批未接收资料</h3>
+              <ul className="workflow-upload-results" aria-live="polite">
+                {failedAttachmentResults.map((item, index) => (
+                  <li key={`${item.filename}-${index}`} data-state={item.status}>
+                    <strong>{item.filename}</strong>
+                    <span>{attachmentStatusLabel(item.status)}</span>
+                    {item.failure ? <small>{item.failure.message}</small> : null}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
         </div>
 
         {caseResource.attachments.length ? (
           <div className="workflow-attachment-list">
-            <h3>已接收病例资料</h3>
+            <h3>病例资料（{caseResource.attachments.length}）</h3>
             <ul>
               {caseResource.attachments.map((item) => (
                 <li key={item.id} data-state={item.parse_status}>
-                  <div><strong>{item.filename}</strong><small>{item.media_type}，{item.size_bytes.toLocaleString("zh-CN")} 字节</small></div>
-                  <span className="workflow-status-badge">
-                    {attachmentStatusLabel(item.parse_status)}
-                  </span>
+                  <div>
+                    <strong>{item.filename}</strong>
+                    <small>
+                      {formatAttachmentSize(item.size_bytes)} · {item.page_count > 0 ? `${item.page_count} 页` : "页数未识别"} · {item.is_scanned ? "扫描/图片资料" : "含文本层"}
+                    </small>
+                    {item.warning ? <small className="workflow-attachment-warning">{item.warning}</small> : null}
+                    {item.error ? <small className="workflow-attachment-error">{item.error}</small> : null}
+                  </div>
                 </li>
               ))}
             </ul>

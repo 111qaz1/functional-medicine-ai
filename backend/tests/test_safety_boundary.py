@@ -199,8 +199,8 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         self.assertIn(CUSTOMER_RAG_PREFIX, serialized_sections)
         self.assertIn("RAG总体健康画像", draft.report_sections)
         self.assertIn("RAG异常指标解释", draft.report_sections)
-        self.assertIn("RAG生活方式干预", draft.report_sections)
-        self.assertIn("RAG复查建议", draft.report_sections)
+        self.assertNotIn("RAG生活方式干预", draft.report_sections)
+        self.assertNotIn("RAG复查建议", draft.report_sections)
         # Product selection is now entirely local. The model/composer must not
         # receive RAG hits together with product candidates or SKU names.
         self.assertIsNone(composer.last_input)
@@ -214,13 +214,13 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn(CUSTOMER_RAG_PREFIX, review.publishable_report)
         self.assertIn("胰岛素抵抗", review.publishable_report)
-        self.assertIn("睡眠节律和压力恢复", review.publishable_report)
-        self.assertIn("## 核心结论与健康画像", review.publishable_report)
-        self.assertIn("## 异常指标汇总", review.publishable_report)
-        self.assertIn("## 首月营养素干预方案", review.publishable_report)
-        self.assertIn("## 生活方式干预处方", review.publishable_report)
-        self.assertIn("## 后续检查建议", review.publishable_report)
-        nutrition_block = review.publishable_report.split("## 首月营养素干预方案", 1)[1].split("\n## ", 1)[0]
+        self.assertNotIn("睡眠节律和压力恢复", review.publishable_report)
+        self.assertRegex(review.publishable_report, r"## [一二三四五六七八九十]+、核心结论与健康画像")
+        self.assertRegex(review.publishable_report, r"## [一二三四五六七八九十]+、异常指标汇总")
+        self.assertRegex(review.publishable_report, r"## [一二三四五六七八九十]+、首月营养素干预方案")
+        self.assertRegex(review.publishable_report, r"## [一二三四五六七八九十]+、生活方式干预处方")
+        self.assertNotIn("后续检查建议", review.publishable_report)
+        nutrition_block = review.publishable_report.split("首月营养素干预方案", 1)[1].split("\n## ", 1)[0]
         self.assertNotIn(CUSTOMER_RAG_PREFIX, nutrition_block)
         self.assertNotIn("胰岛素抵抗", nutrition_block)
 
@@ -277,8 +277,11 @@ class RagSafetyBoundaryTests(unittest.TestCase):
 
         self.assertFalse(draft.abstain_reason)
         self.assertTrue(draft.recommended_skus)
-        self.assertEqual(draft.red_flags, [])
-        self.assertIn("孕期或哺乳期需要医生重点审核", " ".join(draft.report_sections["风险提示"]))
+        self.assertIn(
+            "孕期或哺乳期需要医生重点审核营养素种类与剂量。",
+            draft.red_flags,
+        )
+        self.assertNotIn("风险提示", draft.report_sections)
         self.assertNotIn("主动排毒", serialized_sections)
         self.assertNotIn("间歇性禁食", serialized_sections)
         self.assertNotIn("skipped_due_to_red_flags", serialized_sections)
@@ -421,7 +424,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
                 "异常指标汇总": [
                     {
                         "index": 0,
-                        "text": "空腹血糖: 6.2 mmol/L (需关注).\n- 说明: 结合知识库观点，可把空腹值、餐后反应和复查趋势放在一起理解（表7-2）。表7-2血脂异常的分型",
+                        "explanation": "结合空腹值、餐后反应和复查趋势综合观察。",
                     }
                 ],
                 "生活方式干预处方": [
@@ -454,7 +457,7 @@ class RagSafetyBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn("空腹值、餐后反应和复查趋势", review.publishable_report)
-        self.assertIn("睡眠、饭后活动和压力恢复", review.publishable_report)
+        self.assertNotIn("睡眠、饭后活动和压力恢复", review.publishable_report)
         self.assertIn("空腹血糖：6.2 mmol/L（需关注）。说明：", review.publishable_report)
         self.assertNotIn("表7-2", review.publishable_report)
         self.assertNotIn("血脂异常的分型", review.publishable_report)

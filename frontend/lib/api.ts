@@ -2,6 +2,7 @@ import {
   AssistantCaseChatResponse,
   AssistantChatHistoryMessage,
   AuthMeResponse,
+  AuthBootstrapResponse,
   AuthResponse,
   CaseDetailResponse,
   CaseAnalysis,
@@ -20,7 +21,8 @@ import {
   ReviewAndGenerateResponse,
   RuleScope,
   WorkspaceScope,
-  DoctorAccount
+  DoctorAccount,
+  DoctorListResponse
 } from "./types";
 
 function getApiBaseUrl(): string {
@@ -67,6 +69,10 @@ export async function fetchCurrentUser(): Promise<AuthMeResponse> {
   return apiFetch<AuthMeResponse>("/auth/me");
 }
 
+export async function fetchAuthBootstrap(): Promise<AuthBootstrapResponse> {
+  return apiFetch<AuthBootstrapResponse>("/auth/bootstrap");
+}
+
 export async function registerDoctor(username: string, password: string, displayName?: string) {
   return apiFetch<AuthResponse>("/auth/register", {
     method: "POST",
@@ -91,6 +97,34 @@ export async function changeAdminPassword(currentPassword: string, newPassword: 
   return apiFetch<{ updated: boolean; doctor: DoctorAccount }>("/auth/password", {
     method: "POST",
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+}
+
+export async function fetchDoctors(): Promise<DoctorAccount[]> {
+  return (await apiFetch<DoctorListResponse>("/auth/doctors")).doctors;
+}
+
+export async function createDoctor(username: string, password: string, displayName?: string) {
+  return apiFetch<AuthResponse>("/auth/doctors", {
+    method: "POST",
+    body: JSON.stringify({ username, password, display_name: displayName || null })
+  });
+}
+
+export async function updateDoctor(
+  doctorId: string,
+  payload: { display_name?: string; enabled?: boolean }
+) {
+  return apiFetch<AuthResponse>(`/auth/doctors/${doctorId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function resetDoctorPassword(doctorId: string, newPassword: string) {
+  return apiFetch<AuthResponse>(`/auth/doctors/${doctorId}/password`, {
+    method: "PUT",
+    body: JSON.stringify({ new_password: newPassword })
   });
 }
 

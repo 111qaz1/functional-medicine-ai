@@ -13,6 +13,7 @@ import {
   caseStatusLabels,
   workflowCopy
 } from "../../lib/api-v2/copy";
+import { deleteCaseAttachment } from "../../lib/api-v2/delete-attachment";
 import { isWorkflowProblem, workflowErrorMessage } from "../../lib/api-v2/errors";
 import type { FixtureScenario } from "../../lib/api-v2/fixture-gateway";
 import type { AcceptedOperation } from "../../lib/api-v2/gateway";
@@ -444,6 +445,31 @@ export function IntegrationCaseWorkbench({
     }
   }
 
+  async function handleDeleteAttachment(attachmentId: string, filename: string) {
+    const localEditWarning = reviewDirty || approvalDirty
+      ? " 当前未保存的复核或方案编辑也会被丢弃。"
+      : "";
+    const confirmed = window.confirm(
+      `确定删除病例资料“${filename}”吗？删除后依赖该资料的旧分析和未发布方案将失效。${localEditWarning}`
+    );
+    if (!confirmed) return;
+
+    const preserveClinicalSummary = summaryDirty;
+    setAction(`delete-attachment:${attachmentId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      await deleteCaseAttachment(caseId, attachmentId);
+      setAttachmentResults(null);
+      await loadWorkflow(true, preserveClinicalSummary);
+      setNotice("病例资料已删除；依赖该资料的旧分析和未发布方案已按现有规则失效。");
+    } catch (cause) {
+      setError(workflowErrorMessage(cause));
+    } finally {
+      setAction(null);
+    }
+  }
+
   async function handleStartAnalysis() {
     setAction("analysis");
     setError(null);
@@ -674,6 +700,17 @@ export function IntegrationCaseWorkbench({
                     {item.warning ? <small className="workflow-attachment-warning">{item.warning}</small> : null}
                     {item.error ? <small className="workflow-attachment-error">{item.error}</small> : null}
                   </div>
+                  {!fixtureMode ? (
+                    <button
+                      className="workflow-button workflow-button--danger"
+                      type="button"
+                      disabled={busy}
+                      aria-busy={action === `delete-attachment:${item.id}`}
+                      onClick={() => void handleDeleteAttachment(item.id, item.filename)}
+                    >
+                      {action === `delete-attachment:${item.id}` ? "正在删除…" : "删除"}
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>

@@ -2,9 +2,10 @@
 .workflow-upload-failures > h3 { margin: 0; color: var(--workflow-ink); font-size: 0.9rem; }
 
 .workflow-attachment-list li {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
+.workflow-attachment-list .workflow-button { align-self: center; }
 .workflow-attachment-warning { color: var(--workflow-warning) !important; }
 .workflow-attachment-error { color: var(--workflow-danger) !important; }
 

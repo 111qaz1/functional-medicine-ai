@@ -41,9 +41,7 @@ export const workflowStepOrder: WorkflowStepId[] = [
 
 export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[] {
   const { caseResource, analysis, draft, report } = resources;
-  const hasAttachments = Boolean(
-    caseResource && (caseResource.attachments.length > 0 || caseResource.status !== "intake")
-  );
+  const hasAttachments = Boolean(caseResource?.attachments.length);
   const analysisFailed = analysis?.status === "failed" || analysis?.status === "stale";
   const reviewReady = analysis?.status === "ready_for_review" || analysis?.status === "reviewed";
   const draftFailed = analysis?.draft_generation.status === "failed";

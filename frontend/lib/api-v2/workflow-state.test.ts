@@ -35,6 +35,20 @@ describe("workflow state", () => {
     expect(steps.find((step) => step.id === "attachments")?.state).toBe("complete");
   });
 
+  it("keeps attachments current after the last persisted attachment is removed", () => {
+    const emptyAfterDelete = {
+      ...caseResource,
+      status: "parsing_completed",
+      attachments: []
+    } as CaseResponse;
+    const staleAnalysis = { ...analysis, status: "stale" } as AnalysisResponse;
+    const steps = deriveWorkflowSteps({ caseResource: emptyAfterDelete, analysis: staleAnalysis, draft: null, report: null });
+
+    expect(currentWorkflowStep(steps)).toBe("attachments");
+    expect(steps.find((step) => step.id === "attachments")?.state).toBe("current");
+    expect(steps.find((step) => step.id === "review")?.state).toBe("blocked");
+  });
+
   it("keeps analysis start, running and failure states on attachments", () => {
     const waiting = deriveWorkflowSteps({ caseResource, analysis: null, draft: null, report: null });
     expect(currentWorkflowStep(waiting)).toBe("attachments");

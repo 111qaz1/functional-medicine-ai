@@ -28,6 +28,7 @@ export interface WorkflowShellProps {
   steps: WorkflowStep[];
   currentStep: WorkflowStepId;
   onStepChange?: (step: WorkflowStepId) => void;
+  onBlockedStepRequest?: (step: WorkflowStepId) => void;
   headerActions?: ReactNode;
   brandSlot?: ReactNode;
   contextSlot?: ReactNode;
@@ -42,6 +43,7 @@ export function WorkflowShell({
   steps,
   currentStep,
   onStepChange,
+  onBlockedStepRequest,
   headerActions,
   brandSlot,
   contextSlot,
@@ -82,8 +84,8 @@ export function WorkflowShell({
                 <li key={step.id} data-state={step.state}>
                   <button
                     type="button"
-                    disabled={isBlocked}
-                    onClick={() => onStepChange?.(step.id)}
+                    aria-disabled={isBlocked || undefined}
+                    onClick={() => isBlocked ? onBlockedStepRequest?.(step.id) : onStepChange?.(step.id)}
                     aria-label={`${copy.label}：${workflowStepStateLabels[step.state]}`}
                     aria-current={isCurrent ? "step" : undefined}
                   >

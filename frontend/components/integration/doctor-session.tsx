@@ -103,7 +103,7 @@ export function DoctorSessionGate({ children }: { children: ReactNode }) {
             <label className="workflow-field"><span>医生账号</span><input name="username" required autoComplete="username" /></label>
             {bootstrapRequired ? <label className="workflow-field"><span>医生姓名</span><input name="display_name" required autoComplete="name" /></label> : null}
             <label className="workflow-field"><span>密码</span><input name="password" type="password" required minLength={6} autoComplete={bootstrapRequired ? "new-password" : "current-password"} /></label>
-            <button className="workflow-button workflow-button--primary" type="submit" disabled={submitting}>
+            <button className="workflow-button workflow-button--primary" type="submit" disabled={submitting} aria-busy={submitting}>
               {submitting ? "正在验证…" : bootstrapRequired ? "创建管理员并进入" : "登录工作台"}
             </button>
           </form>

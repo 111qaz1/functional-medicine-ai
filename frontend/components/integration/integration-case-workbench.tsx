@@ -32,6 +32,8 @@ import {
   deriveWorkflowSteps,
   resolveDraftCompletionNavigation,
   resolveRequestedWorkflowStep,
+  resolveWorkflowBlockGuidance,
+  type WorkflowBlockGuidance,
   type WorkflowStepId
 } from "../../lib/api-v2/workflow-state";
 import { DraftApproval } from "./draft-approval";
@@ -42,6 +44,18 @@ import { ReviewEditor } from "./review-editor";
 import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell";
 
 type LoadState = "loading" | "ready" | "error";
+
+const acceptedUploadTypes = ".pdf,.docx,.pptx,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.webp";
+
+const guidanceCopy = {
+  no_attachments: { title: "该步骤尚未解锁", message: "请先上传至少一份病例资料。", action: "前往上传资料" },
+  analysis_not_started: { title: "尚未开始综合分析", message: "请在资料页确认授权并启动综合分析。", action: "前往启动分析" },
+  analysis_running: { title: "综合分析正在进行", message: "请等待病例级综合和证据校验完成。", action: "查看分析进度" },
+  analysis_failed_or_stale: { title: "综合分析需要处理", message: "分析失败或病例资料已经变化，请重新开始综合分析。", action: "前往重新分析" },
+  review_required: { title: "尚未完成医生复核", message: "请先核对分析结果并保存复核。", action: "前往医生复核" },
+  draft_generating: { title: "方案草案正在生成", message: "草案生成完成后才可进入方案审核。", action: "查看生成进度" },
+  draft_failed: { title: "方案草案生成失败", message: "请返回医生复核页查看原因并重新生成。", action: "前往重试" }
+} as const;
 
 function sectionState(steps: ReturnType<typeof deriveWorkflowSteps>, id: WorkflowStepId) {
   return steps.find((step) => step.id === id)?.state ?? "blocked";
@@ -113,6 +127,7 @@ export function IntegrationCaseWorkbench({
   const [uploadingFileCount, setUploadingFileCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [visibleStep, setVisibleStep] = useState<WorkflowStepId>("case");
+  const [blockedGuidance, setBlockedGuidance] = useState<WorkflowBlockGuidance | null>(null);
   const [thirdPartyConfirmed, setThirdPartyConfirmed] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +140,14 @@ export function IntegrationCaseWorkbench({
   const analysisRunning = Boolean(analysis && ["queued", "preparing", "analyzing_documents", "synthesizing", "validating"].includes(analysis.status));
   const analysisReady = analysis?.status === "ready_for_review" || analysis?.status === "reviewed";
   const analysisRestartable = analysis?.status === "failed" || analysis?.status === "stale";
+  const draftGenerationRunning = Boolean(analysis && [
+    "queued",
+    "final_synthesizing",
+    "validating_support_needs",
+    "mapping_products",
+    "checking_safety",
+    "generating_draft"
+  ].includes(analysis.draft_generation.status));
   const analysisOperationVisible = operation?.stage === "analysis" && operation.status !== "failed" && !analysisReady;
   const operationBusy = autoPolling && (operation?.status === "queued" || operation?.status === "running");
   const busy = Boolean(action) || operationBusy;
@@ -252,23 +275,43 @@ export function IntegrationCaseWorkbench({
     return () => { active = false; };
   }, [analysis, gateway, operation, trackOperation]);
 
-  const steps = deriveWorkflowSteps({ caseResource, analysis, draft, report });
+  const workflowResources = useMemo(
+    () => ({ caseResource, analysis, draft, report }),
+    [analysis, caseResource, draft, report]
+  );
+  const steps = useMemo(() => deriveWorkflowSteps(workflowResources), [workflowResources]);
   const businessStep = currentWorkflowStep(steps);
+
+  const requestBlockedStep = useCallback((nextStep: WorkflowStepId) => {
+    const guidance = resolveWorkflowBlockGuidance(workflowResources, nextStep);
+    if (guidance) setBlockedGuidance(guidance);
+  }, [workflowResources]);
 
   const navigateToStep = useCallback((nextStep: WorkflowStepId, replace = false) => {
     const target = steps.find((step) => step.id === nextStep);
-    if (!target || target.state === "blocked") return;
+    if (!target) return;
+    if (target.state === "blocked") {
+      requestBlockedStep(nextStep);
+      return;
+    }
+    setBlockedGuidance(null);
+    if (nextStep === visibleStep) return;
     setVisibleStep(nextStep);
     const url = new URL(window.location.href);
     url.searchParams.set("step", nextStep);
     window.history[replace ? "replaceState" : "pushState"]({}, "", url);
-  }, [steps]);
+  }, [requestBlockedStep, steps, visibleStep]);
 
   useEffect(() => {
     if (!caseResource) return;
     const restoreStep = () => {
       const rawRequested = new URL(window.location.href).searchParams.get("step");
       const nextStep = resolveRequestedWorkflowStep(rawRequested, steps, businessStep, analysisReady);
+      const requestedTarget = steps.find((step) => step.id === rawRequested);
+      if (requestedTarget?.state === "blocked") {
+        const guidance = resolveWorkflowBlockGuidance(workflowResources, requestedTarget.id);
+        if (guidance) setBlockedGuidance(guidance);
+      }
       setVisibleStep(nextStep);
       if (rawRequested !== nextStep) {
         const url = new URL(window.location.href);
@@ -279,7 +322,19 @@ export function IntegrationCaseWorkbench({
     restoreStep();
     window.addEventListener("popstate", restoreStep);
     return () => window.removeEventListener("popstate", restoreStep);
-  }, [analysisReady, businessStep, caseResource, steps]);
+  }, [analysisReady, businessStep, caseResource, steps, workflowResources]);
+
+  useEffect(() => {
+    if (!blockedGuidance) return;
+    const currentGuidance = resolveWorkflowBlockGuidance(workflowResources, blockedGuidance.targetStep);
+    if (!currentGuidance) {
+      setBlockedGuidance(null);
+      return;
+    }
+    if (currentGuidance.reason !== blockedGuidance.reason || currentGuidance.anchorId !== blockedGuidance.anchorId) {
+      setBlockedGuidance(currentGuidance);
+    }
+  }, [blockedGuidance, workflowResources]);
 
   useEffect(() => {
     if (operation?.stage === "analysis" && operation.status === "succeeded" && analysisReady && visibleStep === "attachments") {
@@ -308,6 +363,20 @@ export function IntegrationCaseWorkbench({
     }
     return [...sources].map(([id, name]) => ({ id, name }));
   }, [analysis, caseResource]);
+
+  function goToGuidanceTarget() {
+    if (!blockedGuidance) return;
+    const { actionStep, anchorId } = blockedGuidance;
+    navigateToStep(actionStep);
+    setBlockedGuidance(null);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById(anchorId);
+        target?.scrollIntoView({ behavior: "smooth", block: "center" });
+        target?.focus({ preventScroll: true });
+      });
+    });
+  }
 
   function confirmDiscardEdits(): boolean {
     return !(reviewDirty || approvalDirty || summaryDirty) || window.confirm("重新加载会丢弃尚未保存的页面编辑，是否继续？");
@@ -483,6 +552,7 @@ export function IntegrationCaseWorkbench({
       steps={steps}
       currentStep={visibleStep}
       onStepChange={navigateToStep}
+      onBlockedStepRequest={requestBlockedStep}
       contextSlot={
         <div className="workflow-case-context">
           <span>当前病例</span>
@@ -500,6 +570,19 @@ export function IntegrationCaseWorkbench({
       }
     >
       {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，当前场景：{fixtureScenario}。页面不会调用后端或模型。</WorkflowNotice> : null}
+      {blockedGuidance ? (
+        <WorkflowNotice tone="warning" live>
+          <div className="workflow-guidance">
+            <div>
+              <strong>{guidanceCopy[blockedGuidance.reason].title}：{workflowCopy.steps[blockedGuidance.targetStep].label}</strong>
+              <p>{guidanceCopy[blockedGuidance.reason].message}</p>
+            </div>
+            <button className="workflow-button workflow-button--secondary" type="button" onClick={goToGuidanceTarget}>
+              {guidanceCopy[blockedGuidance.reason].action}
+            </button>
+          </div>
+        </WorkflowNotice>
+      ) : null}
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       {notice ? <WorkflowNotice tone="info" live>{notice}</WorkflowNotice> : null}
 
@@ -514,7 +597,7 @@ export function IntegrationCaseWorkbench({
 
       {visibleStep === "attachments" ? <WorkflowSection id="attachments" title="病例资料" description="选择文件后立即上传并预解析；医生病例总结保存后，再确认授权并开始综合分析。" state={sectionState(steps, "attachments")}>
         <div className="workflow-upload-grid">
-          <label className="workflow-upload-panel" aria-disabled={busy}>
+          <label id="workflow-upload-selector" className="workflow-upload-panel" aria-disabled={busy} tabIndex={-1}>
             <div>
               <h3>上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图</h3>
               <p>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、单个 PDF 最多 50 页。</p>
@@ -524,6 +607,7 @@ export function IntegrationCaseWorkbench({
               name="files"
               type="file"
               multiple
+              accept={acceptedUploadTypes}
               disabled={busy}
               aria-label="选择病例资料文件，选择后立即上传并预解析"
               onChange={(event) => void handleUpload(event)}
@@ -596,7 +680,7 @@ export function IntegrationCaseWorkbench({
           </button>
         </div>
 
-        <div className="workflow-analysis-launch">
+        <div id="workflow-analysis-launch" className="workflow-analysis-launch" tabIndex={-1}>
           <div className="workflow-analysis-launch__header">
             <h3>开始综合分析</h3>
             <p>确认资料无误后调用已配置的第三方模型服务；只有下方确认操作会启动病例级综合分析。</p>
@@ -608,9 +692,9 @@ export function IntegrationCaseWorkbench({
             </div>
           ) : analysisRunning || analysisOperationVisible ? (
             operation?.stage === "analysis" ? (
-              <OperationProgress operation={operationProgressState(operation)} />
+              <div id="workflow-analysis-progress" tabIndex={-1}><OperationProgress operation={operationProgressState(operation)} /></div>
             ) : (
-              <div className="workflow-analysis-status" data-state={analysis?.status}>
+              <div id="workflow-analysis-progress" className="workflow-analysis-status" data-state={analysis?.status} tabIndex={-1}>
                 <div><small>分析状态</small><strong>{analysis ? analysisStatusLabels[analysis.status] : "正在读取分析状态"}</strong></div>
                 <span>{analysis?.progress.percent ?? 0}%</span>
               </div>
@@ -626,7 +710,7 @@ export function IntegrationCaseWorkbench({
                 <input type="checkbox" checked={thirdPartyConfirmed} disabled={busy} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} />
                 <span>已确认本病例资料可发送至已配置的第三方模型服务处理</span>
               </label>
-              <button className="workflow-button workflow-button--primary" type="button" disabled={busy || !thirdPartyConfirmed || caseResource.attachments.length === 0 || Boolean(analysis && !analysisRestartable)} onClick={() => void handleStartAnalysis()}>
+              <button className={`workflow-button ${analysisRestartable ? "workflow-button--warning" : "workflow-button--primary"}`} type="button" disabled={busy || !thirdPartyConfirmed || caseResource.attachments.length === 0 || Boolean(analysis && !analysisRestartable)} aria-busy={action === "analysis"} onClick={() => void handleStartAnalysis()}>
                 {action === "analysis" ? "正在启动…" : analysisRestartable ? "重新开始综合分析" : "确认资料并开始综合分析"}
               </button>
               {operation?.stage === "analysis" && operation.status === "failed" ? <OperationProgress operation={operationProgressState(operation)} /> : null}
@@ -637,7 +721,7 @@ export function IntegrationCaseWorkbench({
 
       {visibleStep === "review" ? <WorkflowSection id="review" title="医生复核" description="核对异常指标、当前补充剂和食敏结果，确认后生成方案草案。" state={sectionState(steps, "review")}>
         {analysis && reviewDraft && (analysis.status === "ready_for_review" || analysis.status === "reviewed") ? (
-          <div className="workflow-review-content">
+          <div id="workflow-review-editor" className="workflow-review-content" tabIndex={-1}>
             <div className="workflow-analysis-overview">
               <div className="workflow-analysis-status" data-state={analysis.status}>
                 <div><small>分析状态</small><strong>{analysisStatusLabels[analysis.status]}</strong></div>
@@ -671,15 +755,24 @@ export function IntegrationCaseWorkbench({
             />
           </div>
         ) : <p className="workflow-empty">分析完成后可进行医生复核。</p>}
-        {operation?.stage === "draft_generation" ? (
-          <OperationProgress operation={operationProgressState(operation)} />
+        {operation?.stage === "draft_generation" || draftGenerationRunning ? (
+          <div id="workflow-draft-progress" tabIndex={-1}>
+            {operation?.stage === "draft_generation" ? (
+              <OperationProgress operation={operationProgressState(operation)} />
+            ) : (
+              <div className="workflow-analysis-status" data-state={analysis?.draft_generation.status}>
+                <div><small>草案生成状态</small><strong>正在生成方案草案</strong></div>
+                <span>{analysis?.draft_generation.progress ?? 0}%</span>
+              </div>
+            )}
+          </div>
         ) : null}
         {analysis?.draft_generation.status === "failed" ? (
-          <div className="workflow-retry-panel">
+          <div id="workflow-draft-retry" className="workflow-retry-panel" tabIndex={-1}>
             {operation?.stage === "draft_generation" && operation.status === "failed" ? null : (
               <WorkflowNotice tone="error">{analysis.draft_generation.error ?? "草案生成失败，可直接重试。"}</WorkflowNotice>
             )}
-            <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => void handleRetryDraft()}>
+            <button className="workflow-button workflow-button--warning" type="button" disabled={busy} aria-busy={action === "retry-draft"} onClick={() => void handleRetryDraft()}>
               {action === "retry-draft" ? "正在重试…" : "重试草案生成"}
             </button>
           </div>

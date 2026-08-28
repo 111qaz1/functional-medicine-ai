@@ -460,7 +460,7 @@ export function ReviewEditor({
       </div>
       ) : null}
 
-      <div className="workflow-action-row">
+      <div className="workflow-action-row workflow-action-dock">
         {draftReady ? (
           <>
             <WorkflowNotice tone="success">医生校对已保存，营养素草案已经生成。</WorkflowNotice>
@@ -471,6 +471,7 @@ export function ReviewEditor({
             className="workflow-button workflow-button--primary"
             type="button"
             disabled={busy || conflict}
+            aria-busy={busy}
             onClick={onSubmit}
           >
             {busy ? "正在保存校对并生成营养素草案…" : "保存校对并生成营养素草案"}

@@ -57,7 +57,7 @@ export function DraftApproval({ draft, value, onChange, busy, onContinue }: Draf
         })}
         {!draft.recommended_skus.length ? <WorkflowNotice tone="error">方案没有可发布推荐，不能进入最终报告。</WorkflowNotice> : null}
       </div>
-      <div className="workflow-action-row workflow-action-row--sticky"><button className="workflow-button workflow-button--primary" type="button" disabled={busy || included.length === 0 || !draft.recommended_skus.length} onClick={onContinue}><ArrowRightIcon className="workflow-button__icon" />{approved ? "查看最终报告" : "继续编辑最终报告"}</button><span>当前保留 {included.length} 项推荐</span></div>
+      <div className="workflow-action-row workflow-action-dock"><button className="workflow-button workflow-button--primary" type="button" disabled={busy || included.length === 0 || !draft.recommended_skus.length} onClick={onContinue}><ArrowRightIcon className="workflow-button__icon" />{approved ? "查看最终报告" : "继续编辑最终报告"}</button><span>当前保留 {included.length} 项推荐</span></div>
     </div>
   );
 }

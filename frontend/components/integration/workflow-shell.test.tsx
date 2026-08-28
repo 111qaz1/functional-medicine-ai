@@ -37,7 +37,8 @@ describe("WorkflowShell", () => {
     expect(html).toContain("测试病例上下文");
     expect(html).toContain("第 <strong>2</strong> / 5 步");
     expect(html).toContain('aria-current="step"');
-    expect(html).toContain('type="button" disabled=""');
+    expect(html).toContain('type="button" aria-disabled="true"');
+    expect(html).not.toContain('disabled=""');
     expect(html).not.toContain('workflow-step-analysis');
     expect(html).toContain('data-step="attachments"');
     expect(html).toContain('role="alert"');
@@ -71,5 +72,13 @@ describe("WorkflowShell", () => {
 
     expect(blockedRule).not.toContain("opacity");
     expect(blockedRule).toContain("background: var(--workflow-surface-muted)");
+  });
+
+  it("keeps workflow actions touch-sized and reserves a desktop action dock", () => {
+    const styles = readFileSync(join(process.cwd(), "app/integration/workflow.css"), "utf8");
+
+    expect(styles).toContain(".workflow-button { display: inline-flex; width: fit-content; min-height: 44px;");
+    expect(styles).toContain(".workflow-action-dock { position: sticky; bottom: 12px;");
+    expect(styles).toContain(".workflow-upload-panel:focus-within");
   });
 });

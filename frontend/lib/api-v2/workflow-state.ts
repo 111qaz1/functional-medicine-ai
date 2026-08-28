@@ -15,6 +15,22 @@ export interface WorkflowStep {
   state: WorkflowStepState;
 }
 
+export type WorkflowBlockReason =
+  | "no_attachments"
+  | "analysis_not_started"
+  | "analysis_running"
+  | "analysis_failed_or_stale"
+  | "review_required"
+  | "draft_generating"
+  | "draft_failed";
+
+export interface WorkflowBlockGuidance {
+  reason: WorkflowBlockReason;
+  targetStep: WorkflowStepId;
+  actionStep: WorkflowStepId;
+  anchorId: string;
+}
+
 export const workflowStepOrder: WorkflowStepId[] = [
   "case",
   "attachments",
@@ -43,12 +59,64 @@ export function deriveWorkflowSteps(resources: WorkflowResources): WorkflowStep[
           : reviewReady
             ? "complete"
             : "current",
-    review: !analysis ? "blocked" : analysisFailed ? "blocked" : reviewReady ? (draft ? "complete" : "current") : "blocked",
-    draft: !reviewReady ? "blocked" : draftFailed ? "error" : draft ? (draft.status === "approved" ? "complete" : "current") : "blocked",
+    review: !analysis
+      ? "blocked"
+      : analysisFailed
+        ? "blocked"
+        : reviewReady
+          ? draft
+            ? "complete"
+            : draftFailed
+              ? "error"
+              : "current"
+          : "blocked",
+    draft: !reviewReady || !draft ? "blocked" : draft.status === "approved" ? "complete" : "current",
     report: !draft ? "blocked" : draft.status !== "approved" ? "available" : report ? "complete" : "current"
   };
 
   return workflowStepOrder.map((id) => ({ id, state: states[id] }));
+}
+
+export function resolveWorkflowBlockGuidance(
+  resources: WorkflowResources,
+  targetStep: WorkflowStepId
+): WorkflowBlockGuidance | null {
+  const { caseResource, analysis, draft } = resources;
+  const target = deriveWorkflowSteps(resources).find((step) => step.id === targetStep);
+  if (!target || target.state !== "blocked" || targetStep === "case") return null;
+
+  if (!caseResource?.attachments.length) {
+    return { reason: "no_attachments", targetStep, actionStep: "attachments", anchorId: "workflow-upload-selector" };
+  }
+  if (!analysis) {
+    return { reason: "analysis_not_started", targetStep, actionStep: "attachments", anchorId: "workflow-analysis-launch" };
+  }
+  if (analysis.status === "failed" || analysis.status === "stale") {
+    return { reason: "analysis_failed_or_stale", targetStep, actionStep: "attachments", anchorId: "workflow-analysis-launch" };
+  }
+  if (["queued", "preparing", "analyzing_documents", "synthesizing", "validating"].includes(analysis.status)) {
+    return { reason: "analysis_running", targetStep, actionStep: "attachments", anchorId: "workflow-analysis-progress" };
+  }
+
+  if (!draft) {
+    if (analysis.draft_generation.status === "failed") {
+      return { reason: "draft_failed", targetStep, actionStep: "review", anchorId: "workflow-draft-retry" };
+    }
+    if ([
+      "queued",
+      "final_synthesizing",
+      "validating_support_needs",
+      "mapping_products",
+      "checking_safety",
+      "generating_draft",
+      "ready"
+    ].includes(analysis.draft_generation.status)) {
+      return { reason: "draft_generating", targetStep, actionStep: "review", anchorId: "workflow-draft-progress" };
+    }
+    return { reason: "review_required", targetStep, actionStep: "review", anchorId: "workflow-review-editor" };
+  }
+
+  return null;
 }
 
 export function currentWorkflowStep(steps: WorkflowStep[]): WorkflowStepId {

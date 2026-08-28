@@ -5,7 +5,8 @@ import {
   currentWorkflowStep,
   deriveWorkflowSteps,
   resolveDraftCompletionNavigation,
-  resolveRequestedWorkflowStep
+  resolveRequestedWorkflowStep,
+  resolveWorkflowBlockGuidance
 } from "./workflow-state";
 
 const caseResource = {
@@ -53,6 +54,52 @@ describe("workflow state", () => {
       report: null
     });
     expect(failed.find((step) => step.id === "attachments")?.state).toBe("error");
+  });
+
+  it("explains the earliest unmet prerequisite for a locked step", () => {
+    const emptyCase = { ...caseResource, attachments: [] } as CaseResponse;
+    expect(resolveWorkflowBlockGuidance(
+      { caseResource: emptyCase, analysis: null, draft: null, report: null },
+      "review"
+    )).toMatchObject({ reason: "no_attachments", actionStep: "attachments" });
+
+    expect(resolveWorkflowBlockGuidance(
+      { caseResource, analysis: null, draft: null, report: null },
+      "draft"
+    )).toMatchObject({ reason: "analysis_not_started", actionStep: "attachments" });
+
+    expect(resolveWorkflowBlockGuidance(
+      {
+        caseResource,
+        analysis: { ...analysis, status: "analyzing_documents" } as AnalysisResponse,
+        draft: null,
+        report: null
+      },
+      "report"
+    )).toMatchObject({ reason: "analysis_running", actionStep: "attachments" });
+  });
+
+  it("keeps draft progress and failure on review with a usable recovery target", () => {
+    const generatingAnalysis = {
+      ...analysis,
+      draft_generation: { status: "mapping_products", progress: 60, error: null }
+    } as AnalysisResponse;
+    expect(resolveWorkflowBlockGuidance(
+      { caseResource, analysis: generatingAnalysis, draft: null, report: null },
+      "draft"
+    )).toMatchObject({ reason: "draft_generating", actionStep: "review", anchorId: "workflow-draft-progress" });
+
+    const failedAnalysis = {
+      ...analysis,
+      draft_generation: { status: "failed", progress: 60, error: "生成失败" }
+    } as AnalysisResponse;
+    const steps = deriveWorkflowSteps({ caseResource, analysis: failedAnalysis, draft: null, report: null });
+    expect(steps.find((step) => step.id === "review")?.state).toBe("error");
+    expect(steps.find((step) => step.id === "draft")?.state).toBe("blocked");
+    expect(resolveWorkflowBlockGuidance(
+      { caseResource, analysis: failedAnalysis, draft: null, report: null },
+      "draft"
+    )).toMatchObject({ reason: "draft_failed", actionStep: "review", anchorId: "workflow-draft-retry" });
   });
 
   it("maps the removed analysis URL to the matching five-step page", () => {

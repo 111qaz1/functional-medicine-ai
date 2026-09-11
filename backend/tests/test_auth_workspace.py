@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,7 +182,7 @@ class AuthWorkspaceApiTests(unittest.TestCase):
         case_id = case_payload["id"]
         legacy_payload = dict(case_payload)
         legacy_payload["analysis_mode"] = "local_grounded"
-        with sqlite3.connect(self.container.repository.database_path) as connection:
+        with closing(sqlite3.connect(self.container.repository.database_path)) as connection, connection:
             connection.execute(
                 "UPDATE cases SET payload = ? WHERE id = ?",
                 (json.dumps(legacy_payload, ensure_ascii=False), case_id),

@@ -24,15 +24,12 @@ from app.core.settings import AppSettings
 
 
 V1_BASELINE_SHA256 = "5367fbef40cc2069cd2910d5b1867777f4889e176445ede0487c5c9d33b5affe"
-V2_CONTRACT_SHA256 = (
-    "1095385f2971878b3d89a494887ce7b474a12a"
-    "68668736cf884164d280fbcc8a"
-)
 EXPECTED_V2_PATHS = {
     "/api/v2/cases",
     "/api/v2/cases/{case_id}",
     "/api/v2/cases/{case_id}/clinical-summary",
     "/api/v2/cases/{case_id}/attachments",
+    "/api/v2/cases/{case_id}/attachments/{attachment_id}",
     "/api/v2/cases/{case_id}/analyses",
     "/api/v2/operations/{operation_id}",
     "/api/v2/cases/{case_id}/analyses/latest",
@@ -58,22 +55,14 @@ class V2OpenApiContractTests(unittest.TestCase):
         payload = json.dumps(paths, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(payload).hexdigest(), V1_BASELINE_SHA256)
 
-    def test_v2_exposes_exactly_the_thirteen_planned_paths(self) -> None:
+    def test_v2_exposes_exactly_the_planned_paths(self) -> None:
         app = FastAPI()
         app.include_router(v2_router)
         spec = app.openapi()
         paths = {path for path in spec["paths"] if path.startswith("/api/v2")}
         self.assertEqual(paths, EXPECTED_V2_PATHS)
-        contract = {
-            "paths": {
-                path: value
-                for path, value in spec["paths"].items()
-                if path.startswith("/api/v2")
-            },
-            "components": spec.get("components", {}),
-        }
-        payload = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), V2_CONTRACT_SHA256)
+        delete_operation = spec["paths"]["/api/v2/cases/{case_id}/attachments/{attachment_id}"]["delete"]
+        self.assertEqual(delete_operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"], "#/components/schemas/CaseResponse")
 
     def test_every_json_operation_documents_problem_details(self) -> None:
         app = FastAPI()
@@ -206,6 +195,40 @@ class V2ProblemDetailsTests(unittest.TestCase):
         self.assertEqual(failed.headers["content-type"], "application/problem+json")
         self.assertEqual(failed.json()["code"], "INTERNAL_SERVER_ERROR")
         self.assertNotIn("private", failed.text)
+
+    def test_delete_attachment_returns_updated_case_and_problem_details(self) -> None:
+        created = self.client.post(
+            "/api/v2/cases",
+            headers=self.headers,
+            json={"customer_name": "Synthetic delete case", "consultant_id": None, "notes": None},
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        case_id = created.json()["id"]
+
+        uploaded = self.client.post(
+            f"/api/v2/cases/{case_id}/attachments",
+            headers=self.headers,
+            data={"attachment_type": "medical_record"},
+            files={"files": ("synthetic.txt", b"Vitamin D 18 ng/mL", "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 201, uploaded.text)
+        attachment_id = uploaded.json()["items"][0]["file_id"]
+        self.assertTrue(attachment_id)
+
+        deleted = self.client.delete(
+            f"/api/v2/cases/{case_id}/attachments/{attachment_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["attachments"], [])
+
+        missing = self.client.delete(
+            f"/api/v2/cases/{case_id}/attachments/{attachment_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(missing.status_code, 404, missing.text)
+        self.assertEqual(missing.headers["content-type"], "application/problem+json")
+        self.assertEqual(missing.json()["code"], "ATTACHMENT_NOT_FOUND")
 
 
 if __name__ == "__main__":

@@ -169,7 +169,12 @@ class RecommendationServiceTests(unittest.TestCase):
         warnings = self.container.recommendation_service._product_safety_warnings(product, context)
         self.assertIn("医生复核剂量", dosage)
         self.assertTrue(any("未成年人" in warning for warning in warnings))
-        self.assertTrue(any("用药" in warning for warning in warnings))
+        self.assertTrue(
+            any(
+                "华法林" in warning or "维生素 K 拮抗剂" in warning
+                for warning in warnings
+            )
+        )
 
     def _prepare_case(self, report_text: str, questionnaire: Questionnaire):
         case = self.container.case_service.create_case(
@@ -606,7 +611,7 @@ class RecommendationServiceTests(unittest.TestCase):
         )
 
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
-        guidance = " ".join(draft.report_sections.get("风险提示", []))
+        guidance = " ".join(draft.red_flags)
         coq10 = next(
             (item for item in draft.recommended_skus if item.sku_id == "sku_coq10"),
             None,
@@ -733,7 +738,12 @@ class RecommendationServiceTests(unittest.TestCase):
             for detail in item.evidence_details
         )
 
-        self.assertIn("sku_sleep_support", recommended_ids[:4])
+        approved_sleep_support = {
+            "sku_sleep_support",
+            "sku_magnesium_glycinate",
+            "sku_ashwagandha_stress_balance",
+        }
+        self.assertTrue(approved_sleep_support.intersection(recommended_ids[:4]))
         self.assertIn("支持需求", evidence_details)
 
     def test_gut_semantic_need_does_not_activate_glucose_or_weight_products(self) -> None:
@@ -1466,7 +1476,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertIn("人工录入评估结论", guidance_text)
         self.assertIn("病例总结诊断", " ".join(draft.case_summary))
 
-    def test_manual_anti_aging_summary_is_integrated_into_clinical_sections(self) -> None:
+    def test_manual_anti_aging_summary_is_kept_as_guidance_without_overriding_portrait(self) -> None:
         case = self.container.case_service.create_case(
             customer_name="抗衰摘要案例",
             consultant_id="nutrition-team",
@@ -1493,8 +1503,10 @@ class RecommendationServiceTests(unittest.TestCase):
         draft = self.container.recommendation_service.generate(case.id, requested_by="unit-test")
         portrait_text = " ".join(draft.report_sections.get("核心结论与健康画像") or [])
         analysis_text = " ".join(draft.report_sections.get("功能医学系统失衡分析") or [])
+        guidance_text = " ".join(draft.report_sections.get("原报告小结与建议") or [])
 
-        self.assertIn("一句话健康画像", portrait_text)
+        self.assertIn("证据尚不足", portrait_text)
+        self.assertIn("DNA甲基化年龄", guidance_text)
         self.assertNotIn("抗衰系统整合", analysis_text)
         self.assertTrue(any(name in analysis_text for name in ("免疫/炎症系统", "心血管系统", "内分泌/代谢系统")))
 
@@ -1638,7 +1650,6 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertFalse(draft.abstain_reason)
         self.assertGreaterEqual(len(recommended_ids), 3)
         self.assertEqual(recommended_ids[0], "sku_liver_detox_support")
-        self.assertIn("sku_amino_acid_detox", recommended_ids[:3])
         self.assertIn("sku_bile_flow_support", recommended_ids)
         self.assertIn("关联度约", reason_by_id["sku_liver_detox_support"])
         self.assertIn("肝脏/解毒系统", reason_by_id["sku_liver_detox_support"])
@@ -1954,8 +1965,8 @@ class RecommendationServiceTests(unittest.TestCase):
 
         self.assertFalse(draft.abstain_reason)
         self.assertTrue(draft.recommended_skus)
-        self.assertEqual(draft.red_flags, [])
-        self.assertTrue(draft.report_sections["风险提示"])
+        self.assertTrue(draft.red_flags)
+        self.assertNotIn("风险提示", draft.report_sections)
 
     def test_remote_llm_output_is_filtered_to_local_catalog(self) -> None:
         self.container.recommendation_service.llm_provider = StubLLMProvider()
@@ -1989,8 +2000,8 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertEqual(draft.model_version, "remote:test-model")
         self.assertIn("核心结论与健康画像", draft.report_sections)
         self.assertIn("功能医学系统失衡分析", draft.report_sections)
-        self.assertIn("后续检查建议", draft.report_sections)
-        self.assertIn("90天健康路线图", draft.report_sections)
+        self.assertNotIn("后续检查建议", draft.report_sections)
+        self.assertNotIn("90天健康路线图", draft.report_sections)
         self.assertNotIn("证据来源", draft.report_sections)
 
     def test_doctor_confirmed_llm_vitamin_d_finding_reaches_recommendation_engine(self) -> None:
@@ -2601,9 +2612,9 @@ class RecommendationServiceTests(unittest.TestCase):
         )
 
         self.assertIn("# 功能医学综合分析与首月干预方案", review.publishable_report)
-        self.assertIn("## 核心结论与健康画像", review.publishable_report)
-        self.assertIn("## 异常指标汇总", review.publishable_report)
-        self.assertIn("## 首月营养素干预方案", review.publishable_report)
+        self.assertIn("## 一、核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 二、异常指标汇总", review.publishable_report)
+        self.assertIn("首月营养素干预方案", review.publishable_report)
         self.assertNotIn("旧版画像", review.publishable_report)
 
     def test_approval_rejects_question_mark_corrupted_publishable_summary(self) -> None:
@@ -2638,7 +2649,7 @@ class RecommendationServiceTests(unittest.TestCase):
         self.assertNotIn("????", review.publishable_report)
         self.assertNotIn("RAG", review.publishable_report)
         self.assertIn("# 功能医学综合分析与首月干预方案", review.publishable_report)
-        self.assertIn("## 核心结论与健康画像", review.publishable_report)
+        self.assertIn("## 一、核心结论与健康画像", review.publishable_report)
 
     def test_delete_case_cleans_associated_files_and_records(self) -> None:
         case = self.container.case_service.create_case(

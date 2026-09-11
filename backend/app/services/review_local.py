@@ -323,7 +323,11 @@ class ReviewService:
 
     def _select_publishable_report(self, draft, case, publishable_summary: str | None) -> str:
         if publishable_summary and publishable_summary.strip():
-            if not self._looks_like_internal_generated_report(publishable_summary) and not self._looks_like_corrupted_publishable_report(publishable_summary):
+            if (
+                not self._looks_like_internal_generated_report(publishable_summary)
+                and not self._looks_like_corrupted_publishable_report(publishable_summary)
+                and not self._looks_like_legacy_auto_customer_report(publishable_summary)
+            ):
                 report = self._remove_customer_hidden_rag_labels(publishable_summary.strip())
                 return self._ensure_report_nutrition_safety(report, draft)
         return self._render_report(draft, case)
@@ -389,9 +393,19 @@ class ReviewService:
         if existing_start is not None:
             existing_end = self._heading_block_end_index(lines, existing_start)
             lines = lines[:existing_start] + lines[existing_end:]
-        while lines and not lines[-1].strip():
-            lines.pop()
-        lines.extend(["", "## 方案总结", *summary_items])
+        closing_start = self._first_section_start_index(
+            lines,
+            ("复查与随访计划", "安全警示"),
+        )
+        if closing_start is None:
+            while lines and not lines[-1].strip():
+                lines.pop()
+            lines.extend(["", "## 方案总结", *summary_items])
+        else:
+            block = ["## 方案总结", *summary_items, ""]
+            if closing_start > 0 and lines[closing_start - 1].strip():
+                block.insert(0, "")
+            lines[closing_start:closing_start] = block
         return "\n".join(lines).strip()
 
     def _ensure_core_health_portrait_section(self, report_text: str, draft, case) -> str:
@@ -501,6 +515,7 @@ class ReviewService:
         return (
             self._looks_like_internal_generated_report(report_text)
             or self._looks_like_unstructured_customer_report(report_text)
+            or self._looks_like_legacy_auto_customer_report(report_text)
         )
 
     def _customer_display_name(self, case) -> str:
@@ -550,6 +565,27 @@ class ReviewService:
                 and not re.search(r"^###\s*(?:\d+[\.\uFF0E、]|[A-Z]\.)", text, re.MULTILINE)
             )
         )
+
+    def _looks_like_legacy_auto_customer_report(self, report_text: str | None) -> bool:
+        if not report_text:
+            return False
+        text = self._canonicalized_report_headings(str(report_text))
+        if not re.search(
+            r"^#\s+功能医学营养与生活方式建议\s*$",
+            text,
+            re.MULTILINE,
+        ):
+            return False
+        legacy_sections = (
+            "总体健康画像",
+            "关键指标",
+            "个性化营养素方案",
+            "生活方式干预重点",
+            "复查与跟进建议",
+        )
+        # The legacy title can still appear in a clinician-authored report. Only
+        # the recognizable multi-section auto-generated template is stale.
+        return sum(f"## {title}" in text for title in legacy_sections) >= 3
 
     def _remove_customer_hidden_rag_labels(self, report_text: str) -> str:
         cleaned = report_text

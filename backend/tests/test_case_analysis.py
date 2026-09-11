@@ -1251,7 +1251,7 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(
             list(draft.report_sections),
-            ["核心结论与健康画像", "异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "方案总结"],
+            ["核心结论与健康画像", "异常指标汇总", "慢性食物敏感检测结果", "功能医学系统失衡分析", "生活方式干预", "首月营养素干预方案", "方案总结", "安全警示"],
         )
         review_service = ReviewService(
             self.repository,
@@ -1268,6 +1268,7 @@ class CaseAnalysisTests(unittest.TestCase):
             "## 五、生活方式干预",
             "## 六、首月营养素干预方案",
             "## 七、方案总结",
+            "## 八、安全警示",
         ]
         positions = [rendered.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))

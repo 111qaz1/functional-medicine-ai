@@ -174,6 +174,31 @@ async def upload_attachments(
     )
 
 
+@router.delete(
+    "/cases/{case_id}/attachments/{attachment_id}",
+    response_model=CaseResponse,
+    responses=documented_problem_responses(401, 403, 404, 422, 500),
+)
+def delete_attachment(
+    case_id: str,
+    attachment_id: str,
+    request: Request,
+    doctor: Any = Depends(_require_external_doctor),
+) -> CaseResponse:
+    adapter = _adapter(request)
+    adapter.require_owned_case(case_id, doctor)
+    try:
+        request.app.state.container.case_service.delete_uploaded_file(case_id, attachment_id)
+    except KeyError as exc:
+        raise V2ApiError(
+            status=404,
+            code="ATTACHMENT_NOT_FOUND",
+            title="Attachment not found",
+            detail="The requested attachment does not exist in this case.",
+        ) from exc
+    return adapter.get_case(case_id, doctor)
+
+
 @router.post(
     "/cases/{case_id}/analyses",
     response_model=OperationResponse,

@@ -4231,6 +4231,7 @@ class CaseAnalysisService:
             synthesis_results = [
                 result.model_copy(update={"food_sensitivity": None})
                 for result in results
+                if not is_chronic_food_sensitivity_result(result)
             ]
             with self._provider_usage_context(
                 case_id=case.id,
@@ -4708,6 +4709,7 @@ class CaseAnalysisService:
                 }
             )
             for result in analysis.document_results
+            if not is_chronic_food_sensitivity_result(result)
         ]
 
     @staticmethod
@@ -5467,9 +5469,10 @@ class CaseAnalysisService:
                     "food_sensitivity": None,
                 }
             )
-        is_food_sensitivity = has_chronic_food_sensitivity_content(
-            result.food_sensitivity
-        ) or is_chronic_food_sensitivity_report(
+        # The model payload alone is not sufficient to reclassify a document as a
+        # food-sensitivity report. When source text is available, require the file
+        # name, report title, or a patient-result summary to confirm that identity.
+        is_food_sensitivity = is_chronic_food_sensitivity_report(
             filename=result.file_name,
             report_type=result.report_type,
             page_texts=uploaded_file.page_texts,
@@ -5498,13 +5501,11 @@ class CaseAnalysisService:
         source_entries, source_warnings = cls._source_food_sensitivity_entries(uploaded_file)
         source_items = cls._source_food_sensitivity_items(uploaded_file)
         grading_rules = cls._food_grading_rules(uploaded_file)
-        moved_finding_ids: set[str] = set()
         finding_items: list[FoodSensitivityItem] = []
         for finding in result.abnormal_findings:
             item = cls._food_item_from_finding(uploaded_file, finding)
             if item is None:
                 continue
-            moved_finding_ids.add(finding.id)
             finding_items.append(item)
 
         legacy_entries = source_entries or [
@@ -5617,11 +5618,10 @@ class CaseAnalysisService:
                 "report_type": "food_sensitivity",
                 "medical_content": True,
                 "food_sensitivity": normalized_food,
-                "abnormal_findings": [
-                    finding
-                    for finding in result.abnormal_findings
-                    if finding.id not in moved_finding_ids
-                ],
+                # A confirmed specialty food-sensitivity report contributes only
+                # to its dedicated section. Generic findings returned by the model
+                # for that document are not allowed to leak into the lab review.
+                "abnormal_findings": [],
             }
         )
 

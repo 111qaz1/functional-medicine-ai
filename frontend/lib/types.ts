@@ -609,3 +609,11 @@ export interface AuthResponse {
 export interface AuthMeResponse {
   doctor?: DoctorAccount | null;
 }
+
+export interface AuthBootstrapResponse {
+  required: boolean;
+}
+
+export interface DoctorListResponse {
+  doctors: DoctorAccount[];
+}

@@ -1306,6 +1306,18 @@ textarea {
   box-shadow: var(--shadow);
 }
 
+.maintenance-panel {
+  padding: 24px;
+  border: 1px solid #d9e0e8;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.maintenance-panel h2 {
+  margin: 0;
+}
+
 .assistant-widget {
   position: fixed;
   right: 24px;

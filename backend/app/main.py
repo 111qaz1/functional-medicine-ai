@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.external_routes import router as external_router
 from app.api.routes import router
 from app.api.v2.router import router as v2_router
+from app.api.v2.joolun_integration import router as joolun_integration_router
 from app.core.bootstrap import build_container
 
 
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(external_router)
     app.include_router(v2_router)
+    app.include_router(joolun_integration_router)
     return app
 
 

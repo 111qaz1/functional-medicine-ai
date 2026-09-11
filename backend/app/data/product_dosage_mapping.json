@@ -1,8 +1,8 @@
 {
   "schema_version": 3,
-  "source_file": "营养素剂量说明（修改版）.xlsx",
+  "source_file": "营养素剂量说明.xlsx",
   "source_sheet": "单粒泡罩（中文）",
-  "source_version": "client-dose-workbook-2026-07-v1",
+  "source_version": "client-dose-workbook-2026-09-joolun-daily-v2",
   "matching_note": "按产品序号区域读取服用方式列；物理合并单元格使用锚点值，缺失或冲突时导入失败。",
   "merged_ranges_checked": 172,
   "products": [
@@ -97,7 +97,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 3,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -181,7 +181,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 3,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -255,7 +255,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 3,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -333,7 +333,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 8,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -421,7 +421,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 8,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -510,7 +510,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 8,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -606,7 +606,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 9,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -691,7 +691,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 9,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -767,7 +767,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 9,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -863,7 +863,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 30,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -947,7 +947,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 30,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -1049,7 +1049,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 43,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1125,7 +1125,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 43,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1207,7 +1207,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 43,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1289,7 +1289,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 43,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -1391,7 +1391,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 45,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1473,7 +1473,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 45,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1555,7 +1555,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 45,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -1650,7 +1650,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 57,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1726,7 +1726,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 57,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1797,7 +1797,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 57,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -1859,7 +1859,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 57,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -1955,7 +1955,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 62,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2037,7 +2037,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 62,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2114,7 +2114,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 62,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2192,7 +2192,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 62,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -2274,7 +2274,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 69,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2338,7 +2338,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 69,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2404,7 +2404,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 69,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2464,7 +2464,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 69,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -2560,7 +2560,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 78,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2642,7 +2642,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 78,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2718,7 +2718,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 78,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -2808,7 +2808,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 89,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2897,7 +2897,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 89,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -2973,7 +2973,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 89,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -3080,8 +3080,8 @@
             "single_dose_max": 1.0,
             "daily_frequency_min": 1.0,
             "daily_frequency_max": 1.0,
-            "weekly_frequency_min": 3.0,
-            "weekly_frequency_max": 4.0,
+            "weekly_frequency_min": null,
+            "weekly_frequency_max": null,
             "timing": [
               "随餐"
             ],
@@ -3089,14 +3089,14 @@
             "interval_hours_max": null,
             "daily_max": 1.0,
             "duration": "连续服用 3 个月",
-            "maintenance": "检测 25 (OH) D 水平达标后（≥30ng/ml），调整为隔日 1 粒或每周 3-4 粒维持"
+            "maintenance": null
           },
-          "display_text": "每日1 粒，随餐服用，连续服用 3 个月；检测 25 (OH) D 水平达标后（≥30ng/ml），调整为隔日 1 粒或每周 3-4 粒维持。",
+          "display_text": "每日1 粒，随餐服用，连续服用 3 个月；检测 25 (OH) D 水平达标后（≥30ng/ml），调整为每日 1 粒维持。",
           "requires_review": false,
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 91,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3184,25 +3184,25 @@
             "unit": "粒",
             "single_dose_min": 1.0,
             "single_dose_max": 1.0,
-            "daily_frequency_min": null,
-            "daily_frequency_max": null,
-            "weekly_frequency_min": 3.0,
-            "weekly_frequency_max": 4.0,
+            "daily_frequency_min": 1.0,
+            "daily_frequency_max": 1.0,
+            "weekly_frequency_min": null,
+            "weekly_frequency_max": null,
             "timing": [
               "随餐"
             ],
             "interval_hours_min": null,
             "interval_hours_max": null,
-            "daily_max": null,
+            "daily_max": 1.0,
             "duration": "长期坚持",
             "maintenance": null
           },
-          "display_text": "隔日 1 粒或每周 3-4 粒，随餐服用，长期坚持。",
+          "display_text": "每日 1 粒，随餐服用，长期坚持。",
           "requires_review": false,
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 91,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3278,7 +3278,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 91,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -3386,7 +3386,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 93,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3462,7 +3462,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 93,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3553,7 +3553,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 93,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3625,7 +3625,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 93,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -3727,7 +3727,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 95,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3807,7 +3807,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 95,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -3885,7 +3885,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 95,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -3993,7 +3993,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 102,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4087,7 +4087,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 102,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4170,7 +4170,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 102,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4240,7 +4240,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 102,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -4336,7 +4336,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 104,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4424,7 +4424,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 104,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4488,7 +4488,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 104,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -4584,7 +4584,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 135,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4678,7 +4678,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 135,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4750,7 +4750,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 135,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -4846,7 +4846,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 137,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4916,7 +4916,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 137,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -4980,7 +4980,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 137,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -5080,7 +5080,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 138,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5160,7 +5160,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 138,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5236,7 +5236,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 138,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -5329,7 +5329,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 139,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -5437,7 +5437,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 148,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5530,7 +5530,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 148,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -5636,7 +5636,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5715,7 +5715,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5779,7 +5779,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5843,7 +5843,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5911,7 +5911,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -5979,7 +5979,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6053,7 +6053,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 160,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -6155,7 +6155,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 161,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6235,7 +6235,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 161,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6315,7 +6315,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 161,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -6411,7 +6411,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 166,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6495,7 +6495,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 166,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6572,7 +6572,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 166,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -6659,7 +6659,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 179,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6751,7 +6751,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 179,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6825,7 +6825,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 179,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6911,7 +6911,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 179,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -6975,7 +6975,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 179,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -7070,7 +7070,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 190,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7168,7 +7168,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 190,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7251,7 +7251,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 190,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -7353,7 +7353,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 197,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7439,7 +7439,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 197,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -7535,7 +7535,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 213,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7630,7 +7630,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 213,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -7731,7 +7731,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 223,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7832,7 +7832,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 223,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -7902,7 +7902,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 223,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -8003,7 +8003,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 226,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -8087,7 +8087,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 226,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -8157,7 +8157,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 226,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]
@@ -8253,7 +8253,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 233,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -8355,7 +8355,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 233,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         },
         {
@@ -8427,7 +8427,7 @@
           "source": {
             "sheet": "单粒泡罩（中文）",
             "row": 233,
-            "version": "client-dose-workbook-2026-07-v1"
+            "version": "client-dose-workbook-2026-09-joolun-daily-v2"
           }
         }
       ]

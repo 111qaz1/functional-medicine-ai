@@ -124,6 +124,27 @@ class AuthService:
         external_doctor_id: str,
         display_name: str | None = None,
     ) -> AuthSession:
+        doctor = self.resolve_external_doctor(
+            issuer=issuer,
+            external_doctor_id=external_doctor_id,
+            display_name=display_name,
+        )
+
+        session = SessionRecord(
+            id=f"sess_{secrets.token_urlsafe(32)}",
+            doctor_id=doctor.id,
+            expires_at=utc_now() + timedelta(days=SESSION_DAYS),
+        )
+        self.repository.save_session(session)
+        return AuthSession(doctor=doctor, session=session)
+
+    def resolve_external_doctor(
+        self,
+        *,
+        issuer: str,
+        external_doctor_id: str,
+        display_name: str | None = None,
+    ) -> DoctorAccount:
         normalized_issuer = self._normalize_external_part(issuer)
         normalized_external_id = self._normalize_external_part(external_doctor_id)
         if not normalized_issuer or not normalized_external_id:
@@ -131,29 +152,34 @@ class AuthService:
 
         username = f"external:{normalized_issuer}:{normalized_external_id}"
         doctor = self.repository.get_doctor_by_username(username)
-        display_name = (display_name or "").strip() or external_doctor_id
+        resolved_display_name = (display_name or "").strip() or external_doctor_id
         if doctor:
             if not doctor.enabled:
                 raise ValueError("External doctor identity is disabled")
-            if doctor.display_name != display_name:
-                doctor.display_name = display_name
+            if doctor.display_name != resolved_display_name:
+                doctor.display_name = resolved_display_name
+                doctor.updated_at = utc_now()
                 self.repository.save_doctor(doctor)
-        else:
-            digest = hashlib.sha256(username.encode("utf-8")).hexdigest()[:12]
-            doctor = DoctorAccount(
-                id=f"doctor_ext_{digest}",
-                username=username,
-                display_name=display_name,
-                password_hash="external_trust_identity",
-                role=DoctorRole.doctor,
-                enabled=True,
-            )
-            self.repository.save_doctor(doctor)
+            return doctor
 
+        digest = hashlib.sha256(username.encode("utf-8")).hexdigest()[:12]
+        doctor = DoctorAccount(
+            id=f"doctor_ext_{digest}",
+            username=username,
+            display_name=resolved_display_name,
+            password_hash="external_trust_identity",
+            role=DoctorRole.doctor,
+            enabled=True,
+        )
+        return self.repository.save_doctor(doctor)
+
+    def issue_session_for_doctor(self, doctor: DoctorAccount, *, lifetime: timedelta) -> AuthSession:
+        if not doctor.enabled:
+            raise ValueError("Doctor identity is disabled")
         session = SessionRecord(
             id=f"sess_{secrets.token_urlsafe(32)}",
             doctor_id=doctor.id,
-            expires_at=utc_now() + timedelta(days=SESSION_DAYS),
+            expires_at=utc_now() + lifetime,
         )
         self.repository.save_session(session)
         return AuthSession(doctor=doctor, session=session)

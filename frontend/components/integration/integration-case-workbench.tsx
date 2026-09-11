@@ -47,6 +47,23 @@ import { WorkflowNotice, WorkflowSection, WorkflowShell } from "./workflow-shell
 
 type LoadState = "loading" | "ready" | "error";
 
+interface EmbedContext {
+  issuer: string;
+  external_encounter_id: string;
+  parent_origin: string;
+  case_id: string;
+}
+
+interface ApprovedRecommendationsMessage {
+  version: 2;
+  external_encounter_id: string;
+  case_id: string;
+  draft_id: string;
+  revision: number;
+  items: unknown[];
+  unmapped_skus: unknown[];
+}
+
 const acceptedUploadTypes = ".pdf,.docx,.pptx,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.webp";
 
 const guidanceCopy = {
@@ -109,11 +126,13 @@ function operationProgressState(operation: OperationResponse): OperationProgress
 export function IntegrationCaseWorkbench({
   caseId,
   fixtureMode,
-  fixtureScenario
+  fixtureScenario,
+  embedded = false
 }: {
   caseId: string;
   fixtureMode: boolean;
   fixtureScenario: FixtureScenario;
+  embedded?: boolean;
 }) {
   const gateway = useMemo(
     () => createWorkflowGateway(fixtureMode, fixtureScenario),
@@ -124,6 +143,7 @@ export function IntegrationCaseWorkbench({
   const loadSequence = useRef(0);
   const handledAnalysisCompletion = useRef<string | null>(null);
   const handledDraftCompletion = useRef<string | null>(null);
+  const postedRecommendationRevision = useRef<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [caseResource, setCaseResource] = useState<CaseResponse | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
@@ -146,6 +166,7 @@ export function IntegrationCaseWorkbench({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewConflict, setReviewConflict] = useState(false);
+  const [embedContext, setEmbedContext] = useState<EmbedContext | null>(null);
 
   const reviewDirty = Boolean(reviewDraft && reviewBaseline && JSON.stringify(reviewDraft) !== reviewBaseline);
   const approvalDirty = Boolean(approvalDraft && approvalBaseline && JSON.stringify(approvalDraft) !== approvalBaseline);
@@ -233,6 +254,61 @@ export function IntegrationCaseWorkbench({
       pollerRef.current = null;
     };
   }, [gateway, loadWorkflow]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    let active = true;
+    void fetch("/api/v2/integrations/joolun/embed-context", {
+      cache: "no-store",
+      credentials: "include",
+      headers: { Accept: "application/json, application/problem+json" }
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("嵌入会话上下文不可用");
+      return await response.json() as EmbedContext;
+    }).then((context) => {
+      if (active && context.case_id === caseId) setEmbedContext(context);
+    }).catch(() => {
+      if (active) setError("嵌入会话已失效，请返回开方页重新加载 AI 辅助区域。");
+    });
+    return () => { active = false; };
+  }, [caseId, embedded]);
+
+  useEffect(() => {
+    if (!embedded || !embedContext) return;
+    const sendHeight = () => {
+      const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      window.parent.postMessage({ type: "fm.embed.resize", version: 1, payload: { height } }, embedContext.parent_origin);
+    };
+    const observer = new ResizeObserver(sendHeight);
+    observer.observe(document.documentElement);
+    sendHeight();
+    return () => observer.disconnect();
+  }, [embedContext, embedded]);
+
+  useEffect(() => {
+    if (!embedded || !embedContext || draft?.status !== "approved") return;
+    const revisionKey = `${draft.id}:${draft.revision}`;
+    if (postedRecommendationRevision.current === revisionKey) return;
+    let active = true;
+    void fetch("/api/v2/integrations/joolun/approved-recommendations", {
+      cache: "no-store",
+      credentials: "include",
+      headers: { Accept: "application/json, application/problem+json" }
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("已批准推荐暂时无法同步");
+      return await response.json() as ApprovedRecommendationsMessage;
+    }).then((payload) => {
+      if (!active || payload.version !== 2 || payload.case_id !== caseId || payload.external_encounter_id !== embedContext.external_encounter_id) return;
+      window.parent.postMessage(
+        { type: "fm.recommendations.approved", version: 2, payload },
+        embedContext.parent_origin
+      );
+      postedRecommendationRevision.current = revisionKey;
+    }).catch(() => {
+      if (active) setNotice("方案已批准，但商品同步暂时不可用；可继续手工开方。");
+    });
+    return () => { active = false; };
+  }, [caseId, draft, embedContext, embedded]);
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
@@ -578,7 +654,7 @@ export function IntegrationCaseWorkbench({
   if (!caseResource) {
     const emptySteps = deriveWorkflowSteps({ caseResource: null, analysis: null, draft: null, report: null });
     return (
-      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case">
+      <WorkflowShell title="病例工作流" caseId={caseId} steps={emptySteps} currentStep="case" embedded={embedded}>
         {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式：{fixtureScenario}</WorkflowNotice> : null}
         {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
         <WorkflowSection id="case" title={loadState === "loading" ? "正在读取病例" : "病例无法加载"} state={loadState === "error" ? "error" : "current"}>
@@ -598,21 +674,22 @@ export function IntegrationCaseWorkbench({
       currentStep={visibleStep}
       onStepChange={navigateToStep}
       onBlockedStepRequest={requestBlockedStep}
-      contextSlot={
+      embedded={embedded}
+      contextSlot={embedded ? undefined : (
         <div className="workflow-case-context">
           <span>当前病例</span>
           <strong>{caseResource.customer_name}</strong>
           <small>{caseStatusLabels[caseResource.status]}</small>
           <code>{caseResource.id}</code>
         </div>
-      }
-      headerActions={
+      )}
+      headerActions={embedded ? undefined : (
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases"><ArrowLeftIcon className="workflow-button__icon" />返回病例入口</a>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}><ArrowPathIcon className="workflow-button__icon" />重新加载全部状态</button>
           <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void logout(); }}><ArrowRightStartOnRectangleIcon className="workflow-button__icon" />退出 {doctor.display_name}</button>
         </>
-      }
+      )}
     >
       {fixtureMode ? <WorkflowNotice tone="warning">Fixture 模式已启用，当前场景：{fixtureScenario}。页面不会调用后端或模型。</WorkflowNotice> : null}
       {blockedGuidance ? (
@@ -856,6 +933,7 @@ export function IntegrationCaseWorkbench({
             onChange={setApprovalDraft}
             onApprove={() => void handleApprove()}
             onDownload={() => void handleDownloadReport()}
+            embedded={embedded}
           />
         ) : <p className="workflow-empty">完成复核并生成方案后可编辑最终报告。</p>}
       </WorkflowSection> : null}

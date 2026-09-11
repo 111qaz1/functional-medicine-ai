@@ -84,6 +84,12 @@ class DosageRuleTests(unittest.TestCase):
         self.assertTrue(
             select_dosage_option(self.products["sku_vitamin_d3_k"], unknown, normalize).option["is_default"]
         )
+        for option in self.products["sku_vitamin_d3_k"]["dose_options"]:
+            self.assertNotIn("隔日", option["display_text"])
+            self.assertNotIn("每周", option["display_text"])
+            self.assertEqual(option["regimen"]["daily_max"], 1)
+            self.assertIsNone(option["regimen"]["weekly_frequency_min"])
+            self.assertIsNone(option["regimen"]["weekly_frequency_max"])
 
     def test_acute_tier_requires_explicit_acute_fact(self) -> None:
         ordinary = select_dosage_option(

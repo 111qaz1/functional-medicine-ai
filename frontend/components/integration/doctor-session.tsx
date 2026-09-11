@@ -25,7 +25,7 @@ export function useIntegrationDoctor(): DoctorSessionValue {
   return value;
 }
 
-export function DoctorSessionGate({ children }: { children: ReactNode }) {
+export function DoctorSessionGate({ children, embedded = false }: { children: ReactNode; embedded?: boolean }) {
   const [doctor, setDoctor] = useState<DoctorAccount | null>(null);
   const [bootstrapRequired, setBootstrapRequired] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -92,6 +92,18 @@ export function DoctorSessionGate({ children }: { children: ReactNode }) {
   }
 
   if (!doctor) {
+    if (embedded) {
+      return (
+        <main className="workflow-app workflow-auth" data-embedded="true">
+          <section className="workflow-auth__card">
+            <p className="workflow-auth__eyebrow">AI 功能医学辅助</p>
+            <h1>嵌入会话已失效</h1>
+            <p>请返回开方页重新加载 AI 辅助区域；手工开方不受影响。</p>
+            {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
+          </section>
+        </main>
+      );
+    }
     return (
       <main className="workflow-app workflow-auth">
         <section className="workflow-auth__card" aria-labelledby="doctor-login-title">

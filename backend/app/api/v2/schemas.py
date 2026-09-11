@@ -678,3 +678,86 @@ class ReportResponse(ContractModel):
     reviewer_id: str
     publishable_report: str
     approved_at: datetime
+
+
+class JoolunEmbedSessionRequest(StrictRequestModel):
+    issuer: str = Field(min_length=1, max_length=80)
+    external_doctor_id: str = Field(min_length=1, max_length=160)
+    doctor_name: str | None = Field(default=None, max_length=160)
+    external_patient_id: str = Field(min_length=1, max_length=160)
+    external_encounter_id: str = Field(min_length=1, max_length=160)
+    patient_name: str = Field(min_length=1, max_length=160)
+    parent_origin: str = Field(min_length=1, max_length=500)
+    timestamp: int
+    nonce: str = Field(min_length=16, max_length=200)
+    signature: str = Field(min_length=64, max_length=80)
+
+
+class JoolunEmbedSessionResponse(ContractModel):
+    embed_url: str
+    case_id: str
+    expires_at: datetime
+
+
+class JoolunEmbedTicketExchangeRequest(StrictRequestModel):
+    ticket: str = Field(min_length=32, max_length=200)
+
+
+class JoolunEmbedTicketExchangeResponse(ContractModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    case_id: str
+    expires_at: datetime
+
+
+class JoolunEmbedContextResponse(ContractModel):
+    issuer: str
+    external_encounter_id: str
+    parent_origin: str
+    case_id: str
+
+
+class JoolunMappedPrescriptionItem(ContractModel):
+    sku_id: str
+    display_name: str
+    goods_id: str
+    spec_id: str | None = None
+    product_type: int = 0
+    unit: str
+    dosage_option_id: str | None = None
+    dosage_text: str
+    dose_status: Literal["resolved", "pending"]
+    quantity: int | None = Field(default=None, ge=1)
+    breakfast_dose: int | None = Field(default=None, ge=0)
+    lunch_dose: int | None = Field(default=None, ge=0)
+    dinner_dose: int | None = Field(default=None, ge=0)
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_dose_state(self):
+        dose_fields = (self.quantity, self.breakfast_dose, self.lunch_dose, self.dinner_dose)
+        if self.dose_status == "pending":
+            if any(value is not None for value in dose_fields):
+                raise ValueError("pending dose fields must all be null")
+            return self
+        if any(value is None for value in dose_fields):
+            raise ValueError("resolved dose fields must all be integers")
+        if self.breakfast_dose + self.lunch_dose + self.dinner_dose != self.quantity:
+            raise ValueError("resolved meal doses must equal quantity")
+        return self
+
+
+class JoolunUnmappedSku(ContractModel):
+    sku_id: str
+    display_name: str
+    reason: str
+
+
+class JoolunApprovedRecommendationsResponse(ContractModel):
+    version: Literal[2] = 2
+    external_encounter_id: str
+    case_id: str
+    draft_id: str
+    revision: int = Field(ge=1)
+    items: list[JoolunMappedPrescriptionItem] = Field(default_factory=list)
+    unmapped_skus: list[JoolunUnmappedSku] = Field(default_factory=list)

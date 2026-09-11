@@ -8,7 +8,7 @@ import type { ApprovalDraftState } from "../../lib/api-v2/approval";
 import type { DraftResponse, ReportResponse } from "../../lib/api-v2/types";
 import { WorkflowNotice } from "./workflow-shell";
 
-export function FinalReportEditor({ draft, value, report, reviewerName, busy, onChange, onApprove, onDownload }: {
+export function FinalReportEditor({ draft, value, report, reviewerName, busy, onChange, onApprove, onDownload, embedded = false }: {
   draft: DraftResponse;
   value: ApprovalDraftState;
   report: ReportResponse | null;
@@ -17,8 +17,9 @@ export function FinalReportEditor({ draft, value, report, reviewerName, busy, on
   onChange(value: ApprovalDraftState): void;
   onApprove(): void;
   onDownload(): void;
+  embedded?: boolean;
 }) {
-  const [mode, setMode] = useState<MarkdownViewMode>("split");
+  const [mode, setMode] = useState<MarkdownViewMode>(embedded ? "edit" : "split");
   const [expanded, setExpanded] = useState(false);
   const approved = draft.status === "approved";
   const publishedText = report?.publishable_report ?? value.publishableReport;

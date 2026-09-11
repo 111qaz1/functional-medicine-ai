@@ -32,6 +32,7 @@ from app.services.questionnaire_import import QuestionnaireImportService
 from app.services.recommendation_local import RecommendationService
 from app.services.review_local import ReviewService
 from app.services.semantic_support import SemanticSupportService
+from app.services.joolun_embed import JoolunEmbedService
 
 
 def _data_path(settings: AppSettings, *parts: str) -> Path:
@@ -209,6 +210,7 @@ class ApplicationContainer:
     assistant_chat_service: CaseAssistantService
     llm_rate_limiter: LLMRateLimiter
     llm_request_controller: LLMRequestController
+    joolun_embed_service: JoolunEmbedService | None = None
 
 
 def build_container(settings: AppSettings | None = None) -> ApplicationContainer:
@@ -350,7 +352,7 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         request_controller=llm_request_controller,
     )
 
-    return ApplicationContainer(
+    container = ApplicationContainer(
         settings=settings,
         repository=repository,
         case_service=case_service,
@@ -368,3 +370,5 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         llm_rate_limiter=llm_rate_limiter,
         llm_request_controller=llm_request_controller,
     )
+    container.joolun_embed_service = JoolunEmbedService(container)
+    return container

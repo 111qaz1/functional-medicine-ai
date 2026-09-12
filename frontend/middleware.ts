@@ -22,6 +22,17 @@ function allowedFrameAncestors(): string {
   return origins.length ? origins.join(" ") : "'none'";
 }
 
+function publicRequestOrigin(request: NextRequest): string {
+  const configured = process.env.FM_JOOLUN_EMBED_BASE_URL?.trim();
+  if (!configured) return request.nextUrl.origin;
+  try {
+    const url = new URL(configured);
+    return ["http:", "https:"].includes(url.protocol) ? url.origin : request.nextUrl.origin;
+  } catch {
+    return request.nextUrl.origin;
+  }
+}
+
 export function buildBackendUrl(request: NextRequest): URL {
   const backendBaseUrl =
     process.env.INTERNAL_API_BASE_URL?.trim() || DEFAULT_INTERNAL_API_BASE_URL;
@@ -71,7 +82,7 @@ export function middleware(request: NextRequest) {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       const origin = request.headers.get("Origin");
       const fetchSite = request.headers.get("Sec-Fetch-Site");
-      if (origin !== request.nextUrl.origin || (fetchSite && fetchSite !== "same-origin")) {
+      if (origin !== publicRequestOrigin(request) || (fetchSite && fetchSite !== "same-origin")) {
         return NextResponse.json(
           {
             type: "urn:fm-ai:problem:cross-origin-request-rejected",

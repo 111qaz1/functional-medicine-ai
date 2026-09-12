@@ -12,10 +12,12 @@ import { buildBackendUrl, config, middleware } from "./middleware";
 describe("API proxy middleware", () => {
   const previousBaseUrl = process.env.INTERNAL_API_BASE_URL;
   const previousEmbedOrigins = process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS;
+  const previousEmbedBaseUrl = process.env.FM_JOOLUN_EMBED_BASE_URL;
 
   beforeEach(() => {
     process.env.INTERNAL_API_BASE_URL = "http://backend:8000";
     process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS = "http://localhost:7600";
+    process.env.FM_JOOLUN_EMBED_BASE_URL = "https://fm.example.com";
   });
 
   afterEach(() => {
@@ -28,6 +30,11 @@ describe("API proxy middleware", () => {
       delete process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS;
     } else {
       process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS = previousEmbedOrigins;
+    }
+    if (previousEmbedBaseUrl === undefined) {
+      delete process.env.FM_JOOLUN_EMBED_BASE_URL;
+    } else {
+      process.env.FM_JOOLUN_EMBED_BASE_URL = previousEmbedBaseUrl;
     }
   });
 
@@ -112,6 +119,21 @@ describe("API proxy middleware", () => {
       code: "CROSS_ORIGIN_REQUEST_REJECTED",
       status: 403
     });
+  });
+
+  it("uses the configured public origin when Docker receives its internal port", () => {
+    process.env.FM_JOOLUN_EMBED_BASE_URL = "http://localhost:18080";
+    const accepted = middleware(new NextRequest("http://localhost:3000/api/v2/cases/case_1", {
+      method: "POST",
+      headers: {
+        Cookie: "fm_session=doctor-session-token",
+        Origin: "http://localhost:18080",
+        "Sec-Fetch-Site": "same-origin"
+      }
+    }));
+
+    expect(isRewrite(accepted)).toBe(true);
+    expect(getRewrittenUrl(accepted)).toBe("http://backend:8000/api/v2/cases/case_1");
   });
 
   it.each(["/cases/case_1", "/assistant", "/products"])(

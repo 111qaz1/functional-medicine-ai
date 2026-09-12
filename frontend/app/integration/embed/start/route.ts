@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND_BASE_URL = process.env.INTERNAL_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
+function embedPublicBaseUrl(request: NextRequest): URL {
+  const configured = process.env.FM_JOOLUN_EMBED_BASE_URL?.trim();
+  if (!configured) return new URL(request.nextUrl.origin);
+  try {
+    const url = new URL(configured);
+    if (!["http:", "https:"].includes(url.protocol)) return new URL(request.nextUrl.origin);
+    return new URL(url.origin);
+  } catch {
+    return new URL(request.nextUrl.origin);
+  }
+}
+
 export async function GET(request: NextRequest) {
   const ticket = request.nextUrl.searchParams.get("ticket")?.trim();
   if (!ticket) {
@@ -24,7 +36,10 @@ export async function GET(request: NextRequest) {
   }
 
   const redirect = NextResponse.redirect(
-    new URL(`/integration/embed/cases/${encodeURIComponent(payload.case_id)}`, request.url)
+    new URL(
+      `/integration/embed/cases/${encodeURIComponent(payload.case_id)}`,
+      embedPublicBaseUrl(request)
+    )
   );
   const secureSetting = process.env.FM_SESSION_COOKIE_SECURE?.trim().toLowerCase();
   const secure = secureSetting

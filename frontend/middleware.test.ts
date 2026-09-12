@@ -11,9 +11,11 @@ import { buildBackendUrl, config, middleware } from "./middleware";
 
 describe("API proxy middleware", () => {
   const previousBaseUrl = process.env.INTERNAL_API_BASE_URL;
+  const previousEmbedOrigins = process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS;
 
   beforeEach(() => {
     process.env.INTERNAL_API_BASE_URL = "http://backend:8000";
+    process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS = "http://localhost:7600";
   });
 
   afterEach(() => {
@@ -21,6 +23,11 @@ describe("API proxy middleware", () => {
       delete process.env.INTERNAL_API_BASE_URL;
     } else {
       process.env.INTERNAL_API_BASE_URL = previousBaseUrl;
+    }
+    if (previousEmbedOrigins === undefined) {
+      delete process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS;
+    } else {
+      process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS = previousEmbedOrigins;
     }
   });
 
@@ -120,7 +127,19 @@ describe("API proxy middleware", () => {
     }
   );
 
-  it.each(["/api/internal/auth/me", "/api/v1/auth/token", "/api/v2/cases/case_1", "/health", "/docs"])(
+  it("allows only configured parents to frame embedded workflow pages", () => {
+    const response = middleware(
+      new NextRequest("http://localhost:18080/integration/embed/cases/case_1")
+    );
+
+    expect(response.headers.get("content-security-policy")).toBe(
+      "frame-ancestors http://localhost:7600"
+    );
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it.each(["/api/internal/auth/me", "/api/v1/auth/token", "/api/v2/cases/case_1", "/health", "/docs", "/integration/embed/cases/case_1"])(
     "matches the backend path %s",
     (url) => {
       expect(

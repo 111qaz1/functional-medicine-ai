@@ -26,7 +26,10 @@ export async function GET(request: NextRequest) {
   const redirect = NextResponse.redirect(
     new URL(`/integration/embed/cases/${encodeURIComponent(payload.case_id)}`, request.url)
   );
-  const secure = process.env.NODE_ENV === "production";
+  const secureSetting = process.env.FM_SESSION_COOKIE_SECURE?.trim().toLowerCase();
+  const secure = secureSetting
+    ? ["1", "true", "yes", "on"].includes(secureSetting)
+    : request.nextUrl.protocol === "https:";
   redirect.cookies.set("fm_session", payload.access_token, {
     httpOnly: true,
     secure,

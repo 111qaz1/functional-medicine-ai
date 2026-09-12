@@ -32,6 +32,24 @@ VITE_FM_EMBED_ENABLED=false
 VITE_FM_EMBED_ORIGIN=https://functional-medicine.example
 ```
 
+## localhost 联调
+
+本地联调固定使用以下两个浏览器 Origin：
+
+```text
+甲方 Vue：http://localhost:7600
+功能医学前端：http://localhost:18080
+功能医学后端（仅服务端调用）：http://127.0.0.1:18081
+```
+
+功能医学 `.env` 设置 `FM_JOOLUN_EMBED_BASE_URL=http://localhost:18080`、
+`FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS=http://localhost:7600`、
+`FM_SESSION_COOKIE_SECURE=0`，并配置一份不进入 Git 的随机共享密钥。
+
+甲方 Java 后端尚未实现换票接口时，甲方 Vite 开发服务器可启用隔离的本地桥接。
+桥接只接受回环地址访问，使用当前甲方 Bearer Token 请求测试后端 `/getInfo` 获取医生身份，
+再在服务端签名并请求功能医学后端。非开发构建不得注册该桥接，共享密钥不得使用 `VITE_` 前缀。
+
 ## 甲方后端职责
 
 Vue 页面调用甲方同源接口：

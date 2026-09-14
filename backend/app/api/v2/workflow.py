@@ -8,7 +8,6 @@ from typing import Any, Literal
 from app.api.v2.mappers import (
     analysis_to_response,
     attachment_is_accepted,
-    attachment_is_parsed,
     apply_review_changes,
     approval_request_to_edits,
     approval_to_response,
@@ -17,7 +16,6 @@ from app.api.v2.mappers import (
     case_to_response,
     doctor_workspace_scope,
     draft_to_response,
-    mark_attachment_parse_failed,
     operation_to_response,
     report_to_response,
 )
@@ -336,64 +334,24 @@ class V2WorkflowAdapter:
                 )
                 continue
             accepted_count += 1
-            try:
-                extraction, lab_items = self.container.parsing_service.parse(
-                    filename=uploaded.filename,
-                    content_type=uploaded.content_type,
-                    content=prepared.content,
-                    case_id=case.id,
+            # Match the established workbench behavior: attachment upload only
+            # performs intake preflight and durable storage. Full parsing (and
+            # OCR for scanned PDFs) belongs to the asynchronous case-analysis
+            # operation. Running it here blocks the multipart response and lets
+            # one slow document hold the entire batch open.
+            persisted = next(item for item in case.files if item.id == uploaded.id)
+            items.append(
+                AttachmentUploadItem(
                     file_id=uploaded.id,
+                    filename=prepared.filename,
+                    attachment_type=attachment_type,
+                    status="pending",
+                    media_type=prepared.media_type,
+                    size_bytes=len(prepared.content),
+                    parse_status=persisted.parse_status.value,
+                    warnings=list(persisted.missing_fields),
                 )
-                parse_warnings = (
-                    self.container.parsing_service.normalization_service.find_unknown_lab_candidates(
-                        spans=extraction.spans,
-                        lab_items=lab_items,
-                    )
-                )
-                case = self.container.case_service.attach_parse_results(
-                    case.id,
-                    uploaded.id,
-                    extracted_text=extraction.text,
-                    parse_confidence=extraction.confidence,
-                    source_spans=extraction.spans,
-                    lab_items=lab_items,
-                    parse_warnings=parse_warnings,
-                )
-                parsed = next(item for item in case.files if item.id == uploaded.id)
-                status = "parsed" if attachment_is_parsed(parsed) else "pending"
-                items.append(
-                    AttachmentUploadItem(
-                        file_id=uploaded.id,
-                        filename=prepared.filename,
-                        attachment_type=attachment_type,
-                        status=status,
-                        media_type=prepared.media_type,
-                        size_bytes=len(prepared.content),
-                        parse_status=parsed.parse_status.value,
-                        lab_item_count=len(lab_items),
-                        warnings=list(parse_warnings),
-                    )
-                )
-            except Exception:
-                persisted = next(item for item in case.files if item.id == uploaded.id)
-                mark_attachment_parse_failed(persisted)
-                self.container.repository.save_case(case)
-                items.append(
-                    AttachmentUploadItem(
-                        file_id=uploaded.id,
-                        filename=prepared.filename,
-                        attachment_type=attachment_type,
-                        status="failed",
-                        media_type=prepared.media_type,
-                        size_bytes=len(prepared.content),
-                        parse_status=persisted.parse_status.value,
-                        failure=AttachmentFailure(
-                            code="ATTACHMENT_PARSE_FAILED",
-                            message="The attachment was stored but could not be parsed.",
-                            retryable=True,
-                        ),
-                    )
-                )
+            )
 
         if accepted_count == 0:
             raise V2ApiError(

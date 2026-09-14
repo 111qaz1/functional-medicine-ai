@@ -267,6 +267,15 @@ class JoolunEmbedService:
             quantity = cls._positive_integer(single_max * frequency_max)
         if quantity is None and single_min == single_max and cls._positive_integer(daily_max) is not None:
             quantity = cls._positive_integer(daily_max)
+        if quantity is None:
+            daily_cap = cls._positive_integer(daily_max)
+            per_dose_ceiling = (
+                cls._positive_integer(single_max * frequency_max)
+                if single_max is not None and frequency_max is not None
+                else None
+            )
+            if daily_cap is not None and per_dose_ceiling is not None:
+                quantity = min(daily_cap, per_dose_ceiling)
 
         if quantity is None:
             return {

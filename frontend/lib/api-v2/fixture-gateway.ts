@@ -397,9 +397,6 @@ function applyApprovalEdits(draft: DraftResponse, payload: ApprovalRequest, inst
       if (!override) return item;
       const option = item.dosage_options.find((candidate) => candidate.option_id === override.option_id);
       if (!option) invalidFixtureRequest(instance, `${item.display_name} 的剂量选项无效。`);
-      if (option.option_id !== item.dosage_option_id && !(override.note ?? "").trim()) {
-        invalidFixtureRequest(instance, `${item.display_name} 改选非默认剂量时必须填写说明。`);
-      }
       return {
         ...item,
         dosage: option.display_text,
@@ -408,7 +405,7 @@ function applyApprovalEdits(draft: DraftResponse, payload: ApprovalRequest, inst
         dosage_regimen: option.regimen,
         dosage_match_reasons: option.option_id === item.dosage_option_id
           ? item.dosage_match_reasons
-          : [...item.dosage_match_reasons, `医生人工改档：${option.label}；备注：${override.note?.trim()}`]
+          : [...item.dosage_match_reasons, `医生人工改档：${option.label}`]
       };
     });
   if (!recommendations.length) invalidFixtureRequest(instance, "至少保留一项营养素推荐后才能审核发布。", 409);

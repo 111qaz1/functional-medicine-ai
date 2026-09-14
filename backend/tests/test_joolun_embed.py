@@ -243,6 +243,27 @@ class JoolunEmbedTests(unittest.TestCase):
         self.assertEqual(pending["status"], "pending")
         self.assertIsNone(pending["quantity"])
 
+    def test_range_regimen_with_daily_cap_resolves_upper_bound(self) -> None:
+        recommendation = SimpleNamespace(
+            dosage="每日2 粒，分 1-2 次服用（早餐 1 粒 + 晚餐 1 粒），随餐服用，连续服用 3 个月后可减至每日 1 粒维持。",
+            dosage_regimen=SimpleNamespace(
+                unit="粒",
+                single_dose_min=1,
+                single_dose_max=2,
+                daily_frequency_min=1,
+                daily_frequency_max=2,
+                daily_max=2,
+                timing=["随餐"],
+            ),
+        )
+        resolved = JoolunEmbedService._convert_approved_dose(recommendation)
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertEqual(resolved["quantity"], 2)
+        self.assertEqual(
+            (resolved["breakfast_dose"], resolved["lunch_dose"], resolved["dinner_dose"]),
+            (1, 0, 1),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

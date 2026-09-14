@@ -64,6 +64,28 @@ interface ApprovedRecommendationsMessage {
   unmapped_skus: unknown[];
 }
 
+const recommendationSyncRetryDelays = [300, 900, 1800, 3000] as const;
+
+function waitForRecommendationSyncRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+}
+
+async function fetchApprovedRecommendationsWithRetry(): Promise<ApprovedRecommendationsMessage> {
+  for (let attempt = 0; attempt <= recommendationSyncRetryDelays.length; attempt += 1) {
+    const response = await fetch("/api/v2/integrations/joolun/approved-recommendations", {
+      cache: "no-store",
+      credentials: "include",
+      headers: { Accept: "application/json, application/problem+json" }
+    });
+    if (response.ok) return await response.json() as ApprovedRecommendationsMessage;
+    if (response.status !== 409 || attempt === recommendationSyncRetryDelays.length) {
+      throw new Error("已批准推荐暂时无法同步");
+    }
+    await waitForRecommendationSyncRetry(recommendationSyncRetryDelays[attempt]);
+  }
+  throw new Error("已批准推荐暂时无法同步");
+}
+
 const acceptedUploadTypes = ".pdf,.docx,.pptx,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.bmp,.gif,.tif,.tiff,.webp";
 
 const guidanceCopy = {
@@ -167,6 +189,9 @@ export function IntegrationCaseWorkbench({
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewConflict, setReviewConflict] = useState(false);
   const [embedContext, setEmbedContext] = useState<EmbedContext | null>(null);
+  const [recommendationSyncError, setRecommendationSyncError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; filename: string } | null>(null);
+  const [pendingDiscard, setPendingDiscard] = useState<"reload" | "logout" | null>(null);
 
   const reviewDirty = Boolean(reviewDraft && reviewBaseline && JSON.stringify(reviewDraft) !== reviewBaseline);
   const approvalDirty = Boolean(approvalDraft && approvalBaseline && JSON.stringify(approvalDraft) !== approvalBaseline);
@@ -275,37 +300,57 @@ export function IntegrationCaseWorkbench({
 
   useEffect(() => {
     if (!embedded || !embedContext) return;
+    let observed: Element | null = null;
     const sendHeight = () => {
-      const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      // 测量工作台元素真实内容高度，保证步骤切换后 iframe 能随内容收窄；
+      // documentElement.scrollHeight 受 min-height: 100% 影响只增不减，不可用于收缩。
+      const appElement = document.querySelector<HTMLElement>(".workflow-app");
+      const height = appElement
+        ? Math.ceil(appElement.getBoundingClientRect().height)
+        : Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
       window.parent.postMessage({ type: "fm.embed.resize", version: 1, payload: { height } }, embedContext.parent_origin);
     };
     const observer = new ResizeObserver(sendHeight);
+    const observeCurrent = () => {
+      const appElement = document.querySelector(".workflow-app");
+      if (appElement && appElement !== observed) {
+        observed = appElement;
+        observer.observe(appElement);
+      }
+    };
+    observeCurrent();
     observer.observe(document.documentElement);
     sendHeight();
-    return () => observer.disconnect();
+    const mutationObserver = new MutationObserver(observeCurrent);
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      mutationObserver.disconnect();
+    };
   }, [embedContext, embedded]);
 
   useEffect(() => {
     if (!embedded || !embedContext || draft?.status !== "approved") return;
     const revisionKey = `${draft.id}:${draft.revision}`;
-    if (postedRecommendationRevision.current === revisionKey) return;
+    if (postedRecommendationRevision.current === revisionKey) {
+      setRecommendationSyncError(null);
+      return;
+    }
     let active = true;
-    void fetch("/api/v2/integrations/joolun/approved-recommendations", {
-      cache: "no-store",
-      credentials: "include",
-      headers: { Accept: "application/json, application/problem+json" }
-    }).then(async (response) => {
-      if (!response.ok) throw new Error("已批准推荐暂时无法同步");
-      return await response.json() as ApprovedRecommendationsMessage;
-    }).then((payload) => {
-      if (!active || payload.version !== 2 || payload.case_id !== caseId || payload.external_encounter_id !== embedContext.external_encounter_id) return;
+    setRecommendationSyncError(null);
+    void fetchApprovedRecommendationsWithRetry().then((payload) => {
+      if (!active) return;
+      if (payload.version !== 2 || payload.case_id !== caseId || payload.external_encounter_id !== embedContext.external_encounter_id) {
+        throw new Error("已批准推荐与当前就诊不匹配");
+      }
       window.parent.postMessage(
         { type: "fm.recommendations.approved", version: 2, payload },
         embedContext.parent_origin
       );
       postedRecommendationRevision.current = revisionKey;
+      setRecommendationSyncError(null);
     }).catch(() => {
-      if (active) setNotice("方案已批准，但商品同步暂时不可用；可继续手工开方。");
+      if (active) setRecommendationSyncError("方案已批准，但商品同步暂时不可用。可继续手工开方，或点击下方按钮重新同步。");
     });
     return () => { active = false; };
   }, [caseId, draft, embedContext, embedded]);
@@ -318,6 +363,17 @@ export function IntegrationCaseWorkbench({
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
   }, [approvalDirty, reviewDirty, summaryDirty]);
+
+  useEffect(() => {
+    if (!pendingDelete && !pendingDiscard) return;
+    const closeInlineConfirm = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPendingDelete(null);
+      setPendingDiscard(null);
+    };
+    window.addEventListener("keydown", closeInlineConfirm);
+    return () => window.removeEventListener("keydown", closeInlineConfirm);
+  }, [pendingDelete, pendingDiscard]);
 
   const trackOperation = useCallback((accepted: AcceptedOperation) => {
     setOperation(accepted.operation);
@@ -390,6 +446,11 @@ export function IntegrationCaseWorkbench({
     const url = new URL(window.location.href);
     url.searchParams.set("step", nextStep);
     window.history[replace ? "replaceState" : "pushState"]({}, "", url);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById(`workflow-step-${nextStep}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }, [requestBlockedStep, steps, visibleStep]);
 
   useEffect(() => {
@@ -474,8 +535,20 @@ export function IntegrationCaseWorkbench({
     });
   }
 
-  function confirmDiscardEdits(): boolean {
-    return !(reviewDirty || approvalDirty || summaryDirty) || window.confirm("重新加载会丢弃尚未保存的页面编辑，是否继续？");
+  function requestDiscardEdits(target: "reload" | "logout") {
+    if (!(reviewDirty || approvalDirty || summaryDirty)) {
+      if (target === "reload") void loadWorkflow(true);
+      else void logout();
+      return;
+    }
+    setPendingDiscard(target);
+  }
+
+  function confirmPendingDiscard() {
+    const target = pendingDiscard;
+    setPendingDiscard(null);
+    if (target === "reload") void loadWorkflow(true);
+    else if (target === "logout") void logout();
   }
 
   async function handleSaveClinicalSummary() {
@@ -521,15 +594,13 @@ export function IntegrationCaseWorkbench({
     }
   }
 
-  async function handleDeleteAttachment(attachmentId: string, filename: string) {
-    const localEditWarning = reviewDirty || approvalDirty
-      ? " 当前未保存的复核或方案编辑也会被丢弃。"
-      : "";
-    const confirmed = window.confirm(
-      `确定删除病例资料“${filename}”吗？删除后依赖该资料的旧分析和未发布方案将失效。${localEditWarning}`
-    );
-    if (!confirmed) return;
+  function requestDeleteAttachment(attachmentId: string, filename: string) {
+    setPendingDelete({ id: attachmentId, filename });
+  }
 
+  async function confirmDeleteAttachment() {
+    if (!pendingDelete) return;
+    const attachmentId = pendingDelete.id;
     const preserveClinicalSummary = summaryDirty;
     setAction(`delete-attachment:${attachmentId}`);
     setError(null);
@@ -537,6 +608,7 @@ export function IntegrationCaseWorkbench({
     try {
       await deleteCaseAttachment(caseId, attachmentId);
       setAttachmentResults(null);
+      setPendingDelete(null);
       await loadWorkflow(true, preserveClinicalSummary);
       setNotice("病例资料已删除；依赖该资料的旧分析和未发布方案已按现有规则失效。");
     } catch (cause) {
@@ -624,6 +696,28 @@ export function IntegrationCaseWorkbench({
     }
   }
 
+  async function handleRetryRecommendationSync() {
+    if (!embedded || !embedContext || draft?.status !== "approved") return;
+    setAction("recommendation-sync");
+    setRecommendationSyncError(null);
+    try {
+      const payload = await fetchApprovedRecommendationsWithRetry();
+      if (payload.version !== 2 || payload.case_id !== caseId || payload.external_encounter_id !== embedContext.external_encounter_id) {
+        throw new Error("已批准推荐与当前就诊不匹配");
+      }
+      window.parent.postMessage(
+        { type: "fm.recommendations.approved", version: 2, payload },
+        embedContext.parent_origin
+      );
+      postedRecommendationRevision.current = `${payload.draft_id}:${payload.revision}`;
+      setNotice("已重新发送批准的营养素和剂量到开方页。");
+    } catch {
+      setRecommendationSyncError("商品同步仍未成功，请稍后重试；手工开方不受影响。");
+    } finally {
+      setAction(null);
+    }
+  }
+
   async function downloadReportFile(draftId: string) {
     const downloaded = await gateway.downloadReport(draftId);
     const url = URL.createObjectURL(downloaded.blob);
@@ -686,8 +780,19 @@ export function IntegrationCaseWorkbench({
       headerActions={embedded ? undefined : (
         <>
           <a className="workflow-button workflow-button--secondary" href="/integration/cases"><ArrowLeftIcon className="workflow-button__icon" />返回病例入口</a>
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void loadWorkflow(true); }}><ArrowPathIcon className="workflow-button__icon" />重新加载全部状态</button>
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => { if (confirmDiscardEdits()) void logout(); }}><ArrowRightStartOnRectangleIcon className="workflow-button__icon" />退出 {doctor.display_name}</button>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => requestDiscardEdits("reload")}><ArrowPathIcon className="workflow-button__icon" />重新加载全部状态</button>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => requestDiscardEdits("logout")}><ArrowRightStartOnRectangleIcon className="workflow-button__icon" />退出 {doctor.display_name}</button>
+          {pendingDiscard ? (
+            <div className="workflow-inline-confirm workflow-shell__discard-confirm">
+              <span className="workflow-inline-confirm__text">
+                {pendingDiscard === "reload" ? "重新加载" : "退出"}会丢弃尚未保存的复核或方案编辑，是否继续？
+              </span>
+              <div className="workflow-inline-confirm__actions">
+                <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={confirmPendingDiscard}>继续</button>
+                <button className="workflow-button workflow-button--secondary" type="button" disabled={busy} onClick={() => setPendingDiscard(null)}>取消</button>
+              </div>
+            </div>
+          ) : null}
         </>
       )}
     >
@@ -782,11 +887,37 @@ export function IntegrationCaseWorkbench({
                       className="workflow-button workflow-button--danger"
                       type="button"
                       disabled={busy}
-                      aria-busy={action === `delete-attachment:${item.id}`}
-                      onClick={() => void handleDeleteAttachment(item.id, item.filename)}
+                      onClick={() => requestDeleteAttachment(item.id, item.filename)}
                     >
-                      {action === `delete-attachment:${item.id}` ? "正在删除…" : "删除"}
+                      删除
                     </button>
+                  ) : null}
+                  {!fixtureMode && pendingDelete?.id === item.id ? (
+                    <div className="workflow-inline-confirm">
+                      <span className="workflow-inline-confirm__text">
+                        确定删除“{item.filename}”吗？删除后依赖该资料的旧分析和未发布方案将失效。
+                        {reviewDirty || approvalDirty ? "当前未保存的复核或方案编辑也会被丢弃。" : ""}
+                      </span>
+                      <div className="workflow-inline-confirm__actions">
+                        <button
+                          className="workflow-button workflow-button--danger"
+                          type="button"
+                          disabled={busy}
+                          aria-busy={action === `delete-attachment:${item.id}`}
+                          onClick={() => void confirmDeleteAttachment()}
+                        >
+                          {action === `delete-attachment:${item.id}` ? "正在删除…" : "确认删除"}
+                        </button>
+                        <button
+                          className="workflow-button workflow-button--secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setPendingDelete(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
                   ) : null}
                 </li>
               ))}
@@ -936,6 +1067,20 @@ export function IntegrationCaseWorkbench({
             embedded={embedded}
           />
         ) : <p className="workflow-empty">完成复核并生成方案后可编辑最终报告。</p>}
+        {embedded && recommendationSyncError ? (
+          <div className="workflow-retry-panel">
+            <WorkflowNotice tone="warning" live>{recommendationSyncError}</WorkflowNotice>
+            <button
+              className="workflow-button workflow-button--warning"
+              type="button"
+              disabled={busy}
+              aria-busy={action === "recommendation-sync"}
+              onClick={() => void handleRetryRecommendationSync()}
+            >
+              {action === "recommendation-sync" ? "正在同步…" : "重新同步到处方"}
+            </button>
+          </div>
+        ) : null}
       </WorkflowSection> : null}
     </WorkflowShell>
   );

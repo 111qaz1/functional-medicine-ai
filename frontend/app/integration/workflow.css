@@ -390,6 +390,12 @@
 .workflow-attachment-list { display: grid; gap: 10px; margin-top: 16px; }
 .workflow-attachment-list li { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .workflow-attachment-list li > span { color: var(--workflow-success); font-size: 0.78rem; font-weight: 700; }
+
+.workflow-inline-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid rgba(168, 90, 0, 0.32); border-radius: var(--workflow-radius-sm); background: var(--workflow-warning-surface); }
+.workflow-inline-confirm__text { flex: 1 1 32ch; color: var(--workflow-warning); font-size: 0.8rem; line-height: 1.5; }
+.workflow-inline-confirm__actions { display: flex; gap: 8px; }
+.workflow-shell__discard-confirm { flex-basis: 100%; }
+
 .workflow-status-badge { width: fit-content; border-radius: 999px; padding: 3px 8px; background: var(--workflow-success-surface); }
 
 .workflow-status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

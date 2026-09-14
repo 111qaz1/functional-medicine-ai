@@ -254,14 +254,12 @@ class ReviewService:
                 f"{sku.sku_id} 的剂量档位无效、未启用或不属于该 SKU"
             )
         changed = option.option_id != getattr(sku, "dosage_option_id", None)
-        if changed and not override["note"]:
-            raise InvalidDosageOverrideError(f"{sku.display_name} 改为非系统默认档位时必须填写调整备注")
 
         review_prefix = str(getattr(sku, "dosage", "")).startswith("医生复核剂量；") or option.requires_review
         dosage = f"医生复核剂量；{option.display_text}" if review_prefix else option.display_text
         reasons = list(getattr(sku, "dosage_match_reasons", []) or [])
         if changed:
-            reasons.append(f"医生人工改档：{option.label}；备注：{override['note']}")
+            reasons.append(f"医生人工改档：{option.label}" + (f"；备注：{override['note']}" if override["note"] else ""))
         return sku.model_copy(
             update={
                 "dosage": dosage,

@@ -56,14 +56,13 @@ describe("approval payload builder", () => {
     const state = createApprovalDraft(draft);
     state.excludedSkuIds = ["SKU_2"];
     state.dosageSelections.SKU_1 = "alternate";
-    state.dosageNotes.SKU_1 = "根据虚构复核条件调整";
 
     const request = buildApprovalRequest(draft, state);
     expect(request).toMatchObject({
       expected_revision: draft.revision,
       excluded_sku_ids: ["SKU_2"],
       dosage_overrides: [
-        { sku_id: "SKU_1", option_id: "alternate", note: "根据虚构复核条件调整" }
+        { sku_id: "SKU_1", option_id: "alternate", note: null }
       ]
     });
     expect(request.publishable_summary).toContain("功能医学综合分析与首月干预方案");
@@ -75,9 +74,12 @@ describe("approval payload builder", () => {
     expect(() => buildApprovalRequest(draft, state)).toThrow("至少保留一项");
   });
 
-  it("requires a note for a non-default dosage", () => {
+  it("allows a changed dosage without a note", () => {
     const state = createApprovalDraft(draft);
     state.dosageSelections.SKU_1 = "alternate";
-    expect(() => buildApprovalRequest(draft, state)).toThrow("必须填写说明");
+    const request = buildApprovalRequest(draft, state);
+    expect(request.dosage_overrides).toEqual([
+      { sku_id: "SKU_1", option_id: "alternate", note: null }
+    ]);
   });
 });

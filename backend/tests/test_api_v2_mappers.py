@@ -294,8 +294,8 @@ class V2MapperTests(unittest.TestCase):
                 "dosage_overrides": [{"sku_id": "SKU-1", "option_id": "alternate"}],
             }
         )
-        with self.assertRaisesRegex(V2ApiError, "note is required"):
-            approval_request_to_edits(_draft(), no_note)
+        edits = approval_request_to_edits(_draft(), no_note)
+        self.assertIsNone(edits["dosage_overrides"]["SKU-1"]["note"])
 
 
 if __name__ == "__main__":

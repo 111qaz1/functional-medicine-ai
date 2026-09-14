@@ -146,6 +146,44 @@ class LocalRepository:
                     expires_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS external_case_mappings (
+                    issuer TEXT NOT NULL,
+                    external_doctor_id TEXT NOT NULL,
+                    external_encounter_id TEXT NOT NULL,
+                    external_patient_id TEXT NOT NULL,
+                    doctor_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (issuer, external_doctor_id, external_encounter_id),
+                    UNIQUE (case_id)
+                );
+                CREATE TABLE IF NOT EXISTS embed_nonces (
+                    issuer TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    PRIMARY KEY (issuer, nonce)
+                );
+                CREATE TABLE IF NOT EXISTS embed_tickets (
+                    token_hash TEXT PRIMARY KEY,
+                    issuer TEXT NOT NULL,
+                    external_doctor_id TEXT NOT NULL,
+                    external_patient_id TEXT NOT NULL,
+                    external_encounter_id TEXT NOT NULL,
+                    parent_origin TEXT NOT NULL,
+                    doctor_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS embed_session_contexts (
+                    session_id TEXT PRIMARY KEY,
+                    issuer TEXT NOT NULL,
+                    external_encounter_id TEXT NOT NULL,
+                    parent_origin TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS seed_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -792,6 +830,135 @@ class LocalRepository:
     def delete_expired_sessions(self, now_iso: str) -> None:
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso,))
+
+    def claim_embed_nonce(self, *, issuer: str, nonce: str, expires_at: str, now_iso: str) -> bool:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute("DELETE FROM embed_nonces WHERE expires_at <= ?", (now_iso,))
+            try:
+                connection.execute(
+                    "INSERT INTO embed_nonces (issuer, nonce, expires_at) VALUES (?, ?, ?)",
+                    (issuer, nonce, expires_at),
+                )
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    def get_external_case_mapping(
+        self,
+        *,
+        issuer: str,
+        external_doctor_id: str,
+        external_encounter_id: str,
+    ) -> dict[str, str] | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                """
+                SELECT * FROM external_case_mappings
+                WHERE issuer = ? AND external_doctor_id = ? AND external_encounter_id = ?
+                """,
+                (issuer, external_doctor_id, external_encounter_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_external_case_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO external_case_mappings (
+                    issuer, external_doctor_id, external_encounter_id,
+                    external_patient_id, doctor_id, case_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(issuer, external_doctor_id, external_encounter_id) DO UPDATE SET
+                    external_patient_id = excluded.external_patient_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    mapping["issuer"],
+                    mapping["external_doctor_id"],
+                    mapping["external_encounter_id"],
+                    mapping["external_patient_id"],
+                    mapping["doctor_id"],
+                    mapping["case_id"],
+                    mapping["created_at"],
+                    mapping["updated_at"],
+                ),
+            )
+        stored = self.get_external_case_mapping(
+            issuer=mapping["issuer"],
+            external_doctor_id=mapping["external_doctor_id"],
+            external_encounter_id=mapping["external_encounter_id"],
+        )
+        if stored is None:
+            raise RuntimeError("External case mapping was not persisted")
+        return stored
+
+    def save_embed_ticket(self, ticket: dict[str, str]) -> None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO embed_tickets (
+                    token_hash, issuer, external_doctor_id, external_patient_id,
+                    external_encounter_id, parent_origin, doctor_id, case_id, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ticket["token_hash"],
+                    ticket["issuer"],
+                    ticket["external_doctor_id"],
+                    ticket["external_patient_id"],
+                    ticket["external_encounter_id"],
+                    ticket["parent_origin"],
+                    ticket["doctor_id"],
+                    ticket["case_id"],
+                    ticket["expires_at"],
+                ),
+            )
+
+    def consume_embed_ticket(self, *, token_hash: str, consumed_at: str) -> dict[str, str] | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            cursor = connection.execute(
+                """
+                UPDATE embed_tickets SET consumed_at = ?
+                WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+                """,
+                (consumed_at, token_hash, consumed_at),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM embed_tickets WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_embed_session_context(self, context: dict[str, str]) -> None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO embed_session_contexts (
+                    session_id, issuer, external_encounter_id, parent_origin, case_id, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    context["session_id"],
+                    context["issuer"],
+                    context["external_encounter_id"],
+                    context["parent_origin"],
+                    context["case_id"],
+                    context["expires_at"],
+                ),
+            )
+
+    def get_embed_session_context(self, session_id: str, now_iso: str) -> dict[str, str] | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                """
+                SELECT * FROM embed_session_contexts
+                WHERE session_id = ? AND expires_at > ?
+                """,
+                (session_id, now_iso),
+            ).fetchone()
+        return dict(row) if row else None
 
 
 InMemoryRepository = LocalRepository

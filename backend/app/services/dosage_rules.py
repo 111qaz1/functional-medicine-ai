@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-DOSAGE_SOURCE_VERSION = "client-dose-workbook-2026-07-v1"
+DOSAGE_SOURCE_VERSION = "client-dose-workbook-2026-09-joolun-daily-v2"
 _DOSE_SIGNAL_RE = re.compile(
     r"(每日|每周|隔日|单次|每次|加服|服用|\d+(?:\.\d+)?\s*粒|半粒|"
     r"\d+\s*[-–—至]\s*\d+\s*岁[：:])"
@@ -271,6 +271,40 @@ def _regimen_from_text(text: str) -> dict[str, Any]:
     }
 
 
+def _normalize_partner_dosage(
+    sku_id: str,
+    display_text: str,
+    regimen: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Apply explicitly approved partner-prescription dose normalization.
+
+    Joolun exposes daily integer quantities only. The approved D3+K business rule
+    therefore replaces its alternate-day/weekly maintenance choices with one
+    capsule daily while preserving the clinical scenario and option identity.
+    """
+    if sku_id != "sku_vitamin_d3_k":
+        return display_text, regimen
+
+    normalized_text = re.sub(
+        r"隔日\s*1\s*粒\s*或\s*每周\s*3\s*[-–—至]\s*4\s*粒",
+        "每日 1 粒",
+        display_text,
+    )
+    normalized_regimen = {
+        **regimen,
+        "unit": "粒",
+        "single_dose_min": 1.0,
+        "single_dose_max": 1.0,
+        "daily_frequency_min": 1.0,
+        "daily_frequency_max": 1.0,
+        "weekly_frequency_min": None,
+        "weekly_frequency_max": None,
+        "daily_max": 1.0,
+        "maintenance": None,
+    }
+    return normalized_text, normalized_regimen
+
+
 def _priority_for(label: str, regimen: dict[str, Any]) -> int:
     if any(term in label for term in _EXPLICIT_EVENT_TERMS):
         base = 100
@@ -301,6 +335,7 @@ def parse_dosage_options(
     options: list[dict[str, Any]] = []
     for label, display_text in scenarios:
         regimen = _regimen_from_text(display_text)
+        display_text, regimen = _normalize_partner_dosage(sku_id, display_text, regimen)
         marker_ranges, marker_directions = _marker_rules(sku_id, label)
         trigger_terms = _extract_trigger_terms(label)
         explicit_terms = [term for term in _EXPLICIT_EVENT_TERMS if term in label]

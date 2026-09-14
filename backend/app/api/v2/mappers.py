@@ -43,7 +43,6 @@ from app.domain.models import (
     DraftRecommendationItem,
     EvidenceStatus,
     FileIntakeStatus,
-    FileParseStatus,
     FinalGenerationStatus,
     FoodSensitivityItem,
     RecommendationDraft,
@@ -114,10 +113,6 @@ def attachment_is_accepted(uploaded: UploadedFile) -> bool:
     return uploaded.intake_status != FileIntakeStatus.invalid
 
 
-def attachment_is_parsed(uploaded: UploadedFile) -> bool:
-    return uploaded.parse_status == FileParseStatus.parsed
-
-
 def build_uploaded_file(
     *,
     case_id: str,
@@ -143,12 +138,6 @@ def build_uploaded_file(
         precheck_warning=intake.precheck_warning,
         validation_error=intake.validation_error,
     )
-
-
-def mark_attachment_parse_failed(uploaded: UploadedFile) -> UploadedFile:
-    uploaded.parse_status = FileParseStatus.failed
-    uploaded.validation_error = "Attachment parsing failed."
-    return uploaded
 
 
 def attachment_to_response(uploaded: UploadedFile) -> AttachmentResponse:
@@ -798,13 +787,6 @@ def approval_request_to_edits(
                 ),
             )
         note = (override.note or "").strip() or None
-        if override.option_id != item.dosage_option_id and note is None:
-            raise V2ApiError(
-                status=422,
-                code="DOSAGE_OVERRIDE_NOTE_REQUIRED",
-                title="Dosage override note required",
-                detail=f"A note is required when changing the dosage for SKU '{override.sku_id}'.",
-            )
         overrides[override.sku_id] = {
             "option_id": override.option_id,
             "note": note,

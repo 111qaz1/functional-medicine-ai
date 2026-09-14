@@ -214,19 +214,21 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.assertEqual(cleared.status_code, 200, cleared.text)
         self.assertIsNone(cleared.json()["clinical_summary"])
 
-        uploaded = self.client.post(
-            f"/api/v2/cases/{case_id}/attachments",
-            headers=self.headers,
-            files=[
-                ("files", ("labs.txt", b"Synthetic marker 12 U/L 1-10", "text/plain")),
-                ("files", ("unsafe.exe", b"not allowed", "application/octet-stream")),
-            ],
-            data={"attachment_type": "medical_record"},
-        )
+        with patch.object(self.container.parsing_service, "parse") as parse:
+            uploaded = self.client.post(
+                f"/api/v2/cases/{case_id}/attachments",
+                headers=self.headers,
+                files=[
+                    ("files", ("labs.txt", b"Synthetic marker 12 U/L 1-10", "text/plain")),
+                    ("files", ("unsafe.exe", b"not allowed", "application/octet-stream")),
+                ],
+                data={"attachment_type": "medical_record"},
+            )
+        parse.assert_not_called()
         self.assertEqual(uploaded.status_code, 201, uploaded.text)
         self.assertEqual(uploaded.json()["meta"]["accepted_count"], 1)
         self.assertEqual(uploaded.json()["meta"]["failed_count"], 1)
-        self.assertEqual([item["status"] for item in uploaded.json()["items"]], ["parsed", "failed"])
+        self.assertEqual([item["status"] for item in uploaded.json()["items"]], ["pending", "failed"])
 
         with patch.object(
             self.container.questionnaire_import_service,
@@ -494,7 +496,7 @@ class V2WorkflowApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201, response.text)
         payload = response.json()
-        self.assertEqual([item["status"] for item in payload["items"]], ["parsed", "failed"])
+        self.assertEqual([item["status"] for item in payload["items"]], ["pending", "failed"])
         self.assertEqual(payload["meta"]["accepted_count"], 1)
         self.assertEqual(payload["meta"]["failed_count"], 1)
         self.assertEqual(payload["items"][1]["failure"]["code"], "ATTACHMENT_PREFLIGHT_FAILED")

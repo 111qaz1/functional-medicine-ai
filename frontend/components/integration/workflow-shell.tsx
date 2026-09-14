@@ -34,6 +34,7 @@ export interface WorkflowShellProps {
   contextSlot?: ReactNode;
   children: ReactNode;
   theme?: WorkflowTheme;
+  embedded?: boolean;
 }
 
 export function WorkflowShell({
@@ -48,13 +49,14 @@ export function WorkflowShell({
   brandSlot,
   contextSlot,
   children,
-  theme = "paracelsus"
+  theme = "paracelsus",
+  embedded = false
 }: WorkflowShellProps) {
   const currentStepIndex = Math.max(0, steps.findIndex((step) => step.id === currentStep));
   const currentStepCopy = workflowCopy.steps[currentStep];
 
   return (
-    <div className="workflow-app" data-theme={theme} data-current-step={currentStep}>
+    <div className="workflow-app" data-theme={theme} data-current-step={currentStep} data-embedded={embedded || undefined}>
       <aside className="workflow-shell__sidebar" aria-label="病例工作流导航">
         <div className="workflow-shell__brand">
           {brandSlot ?? (

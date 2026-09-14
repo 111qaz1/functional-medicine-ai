@@ -57,6 +57,11 @@ class AppSettings:
     max_pdf_pages: int = 50
     analysis_worker_count: int = 20
     case_document_worker_count: int = 2
+    joolun_embed_enabled: bool = False
+    joolun_embed_shared_secret: str | None = None
+    joolun_embed_base_url: str | None = None
+    joolun_embed_allowed_parent_origins: tuple[str, ...] = ()
+    joolun_sku_mapping_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +178,25 @@ def load_settings() -> AppSettings:
         1,
         min(int(os.getenv("FM_CASE_DOCUMENT_WORKERS", "2")), 2),
     )
+    joolun_embed_enabled = os.getenv("FM_JOOLUN_EMBED_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    joolun_embed_shared_secret = (os.getenv("FM_JOOLUN_EMBED_SHARED_SECRET") or "").strip() or None
+    joolun_embed_base_url = (os.getenv("FM_JOOLUN_EMBED_BASE_URL") or "").strip().rstrip("/") or None
+    joolun_embed_allowed_parent_origins = tuple(
+        dict.fromkeys(
+            origin.strip().rstrip("/")
+            for origin in (os.getenv("FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS") or "").split(",")
+            if origin.strip()
+        )
+    )
+    joolun_sku_mapping_path = _resolve_path(
+        "FM_JOOLUN_SKU_MAPPING_PATH",
+        data_dir / "joolun_sku_mapping.json",
+    )
 
     return AppSettings(
         project_root=project_root,
@@ -209,6 +233,11 @@ def load_settings() -> AppSettings:
         max_pdf_pages=max_pdf_pages,
         analysis_worker_count=analysis_worker_count,
         case_document_worker_count=case_document_worker_count,
+        joolun_embed_enabled=joolun_embed_enabled,
+        joolun_embed_shared_secret=joolun_embed_shared_secret,
+        joolun_embed_base_url=joolun_embed_base_url,
+        joolun_embed_allowed_parent_origins=joolun_embed_allowed_parent_origins,
+        joolun_sku_mapping_path=joolun_sku_mapping_path,
     )
 
 

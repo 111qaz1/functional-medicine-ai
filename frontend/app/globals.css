@@ -33,6 +33,11 @@ body {
   font-family: var(--font-body);
 }
 
+/* 嵌入甲方 iframe 时保持白底，避免工作台内容下方露出米色渐变 */
+body:has(.workflow-app[data-embedded="true"]) {
+  background: #ffffff;
+}
+
 a {
   color: inherit;
   text-decoration: none;

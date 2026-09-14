@@ -45,6 +45,9 @@ services:
     environment:
       INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://backend:8000}
       FM_API_V2_BEARER_TOKEN: ${FM_API_V2_BEARER_TOKEN:-}
+      FM_SESSION_COOKIE_SECURE: ${FM_SESSION_COOKIE_SECURE:-0}
+      FM_JOOLUN_EMBED_BASE_URL: ${FM_JOOLUN_EMBED_BASE_URL:-}
+      FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS: ${FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS:-}
     depends_on:
       backend:
         condition: service_healthy

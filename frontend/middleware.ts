@@ -3,7 +3,35 @@ import { NextResponse } from "next/server";
 
 const INTERNAL_API_PREFIX = "/api/internal";
 const V2_API_PREFIX = "/api/v2";
+const EMBED_PAGE_PREFIX = "/integration/embed";
 const DEFAULT_INTERNAL_API_BASE_URL = "http://127.0.0.1:8000";
+
+function allowedFrameAncestors(): string {
+  const configured = process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS || "";
+  const origins = configured
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter((value) => {
+      try {
+        const url = new URL(value);
+        return ["http:", "https:"].includes(url.protocol) && url.origin === value;
+      } catch {
+        return false;
+      }
+    });
+  return origins.length ? origins.join(" ") : "'none'";
+}
+
+function publicRequestOrigin(request: NextRequest): string {
+  const configured = process.env.FM_JOOLUN_EMBED_BASE_URL?.trim();
+  if (!configured) return request.nextUrl.origin;
+  try {
+    const url = new URL(configured);
+    return ["http:", "https:"].includes(url.protocol) ? url.origin : request.nextUrl.origin;
+  } catch {
+    return request.nextUrl.origin;
+  }
+}
 
 export function buildBackendUrl(request: NextRequest): URL {
   const backendBaseUrl =
@@ -22,6 +50,16 @@ export function buildBackendUrl(request: NextRequest): URL {
 }
 
 export function middleware(request: NextRequest) {
+  if (
+    request.nextUrl.pathname === EMBED_PAGE_PREFIX ||
+    request.nextUrl.pathname.startsWith(`${EMBED_PAGE_PREFIX}/`)
+  ) {
+    const response = NextResponse.next();
+    response.headers.set("Content-Security-Policy", `frame-ancestors ${allowedFrameAncestors()}`);
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
   if (request.nextUrl.pathname === V2_API_PREFIX || request.nextUrl.pathname.startsWith(`${V2_API_PREFIX}/`)) {
     const session = request.cookies.get("fm_session")?.value;
     if (!session) {
@@ -44,7 +82,7 @@ export function middleware(request: NextRequest) {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       const origin = request.headers.get("Origin");
       const fetchSite = request.headers.get("Sec-Fetch-Site");
-      if (origin !== request.nextUrl.origin || (fetchSite && fetchSite !== "same-origin")) {
+      if (origin !== publicRequestOrigin(request) || (fetchSite && fetchSite !== "same-origin")) {
         return NextResponse.json(
           {
             type: "urn:fm-ai:problem:cross-origin-request-rejected",
@@ -80,7 +118,8 @@ export const config = {
     "/health/:path*",
     "/docs/:path*",
     "/redoc/:path*",
-    "/openapi.json"
+    "/openapi.json",
+    "/integration/embed/:path*"
   ],
   runtime: "nodejs"
 };

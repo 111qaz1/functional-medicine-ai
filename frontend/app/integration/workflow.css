@@ -390,6 +390,12 @@
 .workflow-attachment-list { display: grid; gap: 10px; margin-top: 16px; }
 .workflow-attachment-list li { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .workflow-attachment-list li > span { color: var(--workflow-success); font-size: 0.78rem; font-weight: 700; }
+
+.workflow-inline-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid rgba(168, 90, 0, 0.32); border-radius: var(--workflow-radius-sm); background: var(--workflow-warning-surface); }
+.workflow-inline-confirm__text { flex: 1 1 32ch; color: var(--workflow-warning); font-size: 0.8rem; line-height: 1.5; }
+.workflow-inline-confirm__actions { display: flex; gap: 8px; }
+.workflow-shell__discard-confirm { flex-basis: 100%; }
+
 .workflow-status-badge { width: fit-content; border-radius: 999px; padding: 3px 8px; background: var(--workflow-success-surface); }
 
 .workflow-status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -547,6 +553,109 @@
 .workflow-guidance > div { display: grid; gap: 3px; }
 .workflow-guidance p { margin: 0; color: var(--workflow-ink-soft); }
 .workflow-guidance .workflow-button { flex: 0 0 auto; }
+
+.workflow-app[data-embedded="true"] {
+  display: block;
+  min-height: 0;
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.workflow-app[data-embedded="true"] .workflow-shell__sidebar {
+  position: static;
+  height: auto;
+  overflow: visible;
+  border-bottom: 1px solid var(--workflow-border);
+  background: #ffffff;
+  color: var(--workflow-ink);
+}
+
+.workflow-app[data-embedded="true"] .workflow-shell__brand,
+.workflow-app[data-embedded="true"] .workflow-shell__context,
+.workflow-app[data-embedded="true"] .workflow-shell__nav-heading,
+.workflow-app[data-embedded="true"] .workflow-shell__disclaimer,
+.workflow-app[data-embedded="true"] .workflow-shell__topbar {
+  display: none;
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps {
+  overflow-x: auto;
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps ol {
+  display: grid;
+  min-width: 520px;
+  grid-template-columns: repeat(5, minmax(104px, 1fr));
+  gap: 0;
+  padding: 0;
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps li + li {
+  border-left: 1px solid var(--workflow-border);
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps button {
+  min-height: 58px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  border-radius: 0;
+  padding: 7px 9px;
+  color: var(--workflow-muted);
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps button:hover {
+  background: var(--workflow-surface-muted);
+  color: var(--workflow-ink);
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps li[data-state="current"] button,
+.workflow-app[data-embedded="true"] .integration-workflow-steps li[data-state="error"] button {
+  background: var(--workflow-accent-surface);
+  color: var(--workflow-accent-strong);
+}
+
+.workflow-app[data-embedded="true"] .integration-workflow-steps li[data-state="complete"] button {
+  color: var(--workflow-success);
+}
+
+.workflow-app[data-embedded="true"] .workflow-step__index {
+  border-color: var(--workflow-border-strong);
+}
+
+.workflow-app[data-embedded="true"] .workflow-shell__page {
+  width: 100%;
+  padding: 12px 10px 24px;
+}
+
+.workflow-app[data-embedded="true"] .workflow-shell__header {
+  padding-bottom: 10px;
+}
+
+.workflow-app[data-embedded="true"] .workflow-shell__identity h1 {
+  font-size: 1.08rem;
+}
+
+.workflow-app[data-embedded="true"] .workflow-section {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.workflow-app[data-embedded="true"] .workflow-section__header,
+.workflow-app[data-embedded="true"] .workflow-section__body {
+  padding-inline: 12px;
+}
+
+.workflow-app[data-embedded="true"] .workflow-definition-grid,
+.workflow-app[data-embedded="true"] .workflow-finding-grid,
+.workflow-app[data-embedded="true"] .workflow-food-groups,
+.workflow-app[data-embedded="true"] .workflow-summary-grid,
+.workflow-app[data-embedded="true"] .workflow-system-grid,
+.workflow-app[data-embedded="true"] .workflow-lifestyle-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workflow-app[data-embedded="true"] .markdown-editor__modes button:nth-child(2) {
+  display: none;
+}
 
 @media (min-width: 768px) {
   .workflow-action-dock { position: sticky; bottom: 12px; background: color-mix(in srgb, var(--workflow-surface) 96%, transparent); }

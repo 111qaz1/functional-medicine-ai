@@ -1,5 +1,7 @@
 # 正式部署推荐配置
 
+172.16.0.140 的甲方前端与 AI 内网集成部署（独立 Node 换票桥接）见甲方仓库 `docs/joolun-server-deployment.md`。本文适用于宿主机 Nginx + HTTPS，不能与内网网关同时占用 3100。
+
 本文档给甲方正式部署时使用，重点说明 `.env`、Nginx、端口、HTTPS、千问 API Key 和 RAG 模型目录如何配置。
 
 ## 1. 部署目标
@@ -12,12 +14,12 @@
         | HTTPS 443
         v
 Nginx
-        |-- 所有请求 -> 127.0.0.1:3000 (Next.js)
+        |-- 所有请求 -> 127.0.0.1:3100 (Next.js)
                               |
                               `-> backend:8000 (FastAPI)
 ```
 
-对外只开放 `80/443`。`3000/8000` 只允许服务器本机访问，不直接暴露到公网。
+对外只开放 `80/443`。`3100/7800` 只允许服务器本机访问，不直接暴露到公网。
 
 ## 2. 必备文件和资产
 
@@ -60,8 +62,8 @@ Nginx
 
 ```env
 # 端口只绑定服务器本机，由 Nginx 对外代理
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
+BACKEND_PORT=7800
+FRONTEND_PORT=3100
 
 # 正式域名，用于外部接口生成绝对下载地址
 FM_PUBLIC_BASE_URL=https://fm.example.com
@@ -149,8 +151,8 @@ docker compose ps
 服务器本机验证：
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:3000
+curl http://127.0.0.1:7800/health
+curl http://127.0.0.1:3100
 ```
 
 前端通过同源 `/api/internal/*` 访问 API，Docker Compose 会把请求转发到 `http://backend:8000`，不再需要浏览器端后端地址。
@@ -204,17 +206,17 @@ sudo systemctl reload nginx
 正式环境建议：
 
 - 对外开放：`80`、`443`。
-- 不对外开放：`3000`、`8000`。
-- `3000/8000` 只给 Nginx 在服务器本机访问。
+- 不对外开放：`3100`、`7800`。
+- `3100/7800` 只给 Nginx 在服务器本机访问。
 
 Docker Compose 当前默认绑定：
 
 ```text
-127.0.0.1:3000 -> frontend
-127.0.0.1:8000 -> backend
+127.0.0.1:3100 -> frontend
+127.0.0.1:7800 -> backend
 ```
 
-如果 `.env` 中改成 `FRONTEND_PORT=3100`、`BACKEND_PORT=8100`，Nginx 代理地址也要同步改成 `127.0.0.1:3100` 和 `127.0.0.1:8100`。
+如果 `.env` 中改成 `FRONTEND_PORT=3100`、`BACKEND_PORT=8100`，Nginx 仍代理 `127.0.0.1:3100`；`8100` 仅用于后端本机排障，Next.js 内部仍访问 `backend:8000`。
 
 ## 10. 外部接口安全
 
@@ -238,8 +240,8 @@ POST /api/v1/auth/token
 服务器本机：
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:3000
+curl http://127.0.0.1:7800/health
+curl http://127.0.0.1:3100
 ```
 
 域名：

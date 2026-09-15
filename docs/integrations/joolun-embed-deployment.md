@@ -1,5 +1,8 @@
 # Joolun 嵌入模式生产部署
 
+`172.16.0.140` HTTP 内网联调采用四服务 Compose 与独立 Node 换票桥接，详见
+甲方仓库 `docs/joolun-server-deployment.md`。下面的 HTTPS/Java 部署说明适用于后续正式切换。
+
 本文档说明基础部署完成之上，启用"甲方开方页嵌入 AI 工作流"所需的增量配置。
 适用于甲方部署融合系统的场景。
 

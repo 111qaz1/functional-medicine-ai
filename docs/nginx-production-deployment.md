@@ -1,5 +1,7 @@
 # Nginx 正式部署说明
 
+172.16.0.140 的甲方前端与 AI 内网集成部署（独立 Node 换票桥接）见甲方仓库 `docs/joolun-server-deployment.md`。本文适用于宿主机 Nginx + HTTPS，不能与内网网关同时占用 3100。
+
 这份说明用于正式环境。正式环境统一通过 Nginx 暴露 `80/443`；Nginx 只连接 Next.js，Next.js 再通过内部地址访问 FastAPI。
 
 完整 `.env`、端口、HTTPS、千问 API Key 和 RAG 模型目录推荐配置见：`docs/production-recommended-config.md`。
@@ -12,12 +14,12 @@
         | HTTPS 443
         v
 Nginx 反向代理
-        |-- 所有请求 -> 127.0.0.1:3000 (Next.js)
+        |-- 所有请求 -> 127.0.0.1:3100 (Next.js)
                               |
                               `-> backend:8000 (FastAPI)
 ```
 
-正式环境只需要对外开放 `80` 和 `443`。`3000`、`8000` 不对外开放。
+正式环境只需要对外开放 `80` 和 `443`。`3100`、`7800` 不对外开放。
 
 ## 环境变量
 
@@ -42,8 +44,8 @@ Docker Compose 会为 Next.js 设置 `INTERNAL_API_BASE_URL=http://backend:8000`
 当前 `compose.yaml` 默认只把容器端口绑定到服务器本机：
 
 ```text
-127.0.0.1:3000 -> frontend
-127.0.0.1:8000 -> backend
+127.0.0.1:3100 -> frontend
+127.0.0.1:7800 -> backend
 ```
 
 启动：
@@ -55,8 +57,8 @@ docker compose up --build -d
 本机验证：
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:3000
+curl http://127.0.0.1:7800/health
+curl http://127.0.0.1:3100
 ```
 
 ## 非 Docker 启动
@@ -67,15 +69,16 @@ curl http://127.0.0.1:3000
 cd functional-medicine-ai
 source .venv/bin/activate
 export PYTHONPATH=backend
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --host 127.0.0.1 --port 7800
 ```
 
 前端生产启动：
 
 ```bash
 cd functional-medicine-ai/frontend
+export INTERNAL_API_BASE_URL=http://127.0.0.1:7800
 npm run build
-npm run start -- --hostname 127.0.0.1 --port 3000
+npm run start -- --hostname 127.0.0.1 --port 3100
 ```
 
 ## Nginx 配置
@@ -123,8 +126,8 @@ sudo systemctl reload nginx
 服务器本机：
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:3000
+curl http://127.0.0.1:7800/health
+curl http://127.0.0.1:3100
 ```
 
 域名访问：
@@ -146,6 +149,6 @@ curl https://正式域名/openapi.json
 安全检查：
 
 - 公网只开放 `80/443`。
-- 不直接开放 `3000/8000`。
+- 不直接开放 `3100/7800`。
 - 浏览器地址栏显示 HTTPS 正常。
 - 登录后刷新页面仍保持会话。

@@ -43,6 +43,10 @@
 
 ## Docker 快速启动
 
+AI 运行配置保存于本仓库 `.env`，可分享模板为 `.env.example`。
+业务前端、Nginx、独立桥接及四服务 Compose 位于业务前端仓库；集成部署说明见该仓库
+`docs/joolun-server-deployment.md`，本地命令见 `docs/joolun-local-server-deployment.md`。
+
 ### 1. 获取主分支
 
 ```bash

@@ -1,5 +1,7 @@
 # Functional Medicine AI production reverse proxy example.
 # Replace fm.example.com with the real domain and update certificate paths.
+# Host Nginx + local compose.yaml uses 127.0.0.1:3100.
+# For the four-service HTTP server gateway, use docs/joolun-server-deployment.md instead.
 
 server {
     listen 80;
@@ -24,7 +26,7 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3100;
         proxy_read_timeout 900s;
         proxy_send_timeout 900s;
     }

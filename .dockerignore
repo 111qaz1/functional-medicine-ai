@@ -1,6 +1,13 @@
 .git
 .env
 .env.local
+.env.*
+**/.env
+**/.env.*
+*.env
+frontend/.next-dev
+.runtime-*
+tmp
 .gitignore
 .runtime
 backend/.runtime

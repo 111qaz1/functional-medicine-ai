@@ -4,8 +4,7 @@ const nextConfig: NextConfig = {
   distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   typedRoutes: true,
   experimental: {
-    // Allow a 100 MiB batch plus multipart overhead; FastAPI enforces business limits.
-    middlewareClientMaxBodySize: "110mb",
+    middlewareClientMaxBodySize: "60mb",
     proxyTimeout: 900_000
   }
 };

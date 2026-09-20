@@ -21,11 +21,6 @@ frontend/out/
 frontend/tsconfig.tsbuildinfo
 .env
 .env.local
-.env.server
-.env.*.local
-.env.backup-*
-delivery/
-tmp/
 context.md
 work/
 bge-m3/

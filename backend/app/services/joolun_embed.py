@@ -15,6 +15,10 @@ from app.domain.models import WorkspaceScope
 SIGNATURE_MAX_SKEW = timedelta(minutes=5)
 TICKET_LIFETIME = timedelta(seconds=60)
 EMBED_SESSION_LIFETIME = timedelta(hours=8)
+DIGESTIVE_ENZYME_PER_MEAL_OPTIONS = frozenset({
+    "sku_digestive_enzymes:dose_f13b6d46fa",
+    "sku_digestive_enzymes:dose_a8089f5dd9",
+})
 
 
 class JoolunEmbedError(ValueError):
@@ -256,7 +260,34 @@ class JoolunEmbedService:
         dosage_text = str(recommendation.dosage or "")
 
         quantity: int | None = None
-        if re.search(r"每日\s*1\s*[-–—至]\s*2\s*粒", dosage_text):
+        is_digestive_enzyme = getattr(recommendation, "sku_id", None) == "sku_digestive_enzymes"
+        # Use the effective approved wording, including the doctor's selected option.
+        # The strengthened enzyme option's legacy regimen incorrectly encodes 1/day.
+        daily_text = re.search(
+            r"每日\s*(\d+(?:\.\d+)?)\s*(?:[-–—至]\s*(\d+(?:\.\d+)?))?\s*粒",
+            dosage_text,
+        ) if is_digestive_enzyme and unit == "粒" else None
+        if daily_text:
+            quantity = cls._positive_integer(float(daily_text.group(2) or daily_text.group(1)))
+        elif (
+            is_digestive_enzyme
+            and getattr(recommendation, "dosage_option_id", None) in DIGESTIVE_ENZYME_PER_MEAL_OPTIONS
+            and unit == "粒"
+            and re.search(r"每次\s*1\s*粒", dosage_text)
+            and not re.search(r"每日|每天|每周|隔日|隔天|\d+\s*次", dosage_text)
+            and single_min == single_max == 1
+            and frequency_min is None and frequency_max is None and daily_max is None
+            and cls._regimen_value(regimen, "weekly_frequency_min") is None
+            and cls._regimen_value(regimen, "weekly_frequency_max") is None
+            and cls._regimen_value(regimen, "interval_hours_min") is None
+            and cls._regimen_value(regimen, "interval_hours_max") is None
+        ):
+            # Only these two confirmed per-meal options mean all three meals.
+            return {
+                "status": "resolved", "unit": unit, "quantity": 3,
+                "breakfast_dose": 1, "lunch_dose": 1, "dinner_dose": 1,
+            }
+        elif re.search(r"每日\s*1\s*[-–—至]\s*2\s*粒", dosage_text):
             quantity = 2
         elif (
             single_min is not None
@@ -265,9 +296,9 @@ class JoolunEmbedService:
             and frequency_max == frequency_min
         ):
             quantity = cls._positive_integer(single_max * frequency_max)
-        if quantity is None and single_min == single_max and cls._positive_integer(daily_max) is not None:
+        if quantity is None and daily_text is None and single_min == single_max and cls._positive_integer(daily_max) is not None:
             quantity = cls._positive_integer(daily_max)
-        if quantity is None:
+        if quantity is None and daily_text is None:
             daily_cap = cls._positive_integer(daily_max)
             per_dose_ceiling = (
                 cls._positive_integer(single_max * frequency_max)

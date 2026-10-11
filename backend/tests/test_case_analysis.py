@@ -452,6 +452,200 @@ class DocumentTypeClassificationTests(unittest.TestCase):
         self.assertEqual(normalized.food_sensitivity.high_foods, [])
         self.assertEqual(normalized.food_sensitivity.source_page, 3)
 
+    def test_food_empty_summary_cells_never_become_labels(self) -> None:
+        for degree, grade in (("轻度", "1"), ("中度", "2"), ("重度", "3")):
+            for suffix in ("过敏", "敏感"):
+                for empty in ("", "：", "：无", " 阴性", "：未检出"):
+                    with self.subTest(degree=degree, suffix=suffix, empty=empty):
+                        uploaded = self._uploaded_file(
+                            filename="慢性食物敏感.pdf",
+                            pages=[f'“{grade}级”{degree}慢性{suffix}{empty}'],
+                        )
+                        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+                            uploaded,
+                            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+                        )
+                        self.assertEqual(normalized.food_sensitivity.items, [])
+                        self.assertEqual(normalized.food_sensitivity.high_foods, [])
+
+    def test_food_summary_formats_keep_real_severe_foods_and_exact_evidence(self) -> None:
+        lines = (
+            '“3级”重度慢性过敏：花生、虾',
+            ' " III 级 " 重度 慢性 食物 敏感 : 花生、虾 ',
+            '‘3级’强阳性 花生、虾',
+            '重度(High)：花生、虾',
+            '重度：花生、虾',
+        )
+        for line in lines:
+            with self.subTest(line=line):
+                uploaded = self._uploaded_file(
+                    filename="慢性食物敏感.pdf",
+                    pages=["慢性食物过敏检测结果\n花生科普介绍\n" + line],
+                )
+                normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+                    uploaded,
+                    DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+                )
+                self.assertEqual(normalized.food_sensitivity.high_foods, ["花生", "虾"])
+                for item in normalized.food_sensitivity.items:
+                    self.assertEqual(item.source_text, " ".join(line.split()).replace("：", ":"))
+                    self.assertEqual(item.source_page, 1)
+
+    def test_food_labeled_empty_summary_cannot_consume_next_line(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=["检测结果汇总\n轻度(Mild)：\n中度(Moderate)：鸡蛋\n重度(High)："],
+        )
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+        )
+        self.assertEqual(normalized.food_sensitivity.mild_foods, [])
+        self.assertEqual(normalized.food_sensitivity.moderate_foods, ["鸡蛋"])
+        self.assertEqual(normalized.food_sensitivity.high_foods, [])
+        self.assertEqual(normalized.food_sensitivity.items[0].source_text, "中度(Moderate):鸡蛋")
+
+    def test_food_summary_ignores_embedded_category_columns(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=[
+                "序号 项目名称 检测结果 U/ml 级别 程度 类别\n"
+                "1 鸡蛋 115.8 2级 中度慢性过敏 蛋类\n"
+                "5 牛奶 87.7 1级 轻度慢性过敏 奶制品"
+            ],
+        )
+        entries, warnings = CaseAnalysisService._source_food_sensitivity_entries(uploaded)
+        self.assertEqual(entries, [])
+        self.assertEqual(warnings, [])
+
+    def test_food_summary_grade_conflict_still_requires_review(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=['“1级”重度慢性过敏 花生\n牛奶 87.7 1级 中度慢性过敏'],
+        )
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+        )
+        food = normalized.food_sensitivity
+        self.assertEqual(food.high_foods, [])
+        self.assertEqual([(item.name, item.raw_value, item.severity) for item in food.items],
+                         [("牛奶", "87.7", "ungraded")])
+        self.assertIn("汇总行的等级与程度不一致", food.warning)
+        self.assertIn("项目牛奶的等级与程度不一致", food.warning)
+
+    def _anonymized_food_summary_report(self) -> UploadedFile:
+        return self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=[
+                "慢性食物过敏检测结果 IgG",
+                '检测结果汇总\n“1级”轻度慢性过敏 鸡蛋黄、鸡蛋白、卵类粘蛋白、牛奶、水解奶粉\n'
+                '“2级”中度慢性过敏 鸡蛋、β-乳球蛋白\n“3级”重度慢性过敏',
+                "鸡蛋 115.8 2级 中度慢性过敏\n鸡蛋黄 87.9 1级 轻度慢性过敏\n"
+                "鸡蛋白 51.7 1级 轻度慢性过敏\n卵类粘蛋白 55.8 1级 轻度慢性过敏",
+                "", "", "",
+                "牛奶 87.7 1级 轻度慢性过敏\nβ-乳球蛋白 199.0 2级 中度慢性过敏\n"
+                "水解奶粉 81.6 1级 轻度慢性过敏",
+                "", "",
+                "序号 项目名称 检测结果 U/ml 级别 程度 类别\n"
+                "1 鸡蛋 115.8 2级 中度慢性过敏 蛋类",
+                "5 牛奶 87.7 1级 轻度慢性过敏 奶制品",
+            ],
+        )
+
+    def test_food_anonymized_report_has_seven_real_results(self) -> None:
+        uploaded = self._anonymized_food_summary_report()
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+        )
+        food = normalized.food_sensitivity
+        self.assertEqual(set(food.mild_foods), {"鸡蛋黄", "鸡蛋白", "卵类粘蛋白", "牛奶", "水解奶粉"})
+        self.assertEqual(set(food.moderate_foods), {"鸡蛋", "β-乳球蛋白"})
+        self.assertEqual(food.high_foods, [])
+        self.assertEqual(len(food.items), 7)
+        self.assertIsNone(food.warning)
+        expected = {
+            "鸡蛋": ("115.8", "2级", 3),
+            "鸡蛋黄": ("87.9", "1级", 3),
+            "鸡蛋白": ("51.7", "1级", 3),
+            "卵类粘蛋白": ("55.8", "1级", 3),
+            "牛奶": ("87.7", "1级", 7),
+            "β-乳球蛋白": ("199.0", "2级", 7),
+            "水解奶粉": ("81.6", "1级", 7),
+        }
+        self.assertEqual(
+            {item.name: (item.raw_value, item.reported_grade, item.source_page) for item in food.items},
+            expected,
+        )
+
+    def test_food_cache_normalization_removes_source_proven_pseudo_items_without_writes(self) -> None:
+        uploaded = self._anonymized_food_summary_report()
+        result = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+        )
+        old_food = result.food_sensitivity.model_copy(update={
+            "high_foods": ["过敏"],
+            "items": [
+                *result.food_sensitivity.items,
+                FoodSensitivityItem(id="old-allergy", name="过敏", severity="high", source_page=2,
+                                    source_text="慢性食物过敏检测结果"),
+                FoodSensitivityItem(id="old-eggs", name="蛋类", severity="ungraded", source_page=10,
+                                    source_text="1 鸡蛋 115.8 2级 中度慢性过敏 蛋类"),
+                FoodSensitivityItem(id="old-dairy", name="奶制品", severity="ungraded", source_page=11,
+                                    source_text="5 牛奶 87.7 1级 轻度慢性过敏 奶制品"),
+            ],
+            "warning": "慢性食物敏感项目蛋类存在重复且等级不一致，已留待确认。；保留其他核对提示",
+        })
+        cached = result.model_copy(update={"food_sensitivity": old_food}).model_dump(mode="json")
+        before = str(cached)
+        service = object.__new__(CaseAnalysisService)
+        service.model_version = "synthetic"
+        service.prompt_version = "synthetic"
+        service.questionnaire_import_service = SimpleNamespace()
+        service.repository = SimpleNamespace(get_document_analysis_cache=lambda *_: cached)
+        # No provider or repository write methods: any recomputation/write fails.
+        normalized = service._analyze_with_cache(SimpleNamespace(id="synthetic-case"), uploaded)
+        self.assertEqual(len(normalized.food_sensitivity.items), 7)
+        self.assertEqual(normalized.food_sensitivity.high_foods, [])
+        self.assertEqual(normalized.food_sensitivity.warning, "保留其他核对提示")
+        self.assertEqual(str(cached), before)
+        again = CaseAnalysisService._normalize_food_sensitivity_result(uploaded, normalized)
+        self.assertEqual(again.model_dump(mode="json"), normalized.model_dump(mode="json"))
+
+    def test_food_category_names_are_not_globally_blacklisted(self) -> None:
+        uploaded = self._uploaded_file(
+            filename="慢性食物敏感.pdf",
+            pages=['“1级”轻度慢性过敏 蛋类、奶制品'],
+        )
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(
+            uploaded,
+            DocumentAnalysisResult(file_id=uploaded.id, file_name=uploaded.filename),
+        )
+        self.assertEqual(normalized.food_sensitivity.mild_foods, ["蛋类", "奶制品"])
+        # An unverified category-shaped quote is insufficient to delete a row.
+        candidate = FoodSensitivityItem(id="category-name", name="蛋类", severity="mild",
+                                        source_page=1, source_text="1 鸡蛋 115.8 2级 中度慢性过敏 蛋类")
+        self.assertFalse(CaseAnalysisService._is_source_food_category(uploaded, candidate))
+
+    def test_food_degree_labels_in_legacy_lists_and_items_are_filtered(self) -> None:
+        uploaded = self._uploaded_file(filename="慢性食物敏感.pdf", pages=["慢性食物敏感分析 IgG"])
+        result = DocumentAnalysisResult(
+            file_id=uploaded.id,
+            file_name=uploaded.filename,
+            food_sensitivity=ChronicFoodSensitivityResult(
+                source_file_id=uploaded.id,
+                source_file_name=uploaded.filename,
+                high_foods=["过敏", "敏感", "强阳性", "重度慢性过敏", "慢性食物过敏检测结果"],
+                items=[FoodSensitivityItem(id="label", name="敏感", severity="high", source_text="敏感")],
+            ),
+        )
+        normalized = CaseAnalysisService._normalize_food_sensitivity_result(uploaded, result)
+        self.assertEqual(normalized.food_sensitivity.items, [])
+        self.assertEqual(normalized.food_sensitivity.high_foods, [])
+        self.assertEqual(result.food_sensitivity.items[0].name, "敏感")
+
     def test_food_items_dedupe_plain_and_igg_names(self) -> None:
         uploaded = self._uploaded_file(
             filename="慢性食物敏感.pdf",

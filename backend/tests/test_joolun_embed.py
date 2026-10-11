@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.api.v2.joolun_integration import router as joolun_router
 from app.core.bootstrap import build_container
 from app.core.settings import AppSettings
+from app.domain.models import DraftRecommendationItem, DosageOptionSummary
 from app.services.joolun_embed import JoolunEmbedService
 
 
@@ -203,7 +204,7 @@ class JoolunEmbedTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401, response.text)
         self.assertEqual(response.json()["code"], "EMBED_SIGNATURE_EXPIRED")
 
-    def test_committed_catalog_maps_confirmed_zinc_and_skips_super_anti_inflammatory(self) -> None:
+    def test_committed_catalog_maps_confirmed_zinc_and_super_anti_inflammatory(self) -> None:
         payload = json.loads(
             (Path(__file__).resolve().parents[1] / "app" / "data" / "joolun_sku_mapping.json").read_text(
                 encoding="utf-8"
@@ -214,7 +215,112 @@ class JoolunEmbedTests(unittest.TestCase):
         self.assertEqual(len(mappings), 31)
         self.assertEqual(mappings["sku_zinc_complex"]["goods_id"], "2091816225546137602")
         self.assertEqual(mappings["sku_zinc_complex"]["spec_id"], "2091817634534486017")
-        self.assertEqual(mappings["sku_super_anti_inflammatory"]["status"], "unmapped")
+        anti_inflammatory = mappings["sku_super_anti_inflammatory"]
+        self.assertEqual(anti_inflammatory["status"], "mapped")
+        self.assertIs(anti_inflammatory["enabled"], True)
+        self.assertEqual(anti_inflammatory["goods_id"], "2099664879912943617")
+        self.assertEqual(anti_inflammatory["spec_id"], "2099665381761417218")
+        self.assertEqual(anti_inflammatory["product_type"], 1)
+        pairs = [(item["goods_id"], item["spec_id"]) for item in mappings.values()
+                 if item["status"] == "mapped" and item["enabled"]]
+        self.assertEqual(len(pairs), len(set(pairs)))
+        self.assertTrue(all(isinstance(value, str) for pair in pairs for value in pair))
+        service = JoolunEmbedService(SimpleNamespace(
+            settings=SimpleNamespace(joolun_sku_mapping_path=
+                Path(__file__).resolve().parents[1] / "app/data/joolun_sku_mapping.json"),
+            repository=None,
+        ))
+        self.assertEqual(service._load_sku_mappings(), mappings)
+
+    def enzyme_recommendation(self, option_suffix: str) -> DraftRecommendationItem:
+        catalog = json.loads((Path(__file__).resolve().parents[1] /
+            "app/data/product_dosage_mapping.json").read_text(encoding="utf-8-sig"))
+        product = next(row for row in catalog["products"] if row["sku_id"] == "sku_digestive_enzymes")
+        options = [DosageOptionSummary.model_validate({key: row[key] for key in
+            DosageOptionSummary.model_fields if key in row}) for row in product["dose_options"]]
+        option = next(row for row in options if row.option_id.endswith(option_suffix))
+        return DraftRecommendationItem(
+            sku_id=product["sku_id"], display_name="综合消化酶", reason="专项测试",
+            dosage=option.display_text, dosage_option_id=option.option_id,
+            dosage_regimen=option.regimen, dosage_options=options,
+        )
+
+    def test_only_two_confirmed_per_meal_enzyme_options_resolve_three(self) -> None:
+        for suffix in ("dose_f13b6d46fa", "dose_a8089f5dd9"):
+            with self.subTest(option=suffix):
+                recommendation = self.enzyme_recommendation(suffix)
+                original = recommendation.model_dump()
+                dose = JoolunEmbedService._convert_approved_dose(recommendation)
+                self.assertEqual(dose, {"status": "resolved", "unit": "粒", "quantity": 3,
+                    "breakfast_dose": 1, "lunch_dose": 1, "dinner_dose": 1})
+                self.assertEqual(recommendation.model_dump(), original)
+
+    def test_enzyme_explicit_daily_options_keep_approved_amount(self) -> None:
+        for suffix, expected in (("dose_16377b841f", 1), ("dose_218f118981", 2), ("dose_54fd3a651d", 2)):
+            with self.subTest(option=suffix):
+                dose = JoolunEmbedService._convert_approved_dose(self.enzyme_recommendation(suffix))
+                self.assertEqual(dose["quantity"], expected)
+                self.assertEqual(sum(dose[key] for key in ("breakfast_dose", "lunch_dose", "dinner_dose")), expected)
+
+    def test_effective_daily_wording_and_regimen_override_per_meal_default(self) -> None:
+        recommendation = self.enzyme_recommendation("dose_a8089f5dd9")
+        for quantity in (1, 2, 4):
+            with self.subTest(quantity=quantity):
+                effective = recommendation.model_copy(update={"dosage": f"医生复核剂量；每日{quantity}粒，随餐服用"})
+                self.assertEqual(JoolunEmbedService._convert_approved_dose(effective)["quantity"], quantity)
+        effective = recommendation.model_copy(update={"dosage_regimen": recommendation.dosage_regimen.model_copy(
+            update={"daily_frequency_min": 2, "daily_frequency_max": 2, "daily_max": 2})})
+        self.assertEqual(JoolunEmbedService._convert_approved_dose(effective)["quantity"], 2)
+
+    def test_other_per_dose_products_and_unknown_enzyme_options_stay_pending(self) -> None:
+        original = self.enzyme_recommendation("dose_a8089f5dd9")
+        for update in ({"sku_id": "sku_other_product"}, {"dosage_option_id": "sku_digestive_enzymes:unknown"},
+                       {"dosage": "隔日每次1粒"}, {"dosage": "每日两次，每次1粒"},
+                       {"dosage": "每日0粒"}, {"dosage": "每日1.5粒"}):
+            with self.subTest(update=update):
+                dose = JoolunEmbedService._convert_approved_dose(original.model_copy(update=update))
+                self.assertEqual(dose["status"], "pending")
+                self.assertTrue(all(dose[key] is None for key in
+                    ("quantity", "breakfast_dose", "lunch_dose", "dinner_dose")))
+        strengthened = self.enzyme_recommendation("dose_218f118981").model_copy(update={"dosage": "每日1.5粒"})
+        self.assertEqual(JoolunEmbedService._convert_approved_dose(strengthened)["status"], "pending")
+
+    def test_approved_payload_preserves_original_text_and_applies_doctor_selected_option(self) -> None:
+        class Draft(SimpleNamespace):
+            def model_copy(self, *, update):
+                return Draft(**(vars(self) | update))
+
+        recommendation = self.enzyme_recommendation("dose_a8089f5dd9")
+        anti_inflammatory = DraftRecommendationItem(sku_id="sku_super_anti_inflammatory",
+            display_name="超强抗炎", reason="专项测试", dosage="每日2粒", dosage_option_id="daily-2",
+            dosage_regimen=recommendation.dosage_regimen.model_copy(update={
+                "daily_frequency_min": 2, "daily_frequency_max": 2, "daily_max": 2}))
+        draft = Draft(id="draft-test", revision=2, recommended_skus=[recommendation, anti_inflammatory])
+        review = SimpleNamespace(final_status="approved", edits={})
+        service = JoolunEmbedService(SimpleNamespace(
+            settings=SimpleNamespace(joolun_sku_mapping_path=Path(__file__).resolve().parents[1] /
+                "app/data/joolun_sku_mapping.json"),
+            repository=SimpleNamespace(
+                get_embed_session_context=lambda *_: {"case_id": "case-test", "external_encounter_id": "encounter-test"},
+                get_draft=lambda _: draft, get_review_decision=lambda _: review),
+            case_service=SimpleNamespace(get_case=lambda _: SimpleNamespace(id="case-test", draft_ids=[draft.id])),
+            review_service=self.container.review_service,
+        ))
+        approved = service.approved_recommendations("session-test")
+        self.assertEqual(approved["version"], 2)
+        self.assertEqual(approved["items"][0]["quantity"], 3)
+        self.assertEqual(approved["items"][0]["dosage_text"], recommendation.dosage)
+        self.assertEqual(approved["unmapped_skus"], [])
+        self.assertEqual(approved["items"][1]["spec_id"], "2099665381761417218")
+        for suffix, expected in (("dose_16377b841f", 1), ("dose_218f118981", 2)):
+            selected = self.enzyme_recommendation(suffix)
+            review.edits = {"dosage_overrides": {recommendation.sku_id: {
+                "option_id": selected.dosage_option_id, "note": "医生选档"}}}
+            item = service.approved_recommendations("session-test")["items"][0]
+            self.assertEqual(item["quantity"], expected)
+            self.assertEqual(item["dosage_text"], selected.dosage)
+            self.assertEqual(item["dosage_option_id"], selected.dosage_option_id)
+        self.assertEqual(draft.recommended_skus[0], recommendation)
 
     def test_daily_one_to_two_uses_upper_bound_and_unrepresentable_dose_is_pending(self) -> None:
         recommendation = SimpleNamespace(

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "mappings": [
-    {"sku_id":"sku_super_anti_inflammatory","display_name":"超级抗炎","status":"unmapped","enabled":false,"reason":"partner_product_missing"},
+    {"sku_id":"sku_super_anti_inflammatory","display_name":"超强抗炎","status":"mapped","enabled":true,"goods_id":"2099664879912943617","spec_id":"2099665381761417218","product_type":1},
     {"sku_id":"sku_magnesium_glycinate","display_name":"甘氨酸镁","status":"mapped","enabled":true,"goods_id":"2079869335765000193","spec_id":"2080101882910478338","product_type":1},
     {"sku_id":"sku_blood_sugar_complex","display_name":"血糖综合","status":"mapped","enabled":true,"goods_id":"2079876105736560642","spec_id":"2080106472175308801","product_type":1},
     {"sku_id":"sku_weight_support","display_name":"减重相关","status":"mapped","enabled":true,"goods_id":"2079878967120109569","spec_id":"2080108317320994817","product_type":1},

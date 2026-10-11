@@ -83,6 +83,7 @@ from app.services.questionnaire_import import (
 from app.services.health_portrait import build_core_health_portrait_result
 from app.services.food_sensitivity import (
     dedupe_food_sensitivity_items,
+    food_sensitivity_identity,
     normalize_food_sensitivity_name,
 )
 
@@ -151,10 +152,11 @@ _FOOD_REPORT_TITLE_TERMS = (
     "food allergy profile",
 )
 _PATIENT_FOOD_SUMMARY_PATTERN = re.compile(
-    r"(?im)^\s*(?:[1-3]\s*级\s*)?"
+    r"(?im)^[ \t]*(?:[1-3][ \t]*级[ \t]*)?"
     r"(?P<degree>轻度|中度|重度)"
-    r"(?:\s*\(\s*(?:mild|moderate|high)\s*\))?"
-    r"(?:慢性)?(?:食物)?(?:过敏|敏感)?\s*[：:]\s*(?P<foods>[^\n]+?)\s*$"
+    r"(?:[ \t]*\([ \t]*(?:mild|moderate|high)[ \t]*\))?"
+    r"(?:[ \t]*慢性)?(?:[ \t]*食物)?(?:[ \t]*(?:过敏|敏感))?"
+    r"[ \t]*[：:][ \t]*(?P<foods>[^\r\n]*)[ \t]*$"
 )
 
 
@@ -3942,9 +3944,18 @@ class CaseAnalysisService:
         re.IGNORECASE,
     )
     _FOOD_SUMMARY_ROW_PATTERN = re.compile(
-        r"[“\"]?(?P<grade>III|II|I|[1-3])\s*级\s*[”\"]?\s*"
-        r"(?P<degree>(?:弱阳性|阳性|强阳性|轻度|中度|重度)(?:慢性)?(?:食物)?(?:过敏|敏感)?)\s*"
-        r"(?P<foods>[^\n]+?)\s*$",
+        r"^\s*[“‘\"']?\s*(?P<grade>III|II|I|[1-3])\s*级\s*[”’\"']?\s*"
+        r"(?P<degree>(?:弱阳性|阳性|强阳性|轻度|中度|重度)"
+        r"(?:\s*慢性)?(?:\s*食物)?(?:\s*(?:过敏|敏感))?)",
+        re.IGNORECASE,
+    )
+    _FOOD_CATEGORY_ROW_PATTERN = re.compile(
+        r"^\s*\d+\s+(?P<name>[\u4e00-\u9fffA-Za-zΑ-Ωα-ω·（）()\-\s]{1,40}?)\s+"
+        r"[<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[A-Za-zμµ/%]+)?\s*"
+        r"(?:III|II|I|[0-3])\s*级\s*"
+        r"(?:阴性|未检出|弱阳性|阳性|强阳性|"
+        r"(?:轻度|中度|重度)(?:慢性)?(?:食物)?(?:过敏|敏感)?)\s+"
+        r"(?P<category>[^\n]+?)\s*$",
         re.IGNORECASE,
     )
     _FOOD_LABELED_SUMMARY_PATTERN = _PATIENT_FOOD_SUMMARY_PATTERN
@@ -4944,8 +4955,8 @@ class CaseAnalysisService:
     def _source_food_sensitivity_entries(
         cls,
         uploaded_file,
-    ) -> tuple[list[tuple[str, str, int]], list[str]]:
-        entries: list[tuple[str, str, int]] = []
+    ) -> tuple[list[tuple[str, str, int, str]], list[str]]:
+        entries: list[tuple[str, str, int, str]] = []
         warnings: list[str] = []
         for page in uploaded_file.page_texts:
             page_number = logical_source_page(uploaded_file, page.page)
@@ -4975,10 +4986,10 @@ class CaseAnalysisService:
                             f"慢性食物敏感项目{name or '未命名项目'}的等级与程度不一致，已留待确认。"
                         )
                         continue
-                    entries.append((name, degree_level, page_number))
+                    entries.append((name, degree_level, page_number, line))
                     continue
 
-                summary_match = cls._FOOD_SUMMARY_ROW_PATTERN.search(line)
+                summary_match = cls._FOOD_SUMMARY_ROW_PATTERN.match(line)
                 if summary_match:
                     grade = summary_match.group("grade")
                     degree = summary_match.group("degree")
@@ -4989,7 +5000,9 @@ class CaseAnalysisService:
                             "慢性食物敏感汇总行的等级与程度不一致，已留待确认。"
                         )
                         continue
-                    foods_text = summary_match.group("foods")
+                    # Read the whole label before inspecting the food cell. An
+                    # empty cell must never force the label regex to backtrack.
+                    foods_text = line[summary_match.end():]
                 else:
                     labeled_match = cls._FOOD_LABELED_SUMMARY_PATTERN.search(line)
                     if not labeled_match or not is_labeled_summary_page:
@@ -5016,10 +5029,47 @@ class CaseAnalysisService:
                         }
                         or len(name) > 40
                         or any(token in name for token in ("项目名称", "检测结果", "过敏等级"))
+                        or cls._is_food_degree_label(name)
                     ):
                         continue
-                    entries.append((name, degree_level, page_number))
+                    entries.append((name, degree_level, page_number, line))
         return entries, list(dict.fromkeys(warnings))
+
+    @staticmethod
+    def _is_food_degree_label(name: str) -> bool:
+        compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", name))
+        return bool(
+            re.fullmatch(
+                r"(?:(?:[1-3]|III|II|I)级)?(?:轻度|中度|重度|弱阳性|强阳性|阳性)?"
+                r"(?:慢性)?(?:食物)?(?:过敏|敏感)(?:检测(?:结果)?)?"
+                r"|轻度|中度|重度|弱阳性|阳性|强阳性|mild|moderate|high|severe",
+                compact,
+                re.IGNORECASE,
+            )
+        )
+
+    @classmethod
+    def _is_source_food_category(
+        cls, uploaded_file, candidate: FoodSensitivityItem
+    ) -> bool:
+        """Reject legacy category rows only when the source proves the column."""
+        evidence = _normalized_evidence_text(candidate.source_text)
+        match = cls._FOOD_CATEGORY_ROW_PATTERN.fullmatch(evidence)
+        if not match:
+            return False
+        identity = food_sensitivity_identity(candidate.name)
+        if (
+            identity != food_sensitivity_identity(match.group("category"))
+            or identity == food_sensitivity_identity(match.group("name"))
+        ):
+            return False
+        return any(
+            evidence == _normalized_evidence_text(line)
+            for page in uploaded_file.page_texts
+            if logical_source_page(uploaded_file, page.page)
+            == logical_source_page(uploaded_file, candidate.source_page)
+            for line in (page.text or "").splitlines()
+        )
 
     @classmethod
     def _source_food_sensitivity_items(
@@ -5509,31 +5559,19 @@ class CaseAnalysisService:
             finding_items.append(item)
 
         legacy_entries = source_entries or [
-            *((name, "mild", food.source_page) for name in food.mild_foods),
-            *((name, "moderate", food.source_page) for name in food.moderate_foods),
-            *((name, "high", food.source_page) for name in food.high_foods),
+            *((name, "mild", food.source_page, "") for name in food.mild_foods),
+            *((name, "moderate", food.source_page, "") for name in food.moderate_foods),
+            *((name, "high", food.source_page, "") for name in food.high_foods),
         ]
         legacy_items: list[FoodSensitivityItem] = []
-        for name, severity, page_number in legacy_entries:
+        for name, severity, page_number, evidence_line in legacy_entries:
             clean_name = re.sub(r"\s+", " ", name).strip()
-            if not clean_name or clean_name.lower() in {
-                "无",
-                "阴性",
-                "未检出",
-                "none",
-                "no reaction",
-            }:
+            if (
+                not clean_name
+                or cls._is_food_degree_label(clean_name)
+                or clean_name.lower() in {"无", "阴性", "未检出", "none", "no reaction"}
+            ):
                 continue
-            evidence_line = next(
-                (
-                    re.sub(r"\s+", " ", line).strip()
-                    for page in uploaded_file.page_texts
-                    if logical_source_page(uploaded_file, page.page) == page_number
-                    for line in unicodedata.normalize("NFKC", page.text or "").splitlines()
-                    if clean_name.lower() in line.lower()
-                ),
-                clean_name,
-            )
             legacy_items.append(
                 FoodSensitivityItem(
                     id=cls._food_item_id(
@@ -5545,14 +5583,19 @@ class CaseAnalysisService:
                     name=clean_name,
                     abnormal_flag="positive",
                     severity=severity,
-                    grading_basis=f"报告原文明确标注{severity}",
+                    grading_basis=(
+                        f"报告原文明确标注{severity}"
+                        if evidence_line
+                        else "提取结果分级，需人工核对"
+                    ),
                     source_page=page_number,
-                    source_text=evidence_line,
+                    source_text=evidence_line or clean_name,
                 )
             )
 
         candidates = [*source_items, *food.items, *finding_items, *legacy_items]
         normalized_candidates: list[FoodSensitivityItem] = []
+        rejected_names: set[str] = set()
         for candidate in candidates:
             if str(candidate.abnormal_flag or "").strip().lower() in {
                 "normal",
@@ -5564,6 +5607,11 @@ class CaseAnalysisService:
                 continue
             name = normalize_food_sensitivity_name(candidate.name)
             if not name:
+                continue
+            if cls._is_food_degree_label(name) or cls._is_source_food_category(
+                uploaded_file, candidate
+            ):
+                rejected_names.add(name)
                 continue
             normalized_candidate = candidate.model_copy(
                 update={
@@ -5595,6 +5643,18 @@ class CaseAnalysisService:
             and cls.FOOD_SENSITIVITY_EXTRACTION_FAILURE not in food.warning
             else []
         )
+        # Remove only stale duplicate warnings for source-proven pseudo-items.
+        retained_identities = {
+            food_sensitivity_identity(item.name) for item in item_values
+        }
+        for name in rejected_names:
+            if food_sensitivity_identity(name) in retained_identities:
+                continue
+            stale_warning = f"慢性食物敏感项目{name}存在重复且等级不一致，已留待确认。"
+            warnings = [
+                warning.replace(stale_warning, "").strip("；") for warning in warnings
+            ]
+        warnings = [warning for warning in warnings if warning]
         warnings.extend(source_warnings)
         warnings.extend(duplicate_warnings)
         if not has_content:

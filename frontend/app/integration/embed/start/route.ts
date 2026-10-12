@@ -15,36 +15,57 @@ function embedPublicBaseUrl(request: NextRequest): URL {
 }
 
 export async function GET(request: NextRequest) {
+  const publicBase = embedPublicBaseUrl(request);
+  function redirectTo(path: string) {
+    const response = NextResponse.redirect(new URL(path, publicBase));
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
+  const errorRedirect = (code: string) => redirectTo(`/integration/embed/error?code=${code}`);
   const ticket = request.nextUrl.searchParams.get("ticket")?.trim();
   if (!ticket) {
-    return NextResponse.redirect(new URL("/integration/embed/error?code=missing-ticket", request.url));
+    return errorRedirect("missing-ticket");
   }
 
-  const response = await fetch(`${BACKEND_BASE_URL}/api/v2/integrations/joolun/embed-tickets:exchange`, {
-    method: "POST",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", Accept: "application/json, application/problem+json" },
-    body: JSON.stringify({ ticket })
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BACKEND_BASE_URL}/api/v2/integrations/joolun/embed-tickets:exchange`, {
+      method: "POST",
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+      headers: { "Content-Type": "application/json", Accept: "application/json, application/problem+json" },
+      body: JSON.stringify({ ticket })
+    });
+  } catch {
+    return errorRedirect("backend-unavailable");
+  }
   if (!response.ok) {
-    return NextResponse.redirect(new URL("/integration/embed/error?code=invalid-ticket", request.url));
+    return errorRedirect(response.status >= 500 ? "backend-unavailable" : "invalid-ticket");
   }
 
-  const payload = await response.json() as { access_token?: string; case_id?: string; expires_at?: string };
-  if (!payload.access_token || !payload.case_id || !payload.expires_at) {
-    return NextResponse.redirect(new URL("/integration/embed/error?code=invalid-response", request.url));
+  let payload: { access_token?: unknown; case_id?: unknown; expires_at?: unknown } | null;
+  try {
+    payload = await response.json();
+  } catch {
+    return errorRedirect("invalid-response");
+  }
+  if (
+    !payload ||
+    typeof payload.access_token !== "string" || !payload.access_token.trim() ||
+    typeof payload.case_id !== "string" || !payload.case_id.trim() ||
+    typeof payload.expires_at !== "string" ||
+    !Number.isFinite(Date.parse(payload.expires_at)) ||
+    Date.parse(payload.expires_at) <= Date.now()
+  ) {
+    return errorRedirect("invalid-response");
   }
 
-  const redirect = NextResponse.redirect(
-    new URL(
-      `/integration/embed/cases/${encodeURIComponent(payload.case_id)}`,
-      embedPublicBaseUrl(request)
-    )
-  );
+  const redirect = redirectTo(`/integration/embed/cases/${encodeURIComponent(payload.case_id)}`);
   const secureSetting = process.env.FM_SESSION_COOKIE_SECURE?.trim().toLowerCase();
   const secure = secureSetting
     ? ["1", "true", "yes", "on"].includes(secureSetting)
-    : request.nextUrl.protocol === "https:";
+    : publicBase.protocol === "https:";
   redirect.cookies.set("fm_session", payload.access_token, {
     httpOnly: true,
     secure,
@@ -52,7 +73,5 @@ export async function GET(request: NextRequest) {
     path: "/",
     expires: new Date(payload.expires_at)
   });
-  redirect.headers.set("Referrer-Policy", "no-referrer");
-  redirect.headers.set("Cache-Control", "no-store");
   return redirect;
 }

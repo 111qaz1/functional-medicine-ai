@@ -13,14 +13,18 @@ describe("API proxy middleware", () => {
   const previousBaseUrl = process.env.INTERNAL_API_BASE_URL;
   const previousEmbedOrigins = process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS;
   const previousEmbedBaseUrl = process.env.FM_JOOLUN_EMBED_BASE_URL;
+  const previousAdminOrigins = process.env.FM_INTERNAL_ADMIN_ORIGINS;
 
   beforeEach(() => {
     process.env.INTERNAL_API_BASE_URL = "http://backend:8000";
     process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS = "http://localhost:7600";
     process.env.FM_JOOLUN_EMBED_BASE_URL = "https://fm.example.com";
+    delete process.env.FM_INTERNAL_ADMIN_ORIGINS;
   });
 
   afterEach(() => {
+    if (previousAdminOrigins === undefined) delete process.env.FM_INTERNAL_ADMIN_ORIGINS;
+    else process.env.FM_INTERNAL_ADMIN_ORIGINS = previousAdminOrigins;
     if (previousBaseUrl === undefined) {
       delete process.env.INTERNAL_API_BASE_URL;
     } else {
@@ -134,6 +138,40 @@ describe("API proxy middleware", () => {
 
     expect(isRewrite(accepted)).toBe(true);
     expect(getRewrittenUrl(accepted)).toBe("http://backend:8000/api/v2/cases/case_1");
+  });
+
+  it("allows the 8600 entry and explicitly configured private admin entry", () => {
+    process.env.FM_JOOLUN_EMBED_BASE_URL = "https://paracelsus.huapont.com.cn:8600";
+    process.env.FM_INTERNAL_ADMIN_ORIGINS = " https://paracelsus.huapont.com.cn:3200/ ";
+    for (const origin of ["https://paracelsus.huapont.com.cn:8600", "https://paracelsus.huapont.com.cn:3200"]) {
+      const response = middleware(new NextRequest("http://localhost:3000/api/v2/cases", {
+        method: "POST",
+        headers: { Cookie: "fm_session=admin-session", Origin: origin, "Sec-Fetch-Site": "same-origin" }
+      }));
+      expect(isRewrite(response)).toBe(true);
+      expect(response.headers.get("x-middleware-request-authorization")).toBe("Bearer admin-session");
+    }
+    const frame = middleware(new NextRequest("http://localhost:3000/integration/embed/cases/case_1"));
+    expect(frame.headers.get("content-security-policy")).not.toContain(":3200");
+  });
+
+  it.each([
+    ["", "https://admin.example.com", "same-origin", true, 403],
+    ["https://admin.example.com", "https://admin.example.com", "cross-site", true, 403],
+    ["https://admin.example.com", "https://admin.example.com", "same-site", true, 403],
+    ["https://admin.example.com", "https://evil.example.com", "same-origin", true, 403],
+    ["https://admin.example.com", "", "same-origin", true, 403],
+    ["https://admin.example.com/path", "https://admin.example.com", "same-origin", true, 403],
+    ["https://user:pass@admin.example.com", "https://admin.example.com", "same-origin", true, 403],
+    ["*", "https://admin.example.com", "same-origin", true, 403],
+    ["https://admin.example.com", "https://admin.example.com", "same-origin", false, 401]
+  ])("does not bypass origin or session checks (%s, %s, %s)", (configured, origin, site, session, status) => {
+    process.env.FM_INTERNAL_ADMIN_ORIGINS = configured as string;
+    const response = middleware(new NextRequest("http://localhost:3000/api/v2/cases", {
+      method: "POST",
+      headers: { ...(session ? { Cookie: "fm_session=admin-session" } : {}), Origin: origin as string, "Sec-Fetch-Site": site as string }
+    }));
+    expect(response.status).toBe(status);
   });
 
   it.each(["/cases/case_1", "/assistant", "/products"])(

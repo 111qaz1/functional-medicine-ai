@@ -6,9 +6,8 @@ const V2_API_PREFIX = "/api/v2";
 const EMBED_PAGE_PREFIX = "/integration/embed";
 const DEFAULT_INTERNAL_API_BASE_URL = "http://127.0.0.1:8000";
 
-function allowedFrameAncestors(): string {
-  const configured = process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS || "";
-  const origins = configured
+function configuredOrigins(configured: string): string[] {
+  return configured
     .split(",")
     .map((value) => value.trim().replace(/\/$/, ""))
     .filter((value) => {
@@ -19,6 +18,10 @@ function allowedFrameAncestors(): string {
         return false;
       }
     });
+}
+
+function allowedFrameAncestors(): string {
+  const origins = configuredOrigins(process.env.FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS || "");
   return origins.length ? origins.join(" ") : "'none'";
 }
 
@@ -82,7 +85,11 @@ export function middleware(request: NextRequest) {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       const origin = request.headers.get("Origin");
       const fetchSite = request.headers.get("Sec-Fetch-Site");
-      if (origin !== publicRequestOrigin(request) || (fetchSite && fetchSite !== "same-origin")) {
+      const allowedOrigins = [
+        publicRequestOrigin(request),
+        ...configuredOrigins(process.env.FM_INTERNAL_ADMIN_ORIGINS || "")
+      ];
+      if (!origin || !allowedOrigins.includes(origin) || (fetchSite && fetchSite !== "same-origin")) {
         return NextResponse.json(
           {
             type: "urn:fm-ai:problem:cross-origin-request-rejected",

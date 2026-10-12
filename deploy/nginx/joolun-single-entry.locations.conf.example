@@ -1,0 +1,40 @@
+# Include inside the EXISTING 8600 server, before the Vue location / fallback.
+# Keep its TLS certificate, Vue root, /prod-api and Java upstream unchanged.
+# Install fm-next-proxy.conf.example as /etc/nginx/snippets/fm-next-proxy.conf.
+# Remove conflicting locations for these prefixes before adding this include.
+# Exact matches plus ^~ prevent generic JS/CSS regex locations from intercepting Next.js.
+
+location = /integration/embed {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+location ^~ /integration/embed/ {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+
+location = /_next {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+location ^~ /_next/ {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+
+location = /api/internal {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+location ^~ /api/internal/ {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+
+location = /api/v2 {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+location ^~ /api/v2/ {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+
+location = /api/v1 {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}
+location ^~ /api/v1/ {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}

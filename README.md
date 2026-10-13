@@ -169,6 +169,8 @@ docker compose config
 
 ## 部署文档
 
+- [JooLun 8600 单入口与内网管理部署](最新版JooLun服务器部署说明.md)
+
 - [Windows + Docker 部署](docs/windows-docker-deployment.md)
 - [Ubuntu + Docker 部署](docs/ubuntu-docker-deployment.md)
 - [Docker 首次启动](docs/docker-first-run.md)

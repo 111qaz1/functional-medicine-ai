@@ -1,0 +1,11 @@
+# Merge into the EXISTING HTTPS 3200 server after 8600 acceptance.
+# Keep its certificate/server_name; replace its old location / with the one below.
+# Allow only approved admin/VPN source ranges, then remove the public NAT/firewall rule.
+# Do not allow an entire shared proxy address without enforcing access at that proxy.
+allow 127.0.0.1;
+allow ::1;
+# allow <approved-admin-or-vpn-CIDR>;
+deny all;
+location / {
+    include /etc/nginx/snippets/fm-next-proxy.conf;
+}

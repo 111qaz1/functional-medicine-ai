@@ -1,0 +1,18 @@
+# Location-level shared configuration for the existing 8600 and private 3200 sites.
+# No URI suffix: preserve /api/internal, /api/v2, query strings and encoded IDs.
+proxy_pass http://172.16.0.140:3100;
+proxy_http_version 1.1;
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+client_max_body_size 100m;
+proxy_read_timeout 900s;
+proxy_send_timeout 900s;
+proxy_cache off;
+proxy_cache_bypass 1;
+proxy_no_cache 1;
+# Cookie, Authorization and request bodies are forwarded by default.
+# Do not rewrite /api/internal here: Next.js performs the rewrite.
+# Do not hide Set-Cookie or override the application's CSP / no-store headers.

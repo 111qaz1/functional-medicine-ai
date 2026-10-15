@@ -137,6 +137,64 @@ class JavaLoginTests(unittest.TestCase):
         self.container.repository.save_session(record)
         with self.assertRaises(V2ApiError): self.service.authorize(session,"synthetic-java-token",result["case_id"])
 
+    def test_account_switch_with_old_cookie_restores_new_doctors_case(self):
+        first = self.create()
+        self.service.protect(first["access_token"], first["case_id"])
+        self.home["data"]["doctorInfo"] = {"id": "second-doctor", "name": "Second doctor"}
+        existing = self.service.create(self.payload, "second-java-token")
+
+        response = self.client.post(
+            "/api/v2/integrations/joolun/token-sessions",
+            json=self.payload.model_dump(),
+            headers={"X-FM-Session-BFF": "1", "Authorization": "Bearer second-java-token",
+                     "Cookie": "fm_session=" + first["access_token"]},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        switched = response.json()
+        self.assertEqual(switched["doctor"]["id"], existing["doctor"]["id"])
+        self.assertEqual(switched["case_id"], existing["case_id"])
+        self.assertNotEqual(switched["case_id"], first["case_id"])
+        self.assertIsNone(self.container.auth_service.get_doctor_for_session(first["access_token"]))
+        binding = self.container.repository.get_joolun_login_binding(switched["access_token"])
+        self.assertFalse(binding["protected"])
+        self.assertEqual(binding["token_hash"], self.service.digest("second-java-token"))
+        headers = {"Authorization": "Bearer " + switched["access_token"],
+                   "Cookie": "Admin-Token=second-java-token"}
+        self.assertEqual(self.client.get("/api/v2/cases/" + switched["case_id"], headers=headers).status_code, 200)
+        self.assertEqual(self.client.get("/api/v2/cases/" + first["case_id"], headers=headers).status_code, 403)
+
+    def test_new_token_for_same_doctor_restores_case_without_old_protection(self):
+        first = self.create()
+        self.service.protect(first["access_token"], first["case_id"])
+        calls = len(self.calls)
+        restored = self.service.create(self.payload, "renewed-java-token", first["access_token"])
+        self.assertEqual(restored["case_id"], first["case_id"])
+        self.assertEqual(restored["doctor"]["id"], first["doctor"]["id"])
+        self.assertNotEqual(restored["access_token"], first["access_token"])
+        self.assertEqual(len(self.calls), calls + 2)
+        self.assertFalse(self.container.repository.get_joolun_login_binding(restored["access_token"])["protected"])
+        self.assertIsNone(self.container.auth_service.get_doctor_for_session(first["access_token"]))
+
+    def test_invalid_switched_token_cannot_use_previous_protection(self):
+        first = self.create()
+        self.service.protect(first["access_token"], first["case_id"])
+        self.info = {"code": 401}
+        with patch.object(self.container.auth_service, "issue_session_for_doctor") as issue:
+            with self.assertRaises(V2ApiError) as error:
+                self.service.create(self.payload, "invalid-new-token", first["access_token"])
+        self.assertEqual(error.exception.status, 401)
+        issue.assert_not_called()
+
+    def test_switch_to_disabled_local_doctor_is_rejected(self):
+        first = self.create()
+        disabled = self.container.auth_service.resolve_external_doctor(
+            issuer="joolun", external_doctor_id="disabled-doctor", display_name="Disabled doctor")
+        self.container.auth_service.update_doctor(disabled.id, enabled=False)
+        self.home["data"]["doctorInfo"] = {"id": "disabled-doctor", "name": "Disabled doctor"}
+        with self.assertRaises(V2ApiError) as error:
+            self.service.create(self.payload, "disabled-doctor-token", first["access_token"])
+        self.assertEqual(error.exception.code, "EMBED_DOCTOR_DISABLED")
+
     def test_refresh_reuses_protected_session_and_switch_revokes_it(self):
         result=self.create(); session=result["access_token"]
         self.service.protect(session,result["case_id"]); self.expire_cache(); self.info={"code":401}

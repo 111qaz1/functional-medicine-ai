@@ -33,6 +33,7 @@ from app.services.recommendation_local import RecommendationService
 from app.services.review_local import ReviewService
 from app.services.semantic_support import SemanticSupportService
 from app.services.joolun_embed import JoolunEmbedService
+from app.services.joolun_java_auth import JoolunJavaAuth
 
 
 def _data_path(settings: AppSettings, *parts: str) -> Path:
@@ -211,6 +212,7 @@ class ApplicationContainer:
     llm_rate_limiter: LLMRateLimiter
     llm_request_controller: LLMRequestController
     joolun_embed_service: JoolunEmbedService | None = None
+    joolun_java_auth: JoolunJavaAuth | None = None
 
 
 def build_container(settings: AppSettings | None = None) -> ApplicationContainer:
@@ -371,4 +373,5 @@ def build_container(settings: AppSettings | None = None) -> ApplicationContainer
         llm_request_controller=llm_request_controller,
     )
     container.joolun_embed_service = JoolunEmbedService(container)
+    container.joolun_java_auth = JoolunJavaAuth(container)
     return container

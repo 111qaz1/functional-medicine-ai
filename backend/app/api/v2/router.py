@@ -28,6 +28,8 @@ from app.api.v2.schemas import (
     StartAnalysisRequest,
 )
 from app.api.v2.workflow import PreparedAttachment, V2WorkflowAdapter
+from app.api.v2.joolun_auth import authorize_request
+from starlette.background import BackgroundTask
 
 
 router = APIRouter(
@@ -67,7 +69,8 @@ def _require_external_doctor(
             title="Authentication required",
             detail="A valid bearer token is required.",
         )
-    return doctor
+    request.state.ai_session_id = token
+    return authorize_request(request, token, doctor)
 
 
 @router.post(
@@ -213,6 +216,8 @@ def start_analysis(
     doctor: Any = Depends(_require_external_doctor),
 ) -> OperationResponse:
     operation = _adapter(request).start_analysis(case_id, payload, doctor)
+    if operation.status in {"queued", "running"}:
+        request.app.state.container.joolun_java_auth.protect(request.state.ai_session_id, case_id)
     response.headers["Location"] = f"/api/v2/operations/{operation.operation_id}"
     return operation
 
@@ -341,4 +346,5 @@ def download_report_pdf(
         path=pdf_path,
         media_type="application/pdf",
         filename=filename,
+        background=BackgroundTask(request.app.state.container.joolun_java_auth.complete, request.state.ai_session_id, draft_id),
     )

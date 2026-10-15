@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,12 @@ from app.domain.models import (
     RecommendationDraft,
     ReviewDecision,
     SessionRecord,
+    WorkspaceScope,
 )
+
+
+class PatientCaseBindingError(ValueError):
+    """A historical association is ambiguous or broken; never create a substitute."""
 
 
 class LocalRepository:
@@ -158,6 +164,15 @@ class LocalRepository:
                     PRIMARY KEY (issuer, external_doctor_id, external_encounter_id),
                     UNIQUE (case_id)
                 );
+                CREATE TABLE IF NOT EXISTS external_patient_cases (
+                    issuer TEXT NOT NULL,
+                    external_doctor_id TEXT NOT NULL,
+                    external_patient_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL UNIQUE,
+                    PRIMARY KEY (issuer, external_doctor_id, external_patient_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_external_cases_patient
+                    ON external_case_mappings(external_doctor_id, external_patient_id, issuer);
                 CREATE TABLE IF NOT EXISTS embed_nonces (
                     issuer TEXT NOT NULL,
                     nonce TEXT NOT NULL,
@@ -183,6 +198,10 @@ class LocalRepository:
                     parent_origin TEXT NOT NULL,
                     case_id TEXT NOT NULL,
                     expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS joolun_login_bindings (
+                    session_id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS seed_metadata (
                     key TEXT PRIMARY KEY,
@@ -860,6 +879,71 @@ class LocalRepository:
             ).fetchone()
         return dict(row) if row else None
 
+    def resolve_patient_case(self, *, issuer: str, external_doctor_id: str,
+                             external_patient_id: str, external_encounter_id: str,
+                             doctor_id: str, patient_name: str, doctor_name: str) -> dict:
+        """Select/create once, including both mappings, under a cross-process SQLite lock."""
+        key = (issuer, external_doctor_id, external_patient_id)
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            # An encounter from another patient must never be silently reassigned.
+            requested = connection.execute(
+                "SELECT * FROM external_case_mappings WHERE issuer=? AND external_doctor_id=? AND external_encounter_id=?",
+                (issuer, external_doctor_id, external_encounter_id)).fetchone()
+            if requested and requested["external_patient_id"] != external_patient_id:
+                raise PatientCaseBindingError("EMBED_ENCOUNTER_IDENTITY_CONFLICT")
+            bound = connection.execute(
+                "SELECT case_id FROM external_patient_cases WHERE issuer=? AND external_doctor_id=? AND external_patient_id=?", key).fetchone()
+            rows = connection.execute(
+                "SELECT * FROM external_case_mappings WHERE issuer=? AND external_doctor_id=? AND external_patient_id=?", key).fetchall()
+            if bound:
+                rows = [row for row in rows if row["case_id"] == bound["case_id"]]
+                if not rows:
+                    raise PatientCaseBindingError("PATIENT_CASE_MAPPING_BROKEN")
+            candidates = []
+            for row in rows:
+                stored = connection.execute("SELECT * FROM cases WHERE id=?", (row["case_id"],)).fetchone()
+                if not stored or row["doctor_id"] != doctor_id or stored["owner_doctor_id"] != doctor_id or stored["workspace_scope"] != "doctor":
+                    raise PatientCaseBindingError("PATIENT_CASE_OWNERSHIP_CONFLICT")
+                record = self._load_case_record(stored["payload"])
+                latest = connection.execute("SELECT updated_at FROM case_analyses WHERE case_id=? ORDER BY updated_at DESC LIMIT 1", (record.id,)).fetchone()
+                has_draft = connection.execute("SELECT 1 FROM drafts WHERE case_id=? LIMIT 1", (record.id,)).fetchone()
+                meaningful = bool(record.files or (record.clinical_summary_text or "").strip() or latest or has_draft or record.questionnaire)
+                modified = max(record.updated_at.isoformat(), latest[0] if latest else record.updated_at.isoformat())
+                candidates.append((meaningful, modified, record.id, dict(row)))
+            if candidates:
+                mapping = max(candidates, key=lambda item: item[:3])[3]
+            else:
+                # A changed issuer is a configuration/migration issue, not a new patient.
+                other_issuer = connection.execute(
+                    "SELECT 1 FROM external_case_mappings WHERE external_doctor_id=? AND external_patient_id=? AND issuer<>? LIMIT 1",
+                    (external_doctor_id, external_patient_id, issuer)).fetchone()
+                if other_issuer:
+                    raise PatientCaseBindingError("PATIENT_CASE_ISSUER_CONFLICT")
+                case = CaseRecord(id=f"case_{uuid.uuid4().hex[:12]}", customer_name=patient_name,
+                                  consultant_id=doctor_name, workspace_scope=WorkspaceScope.doctor, owner_doctor_id=doctor_id)
+                now = case.created_at.isoformat()
+                connection.execute("INSERT INTO cases (id,workspace_scope,owner_doctor_id,payload) VALUES (?,?,?,?)",
+                                   (case.id, "doctor", doctor_id, case.model_dump_json()))
+                mapping = dict(issuer=issuer, external_doctor_id=external_doctor_id,
+                               external_patient_id=external_patient_id, external_encounter_id=external_encounter_id,
+                               doctor_id=doctor_id, case_id=case.id, created_at=now, updated_at=now)
+                connection.execute("INSERT INTO external_case_mappings VALUES (?,?,?,?,?,?,?,?)",
+                                   tuple(mapping[name] for name in ("issuer", "external_doctor_id", "external_encounter_id", "external_patient_id", "doctor_id", "case_id", "created_at", "updated_at")))
+                audit = AuditLog(id=f"audit_{uuid.uuid4().hex[:12]}", entity_type="case", entity_id=case.id,
+                                 action="case_created", actor_id="system", payload={"workspace_scope": "doctor", "owner_doctor_id": doctor_id})
+                connection.execute("INSERT INTO audit_logs VALUES (?,?,?,?,?,?)",
+                                   (audit.id, audit.entity_type, audit.entity_id, audit.action, audit.created_at.isoformat(), audit.model_dump_json()))
+            connection.execute("INSERT OR IGNORE INTO external_patient_cases VALUES (?,?,?,?)", (*key, mapping["case_id"]))
+            return mapping
+
+    def case_has_approved_report(self, case_id: str) -> bool:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute("SELECT r.payload FROM review_decisions r JOIN drafts d ON d.id=r.draft_id WHERE d.case_id=?", (case_id,)).fetchall()
+            case = connection.execute("SELECT payload FROM cases WHERE id=?", (case_id,)).fetchone()
+        return bool(case and json.loads(case[0]).get("status") == "approved") or any(
+            json.loads(row[0]).get("final_status") == "approved" for row in rows)
+
     def save_external_case_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute(
@@ -948,6 +1032,16 @@ class LocalRepository:
                     context["expires_at"],
                 ),
             )
+
+    def save_joolun_login_binding(self, binding: dict) -> None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            connection.execute("INSERT OR REPLACE INTO joolun_login_bindings VALUES (?, ?)",
+                               (binding["session_id"], json.dumps(binding)))
+
+    def get_joolun_login_binding(self, session_id: str) -> dict | None:
+        with self._lock, closing(self._connect()) as connection, connection:
+            row = connection.execute("SELECT payload FROM joolun_login_bindings WHERE session_id = ?", (session_id,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def get_embed_session_context(self, session_id: str, now_iso: str) -> dict[str, str] | None:
         with self._lock, closing(self._connect()) as connection, connection:

@@ -110,7 +110,7 @@ class V2ProblemDetailsTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_patcher = patch.dict(
             os.environ,
-            {"FM_EXTERNAL_TRUST_SHARED_SECRET": "test-shared-secret"},
+            {"FM_EXTERNAL_TRUST_SHARED_SECRET": "synthetic-v2-fixture-secret-only"},
         )
         self.env_patcher.start()
         root = Path(self.temp_dir.name)
@@ -132,7 +132,7 @@ class V2ProblemDetailsTests(unittest.TestCase):
         self.app.include_router(v2_router)
         self.client = TestClient(self.app)
         self.token = self._external_token()
-        self.headers = {"Authorization": f"Bearer {self.token}"}
+        self.headers = {"Authorization": f"Bearer {self.token}", "X-FM-Entry": "admin"}
 
     def tearDown(self) -> None:
         self.client.close()
@@ -158,7 +158,7 @@ class V2ProblemDetailsTests(unittest.TestCase):
             ]
         )
         payload["signature"] = hmac.new(
-            b"test-shared-secret",
+            b"synthetic-v2-fixture-secret-only",
             canonical.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()

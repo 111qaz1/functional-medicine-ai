@@ -53,6 +53,16 @@ export function buildBackendUrl(request: NextRequest): URL {
 }
 
 export function middleware(request: NextRequest) {
+  // Only trusted reverse proxies may select admin. Public proxies MUST overwrite this header.
+  const privateAdmin = request.headers.get("X-FM-Entry") === "admin";
+  const pathname = request.nextUrl.pathname;
+  if (!privateAdmin && !pathname.startsWith("/integration/embed") && !pathname.startsWith("/api/v2/") &&
+      !(pathname === "/api/internal/health" && request.method === "GET")) {
+    return NextResponse.json({ detail: "Not found" }, { status: 404 });
+  }
+  if (!privateAdmin && /^\/api\/v2\/integrations\/joolun\/(token-sessions|embed-sessions|embed-tickets:exchange)\/?$/.test(pathname)) {
+    return NextResponse.json({ detail: "Not found" }, { status: 404 });
+  }
   if (
     request.nextUrl.pathname === EMBED_PAGE_PREFIX ||
     request.nextUrl.pathname.startsWith(`${EMBED_PAGE_PREFIX}/`)
@@ -65,7 +75,7 @@ export function middleware(request: NextRequest) {
   }
   if (request.nextUrl.pathname === V2_API_PREFIX || request.nextUrl.pathname.startsWith(`${V2_API_PREFIX}/`)) {
     const session = request.cookies.get("fm_session")?.value;
-    if (!session) {
+    if (!session || (!privateAdmin && !request.cookies.get("Admin-Token")?.value)) {
       return NextResponse.json(
         {
           type: "urn:fm-ai:problem:authentication-required",

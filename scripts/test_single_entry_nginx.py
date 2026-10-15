@@ -41,6 +41,8 @@ class Echo(BaseHTTPRequestHandler):
             "proto": self.headers.get("X-Forwarded-Proto"),
             "cookie": self.headers.get("Cookie"),
             "authorization": self.headers.get("Authorization"),
+            "entry": self.headers.get("X-FM-Entry"),
+            "bff": self.headers.get("X-FM-Session-BFF"),
         }).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -143,11 +145,10 @@ http {{
                 paths = [
                     "/integration/embed", "/integration/embed/start?ticket=synthetic",
                     "/integration/embed/cases/case_synthetic", "/_next/static/chunks/app.js",
-                    "/_next/static/css/app.css", "/api/internal", "/api/internal/auth/me",
-                    "/api/internal/api/v2/integrations/joolun/embed-sessions",
+                    "/_next/static/css/app.css", "/api/internal/health", "/integration/embed/session",
                     "/api/v2", "/api/v2/cases/case_synthetic?offset=0",
                     "/api/v2/drafts/synthetic/report.pdf",
-                    "/api/v1", "/api/v1/drafts/synthetic/report.pdf",
+
                 ]
                 for path in paths:
                     status, response_headers, body = probe(public_port, path)
@@ -156,6 +157,13 @@ http {{
                     assert response_headers["Cache-Control"] == "no-store"
                     assert "HttpOnly" in response_headers["Set-Cookie"]
 
+                for blocked in ['/api/internal', '/api/internal/cases', '/api/internal/auth/login', '/api/internal/api/v2/integrations/joolun/embed-sessions', '/api/v1', '/api/v1/auth/token']:
+                    assert probe(public_port, blocked, headers={'X-FM-Entry':'admin'})[0] == 404
+                assert probe(public_port, '/api/internal/health', 'POST', '')[0] == 403
+                forged = json.loads(probe(public_port, '/api/v2/cases', headers={'X-FM-Entry':'admin', 'X-FM-Session-BFF':'1'})[2])
+                assert forged['entry'] == 'public' and forged['bff'] is None
+                internal = json.loads(probe(admin_port, '/products')[2])
+                assert internal['entry'] == 'admin'
                 body = '{"synthetic":true}'
                 status, _, result = probe(public_port, "/api/v2/cases?test=1", "POST", body, {
                     "Host": "paracelsus.huapont.com.cn:8600",

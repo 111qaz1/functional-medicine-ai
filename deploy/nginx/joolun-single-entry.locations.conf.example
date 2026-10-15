@@ -6,35 +6,38 @@
 
 location = /integration/embed {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 location ^~ /integration/embed/ {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 
 location = /_next {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 location ^~ /_next/ {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 
-location = /api/internal {
+location = /api/internal/health {
+    limit_except GET { deny all; }
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
-location ^~ /api/internal/ {
-    include /etc/nginx/snippets/fm-next-proxy.conf;
-}
+location = /api/internal { return 404; }
+location ^~ /api/internal/ { return 404; }
 
 location = /api/v2 {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 location ^~ /api/v2/ {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry public;
 }
 
-location = /api/v1 {
-    include /etc/nginx/snippets/fm-next-proxy.conf;
-}
-location ^~ /api/v1/ {
-    include /etc/nginx/snippets/fm-next-proxy.conf;
-}
+location = /api/v1 { return 404; }
+location ^~ /api/v1/ { return 404; }

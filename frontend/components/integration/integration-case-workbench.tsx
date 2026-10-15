@@ -160,7 +160,8 @@ export function IntegrationCaseWorkbench({
     () => createWorkflowGateway(fixtureMode, fixtureScenario),
     [fixtureMode, fixtureScenario]
   );
-  const { doctor, logout } = useIntegrationDoctor();
+  const { doctor, logout, readOnly: sessionReadOnly = false } = useIntegrationDoctor();
+  const readOnly = embedded && sessionReadOnly;
   const pollerRef = useRef<OperationPoller | null>(null);
   const loadSequence = useRef(0);
   const handledAnalysisCompletion = useRef<string | null>(null);
@@ -330,7 +331,7 @@ export function IntegrationCaseWorkbench({
   }, [embedContext, embedded]);
 
   useEffect(() => {
-    if (!embedded || !embedContext || draft?.status !== "approved") return;
+    if (!embedded || readOnly || !embedContext || draft?.status !== "approved") return;
     const revisionKey = `${draft.id}:${draft.revision}`;
     if (postedRecommendationRevision.current === revisionKey) {
       setRecommendationSyncError(null);
@@ -353,7 +354,7 @@ export function IntegrationCaseWorkbench({
       if (active) setRecommendationSyncError("方案已批准，但商品同步暂时不可用。可继续手工开方，或点击下方按钮重新同步。");
     });
     return () => { active = false; };
-  }, [caseId, draft, embedContext, embedded]);
+  }, [caseId, draft, embedContext, embedded, readOnly]);
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
@@ -552,6 +553,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleSaveClinicalSummary() {
+    if (readOnly) return;
     setAction("summary");
     setError(null);
     try {
@@ -568,6 +570,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    if (readOnly) return;
     const input = event.currentTarget;
     const files = Array.from(input.files ?? []).filter((file) => file.size > 0);
     if (!files.length) {
@@ -595,10 +598,12 @@ export function IntegrationCaseWorkbench({
   }
 
   function requestDeleteAttachment(attachmentId: string, filename: string) {
+    if (readOnly) return;
     setPendingDelete({ id: attachmentId, filename });
   }
 
   async function confirmDeleteAttachment() {
+    if (readOnly) return;
     if (!pendingDelete) return;
     const attachmentId = pendingDelete.id;
     const preserveClinicalSummary = summaryDirty;
@@ -619,6 +624,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleStartAnalysis() {
+    if (readOnly) return;
     setAction("analysis");
     setError(null);
     try {
@@ -633,6 +639,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleReview() {
+    if (readOnly) return;
     if (!analysis || !reviewDraft) return;
     setAction("review");
     setError(null);
@@ -655,6 +662,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleRetryDraft() {
+    if (readOnly) return;
     if (!analysis) return;
     setAction("retry-draft");
     setError(null);
@@ -672,6 +680,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleApprove() {
+    if (readOnly) return;
     if (!draft || !approvalDraft) return;
     setAction("approval");
     setError(null);
@@ -697,7 +706,7 @@ export function IntegrationCaseWorkbench({
   }
 
   async function handleRetryRecommendationSync() {
-    if (!embedded || !embedContext || draft?.status !== "approved") return;
+    if (!embedded || readOnly || !embedContext || draft?.status !== "approved") return;
     setAction("recommendation-sync");
     setRecommendationSyncError(null);
     try {
@@ -719,6 +728,22 @@ export function IntegrationCaseWorkbench({
   }
 
   async function downloadReportFile(draftId: string) {
+    // PDF delivery ends the protected workflow. Send approved recommendations first,
+    // rather than racing the asynchronous approval effect against that boundary.
+    if (embedded && !readOnly && embedContext) {
+      try {
+        const payload = await fetchApprovedRecommendationsWithRetry();
+        if (payload.version !== 2 || payload.case_id !== caseId || payload.draft_id !== draftId ||
+            payload.external_encounter_id !== embedContext.external_encounter_id) {
+          throw new Error("已批准推荐与当前病例不匹配");
+        }
+        window.parent.postMessage({ type: "fm.recommendations.approved", version: 2, payload }, embedContext.parent_origin);
+        postedRecommendationRevision.current = `${payload.draft_id}:${payload.revision}`;
+        setRecommendationSyncError(null);
+      } catch {
+        setRecommendationSyncError("商品同步暂不可用；报告仍可下载，恢复登录后可重新同步。");
+      }
+    }
     const downloaded = await gateway.downloadReport(draftId);
     const url = URL.createObjectURL(downloaded.blob);
     const anchor = document.createElement("a");
@@ -813,6 +838,8 @@ export function IntegrationCaseWorkbench({
       {error ? <WorkflowNotice tone="error">{error}</WorkflowNotice> : null}
       {notice ? <WorkflowNotice tone="info" live>{notice}</WorkflowNotice> : null}
 
+      {readOnly ? <WorkflowNotice tone="info">已恢复该患者的已批准病例，当前仅可查看和下载，不会自动回填历史推荐。</WorkflowNotice> : null}
+
       {visibleStep === "case" ? <WorkflowSection id="case" title="病例信息" description="核对病例基本字段；医生病例总结在资料步骤填写和保存。" state={sectionState(steps, "case")}>
         <dl className="workflow-definition-grid">
           <div><dt>客户名称</dt><dd>{caseResource.customer_name}</dd></div>
@@ -823,8 +850,8 @@ export function IntegrationCaseWorkbench({
       </WorkflowSection> : null}
 
       {visibleStep === "attachments" ? <WorkflowSection id="attachments" title="病例资料" description="选择文件后立即上传并预解析；医生病例总结保存后，再确认授权并开始综合分析。" state={sectionState(steps, "attachments")}>
-        <div className="workflow-upload-grid">
-          <label id="workflow-upload-selector" className="workflow-upload-panel" aria-disabled={busy} tabIndex={-1}>
+        {!readOnly ? <div className="workflow-upload-grid">
+          <label id="workflow-upload-selector" className="workflow-upload-panel" aria-disabled={busy || readOnly} tabIndex={-1}>
             <div>
               <h3>上传病例报告、MSQ、肠道报告、慢性食物敏感报告或总结截图</h3>
               <p>仅做轻量预检；明显无关文件会提示但不会阻止上传。默认单文件 50 MB、单个 PDF 最多 50 页。</p>
@@ -835,7 +862,7 @@ export function IntegrationCaseWorkbench({
               type="file"
               multiple
               accept={acceptedUploadTypes}
-              disabled={busy}
+              disabled={busy || readOnly}
               aria-label="选择病例资料文件，选择后立即上传并预解析"
               onChange={(event) => void handleUpload(event)}
             />
@@ -866,7 +893,7 @@ export function IntegrationCaseWorkbench({
               </ul>
             </div>
           ) : null}
-        </div>
+        </div> : null}
 
         {caseResource.attachments.length ? (
           <div className="workflow-attachment-list">
@@ -882,17 +909,17 @@ export function IntegrationCaseWorkbench({
                     {item.warning ? <small className="workflow-attachment-warning">{item.warning}</small> : null}
                     {item.error ? <small className="workflow-attachment-error">{item.error}</small> : null}
                   </div>
-                  {!fixtureMode ? (
+                  {!fixtureMode && !readOnly ? (
                     <button
                       className="workflow-button workflow-button--danger"
                       type="button"
-                      disabled={busy}
+                      disabled={busy || readOnly}
                       onClick={() => requestDeleteAttachment(item.id, item.filename)}
                     >
                       删除
                     </button>
                   ) : null}
-                  {!fixtureMode && pendingDelete?.id === item.id ? (
+                  {!fixtureMode && !readOnly && pendingDelete?.id === item.id ? (
                     <div className="workflow-inline-confirm">
                       <span className="workflow-inline-confirm__text">
                         确定删除“{item.filename}”吗？删除后依赖该资料的旧分析和未发布方案将失效。
@@ -902,7 +929,7 @@ export function IntegrationCaseWorkbench({
                         <button
                           className="workflow-button workflow-button--danger"
                           type="button"
-                          disabled={busy}
+                          disabled={busy || readOnly}
                           aria-busy={action === `delete-attachment:${item.id}`}
                           onClick={() => void confirmDeleteAttachment()}
                         >
@@ -911,7 +938,7 @@ export function IntegrationCaseWorkbench({
                         <button
                           className="workflow-button workflow-button--secondary"
                           type="button"
-                          disabled={busy}
+                          disabled={busy || readOnly}
                           onClick={() => setPendingDelete(null)}
                         >
                           取消
@@ -938,17 +965,17 @@ export function IntegrationCaseWorkbench({
               rows={8}
               maxLength={20000}
               value={clinicalSummary}
-              disabled={busy}
+              disabled={busy || readOnly}
               onChange={(event) => setClinicalSummary(event.target.value)}
             />
           </label>
           {summaryDirty ? <p className="workflow-help">当前总结有未保存修改。上传资料不会覆盖这些文字。</p> : null}
-          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy || !summaryDirty} onClick={() => void handleSaveClinicalSummary()}>
+          <button className="workflow-button workflow-button--secondary" type="button" disabled={busy || readOnly || !summaryDirty} onClick={() => void handleSaveClinicalSummary()}>
             {action === "summary" ? "正在保存…" : "保存医生病例总结"}
           </button>
         </div>
 
-        <div id="workflow-analysis-launch" className="workflow-analysis-launch" tabIndex={-1}>
+        {!readOnly ? <div id="workflow-analysis-launch" className="workflow-analysis-launch" tabIndex={-1}>
           <div className="workflow-analysis-launch__header">
             <h3>开始综合分析</h3>
             <p>确认资料无误后调用已配置的第三方模型服务；只有下方确认操作会启动病例级综合分析。</p>
@@ -975,16 +1002,16 @@ export function IntegrationCaseWorkbench({
                   : <WorkflowNotice tone="error">{analysis?.error?.message ?? "综合分析失败，可以确认资料后重新开始。"}</WorkflowNotice>
               ) : null}
               <label className="workflow-check">
-                <input type="checkbox" checked={thirdPartyConfirmed} disabled={busy} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} />
+                <input type="checkbox" checked={thirdPartyConfirmed} disabled={busy || readOnly} onChange={(event) => setThirdPartyConfirmed(event.target.checked)} />
                 <span>已确认本病例资料可发送至已配置的第三方模型服务处理</span>
               </label>
-              <button className={`workflow-button ${analysisRestartable ? "workflow-button--warning" : "workflow-button--primary"}`} type="button" disabled={busy || !thirdPartyConfirmed || caseResource.attachments.length === 0 || Boolean(analysis && !analysisRestartable)} aria-busy={action === "analysis"} onClick={() => void handleStartAnalysis()}>
+              <button className={`workflow-button ${analysisRestartable ? "workflow-button--warning" : "workflow-button--primary"}`} type="button" disabled={busy || readOnly || !thirdPartyConfirmed || caseResource.attachments.length === 0 || Boolean(analysis && !analysisRestartable)} aria-busy={action === "analysis"} onClick={() => void handleStartAnalysis()}>
                 {action === "analysis" ? "正在启动…" : analysisRestartable ? "重新开始综合分析" : "确认资料并开始综合分析"}
               </button>
               {operation?.stage === "analysis" && operation.status === "failed" ? <OperationProgress operation={operationProgressState(operation)} /> : null}
             </div>
           )}
-        </div>
+        </div> : null}
       </WorkflowSection> : null}
 
       {visibleStep === "review" ? <WorkflowSection id="review" title="医生复核" description="核对异常指标、当前补充剂和食敏结果，确认后生成方案草案。" state={sectionState(steps, "review")}>
@@ -1008,6 +1035,7 @@ export function IntegrationCaseWorkbench({
               {analysis.warnings.map((warning) => <WorkflowNotice tone="warning" key={warning}>{warning}</WorkflowNotice>)}
               {analysis.error ? <WorkflowNotice tone="error">{analysis.error.message}（{analysis.error.code}）</WorkflowNotice> : null}
             </div>
+            <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }} aria-label={readOnly ? "已批准分析（只读）" : "医生复核"}>
             <ReviewEditor
               analysis={analysis}
               value={reviewDraft}
@@ -1021,6 +1049,7 @@ export function IntegrationCaseWorkbench({
               onContinue={() => navigateToStep("draft")}
               onDiscardAndReload={() => void loadWorkflow(true)}
             />
+            </fieldset>
           </div>
         ) : <p className="workflow-empty">分析完成后可进行医生复核。</p>}
         {operation?.stage === "draft_generation" || draftGenerationRunning ? (
@@ -1040,7 +1069,7 @@ export function IntegrationCaseWorkbench({
             {operation?.stage === "draft_generation" && operation.status === "failed" ? null : (
               <WorkflowNotice tone="error">{analysis.draft_generation.error ?? "草案生成失败，可直接重试。"}</WorkflowNotice>
             )}
-            <button className="workflow-button workflow-button--warning" type="button" disabled={busy} aria-busy={action === "retry-draft"} onClick={() => void handleRetryDraft()}>
+            <button className="workflow-button workflow-button--warning" type="button" disabled={busy || readOnly} aria-busy={action === "retry-draft"} onClick={() => void handleRetryDraft()}>
               {action === "retry-draft" ? "正在重试…" : "重试草案生成"}
             </button>
           </div>

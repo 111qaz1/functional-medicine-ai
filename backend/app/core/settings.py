@@ -58,10 +58,17 @@ class AppSettings:
     analysis_worker_count: int = 20
     case_document_worker_count: int = 2
     joolun_embed_enabled: bool = False
+    joolun_auth_mode: str = "java_token"
+    joolun_java_api_base_url: str | None = None
+    joolun_issuer: str = "joolun-windows-pilot"
     joolun_embed_shared_secret: str | None = None
     joolun_embed_base_url: str | None = None
     joolun_embed_allowed_parent_origins: tuple[str, ...] = ()
     joolun_sku_mapping_path: Path | None = None
+
+    def __post_init__(self):
+        if self.joolun_auth_mode not in {"java_token", "legacy_hmac"}:
+            raise ValueError("FM_JOOLUN_AUTH_MODE must be java_token or legacy_hmac")
 
 
 @dataclass(frozen=True)
@@ -234,6 +241,9 @@ def load_settings() -> AppSettings:
         analysis_worker_count=analysis_worker_count,
         case_document_worker_count=case_document_worker_count,
         joolun_embed_enabled=joolun_embed_enabled,
+        joolun_auth_mode=os.getenv("FM_JOOLUN_AUTH_MODE", "java_token").strip(),
+        joolun_java_api_base_url=(os.getenv("FM_JOOLUN_JAVA_API_BASE_URL") or "").strip().rstrip("/") or None,
+        joolun_issuer=os.getenv("FM_JOOLUN_ISSUER", "joolun-windows-pilot").strip().lower(),
         joolun_embed_shared_secret=joolun_embed_shared_secret,
         joolun_embed_base_url=joolun_embed_base_url,
         joolun_embed_allowed_parent_origins=joolun_embed_allowed_parent_origins,

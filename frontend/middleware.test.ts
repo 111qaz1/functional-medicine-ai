@@ -50,7 +50,7 @@ describe("API proxy middleware", () => {
     expect(buildBackendUrl(request).toString()).toBe(
       "http://backend:8000/cases/case_1?workspace=private"
     );
-    const response = middleware(request);
+    const response = middleware(new NextRequest(request.url, { headers: { "X-FM-Entry": "admin" } }));
     expect(isRewrite(response)).toBe(true);
     expect(getRewrittenUrl(response)).toBe(
       "http://backend:8000/cases/case_1?workspace=private"
@@ -74,7 +74,7 @@ describe("API proxy middleware", () => {
     const request = new NextRequest("https://fm.example.com/api/v2/cases/case_1", {
       headers: {
         Authorization: "Bearer browser-controlled-value",
-        Cookie: "fm_session=doctor-session-token"
+        Cookie: "Admin-Token=java-test; fm_session=doctor-session-token"
       }
     });
     const response = middleware(request);
@@ -103,7 +103,7 @@ describe("API proxy middleware", () => {
     const accepted = middleware(new NextRequest("https://fm.example.com/api/v2/cases", {
       method: "POST",
       headers: {
-        Cookie: "fm_session=doctor-session-token",
+        Cookie: "Admin-Token=java-test; fm_session=doctor-session-token",
         Origin: "https://fm.example.com",
         "Sec-Fetch-Site": "same-origin"
       }
@@ -113,7 +113,7 @@ describe("API proxy middleware", () => {
     const rejected = middleware(new NextRequest("https://fm.example.com/api/v2/cases", {
       method: "POST",
       headers: {
-        Cookie: "fm_session=doctor-session-token",
+        Cookie: "Admin-Token=java-test; fm_session=doctor-session-token",
         Origin: "https://attacker.example",
         "Sec-Fetch-Site": "cross-site"
       }
@@ -130,7 +130,7 @@ describe("API proxy middleware", () => {
     const accepted = middleware(new NextRequest("http://localhost:3000/api/v2/cases/case_1", {
       method: "POST",
       headers: {
-        Cookie: "fm_session=doctor-session-token",
+        Cookie: "Admin-Token=java-test; fm_session=doctor-session-token",
         Origin: "http://localhost:18080",
         "Sec-Fetch-Site": "same-origin"
       }
@@ -146,7 +146,7 @@ describe("API proxy middleware", () => {
     for (const origin of ["https://paracelsus.huapont.com.cn:8600", "https://paracelsus.huapont.com.cn:3200"]) {
       const response = middleware(new NextRequest("http://localhost:3000/api/v2/cases", {
         method: "POST",
-        headers: { Cookie: "fm_session=admin-session", Origin: origin, "Sec-Fetch-Site": "same-origin" }
+        headers: { Cookie: "Admin-Token=java-test; fm_session=admin-session", "X-FM-Entry": origin.endsWith(":3200") ? "admin" : "public", Origin: origin, "Sec-Fetch-Site": "same-origin" }
       }));
       expect(isRewrite(response)).toBe(true);
       expect(response.headers.get("x-middleware-request-authorization")).toBe("Bearer admin-session");
@@ -169,7 +169,7 @@ describe("API proxy middleware", () => {
     process.env.FM_INTERNAL_ADMIN_ORIGINS = configured as string;
     const response = middleware(new NextRequest("http://localhost:3000/api/v2/cases", {
       method: "POST",
-      headers: { ...(session ? { Cookie: "fm_session=admin-session" } : {}), Origin: origin as string, "Sec-Fetch-Site": site as string }
+      headers: { "X-FM-Entry": "admin", ...(session ? { Cookie: "Admin-Token=java-test; fm_session=admin-session" } : {}), Origin: origin as string, "Sec-Fetch-Site": site as string }
     }));
     expect(response.status).toBe(status);
   });
@@ -211,4 +211,14 @@ describe("API proxy middleware", () => {
       ).toBe(true);
     }
   );
+  it.each(['/api/internal/cases', '/api/internal/auth/login', '/api/internal/auth/register', '/api/v1/auth/token', '/api/internal/api/v2/integrations/joolun/embed-sessions', '/api/v2/integrations/joolun/token-sessions', '/api/v2/integrations/joolun/embed-sessions'])('blocks legacy public path %s', path => {
+    expect(middleware(new NextRequest(`https://fm.example.com${path}`)).status).toBe(404);
+  });
+  it('requires the partner cookie on public v2 even with an AI cookie', () => {
+    expect(middleware(new NextRequest('https://fm.example.com/api/v2/cases', {headers: {Cookie: 'fm_session=ai'}})).status).toBe(401);
+  });
+  it('allows old native admin APIs only on the tagged internal entry', () => {
+    expect(isRewrite(middleware(new NextRequest('https://fm.example.com/api/internal/auth/me', {headers: {'X-FM-Entry':'admin'}})))).toBe(true);
+  });
+
 });

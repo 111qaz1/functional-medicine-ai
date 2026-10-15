@@ -40,7 +40,7 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_patcher = patch.dict(
             os.environ,
-            {"FM_EXTERNAL_TRUST_SHARED_SECRET": "test-shared-secret"},
+            {"FM_EXTERNAL_TRUST_SHARED_SECRET": "synthetic-v2-fixture-secret-only"},
         )
         self.env_patcher.start()
         self.root = Path(self.temp_dir.name)
@@ -62,7 +62,7 @@ class V2WorkflowApiTests(unittest.TestCase):
         self.app.include_router(v2_router)
         self.client = TestClient(self.app)
         self.token = self._external_token("doctor-v2", "Synthetic doctor")
-        self.headers = {"Authorization": f"Bearer {self.token}"}
+        self.headers = {"Authorization": f"Bearer {self.token}", "X-FM-Entry": "admin"}
 
     def tearDown(self) -> None:
         self.client.close()
@@ -89,7 +89,7 @@ class V2WorkflowApiTests(unittest.TestCase):
             ]
         )
         payload["signature"] = hmac.new(
-            b"test-shared-secret",
+            b"synthetic-v2-fixture-secret-only",
             canonical.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
@@ -253,13 +253,13 @@ class V2WorkflowApiTests(unittest.TestCase):
         other_token = self._external_token("doctor-other", "Other synthetic doctor")
         other_cases = self.client.get(
             "/api/v2/cases",
-            headers={"Authorization": f"Bearer {other_token}"},
+            headers={"Authorization": f"Bearer {other_token}", "X-FM-Entry": "admin"},
         )
         self.assertEqual(other_cases.status_code, 200, other_cases.text)
         self.assertEqual(other_cases.json()["items"], [])
         denied = self.client.get(
             f"/api/v2/cases/{case_id}",
-            headers={"Authorization": f"Bearer {other_token}"},
+            headers={"Authorization": f"Bearer {other_token}", "X-FM-Entry": "admin"},
         )
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(denied.json()["code"], "CASE_ACCESS_DENIED")

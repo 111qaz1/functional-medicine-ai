@@ -8,4 +8,5 @@ allow ::1;
 deny all;
 location / {
     include /etc/nginx/snippets/fm-next-proxy.conf;
+    proxy_set_header X-FM-Entry admin;
 }

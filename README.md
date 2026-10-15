@@ -1,3 +1,7 @@
+> 当前 JooLun 融合使用 `FM_JOOLUN_AUTH_MODE=java_token`：Vue 经同源 `/integration/embed/session` 建立 HttpOnly 会话，AI 向固定 Java 上游核验医生身份。配置 `FM_JOOLUN_JAVA_API_BASE_URL` 和沿用原值的 `FM_JOOLUN_ISSUER`，不再向 Vue 提供共享密钥。登录核验窗口为 20 分钟，已启动病例保护至批准并首次成功下载 PDF，最长受 8 小时 AI 会话限制。下方旧签名/换票部署材料仅描述历史实现，不能直接作为本版发布步骤；公开与内网 Nginx 配置须同步更新，3100/7800 不得向不可信来源开放。
+
+> 病例恢复：同一 issuer、可信医生业务 ID 和患者 ID 绑定一个持续保留的 AI 病例。浏览器分析 UUID 只作请求标识；重开患者会恢复服务端关联，已批准病例只读查看和下载，不自动回填历史推荐。
+
 # Functional Medicine Nutrition AI
 
 面向功能医学病例分析与营养干预审核的本地化工作台。系统负责病例资料预检、结构化提取、医生校对、身体系统分析、营养素草案、安全复核、报告发布和 PDF 导出。

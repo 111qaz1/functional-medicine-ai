@@ -693,6 +693,13 @@ class JoolunEmbedSessionRequest(StrictRequestModel):
     signature: str = Field(min_length=64, max_length=80)
 
 
+class JoolunTokenSessionRequest(StrictRequestModel):
+    external_patient_id: str = Field(min_length=1, max_length=160, pattern=r"\S")
+    external_encounter_id: str = Field(min_length=1, max_length=160, pattern=r"\S")
+    patient_name: str = Field(min_length=1, max_length=160, pattern=r"\S")
+    parent_origin: str = Field(min_length=1, max_length=500)
+
+
 class JoolunEmbedSessionResponse(ContractModel):
     embed_url: str
     case_id: str
@@ -715,6 +722,7 @@ class JoolunEmbedContextResponse(ContractModel):
     external_encounter_id: str
     parent_origin: str
     case_id: str
+    read_only: bool = False
 
 
 class JoolunMappedPrescriptionItem(ContractModel):

@@ -11,8 +11,10 @@ from app.api.v2.schemas import (
     JoolunEmbedSessionResponse,
     JoolunEmbedTicketExchangeRequest,
     JoolunEmbedTicketExchangeResponse,
+    JoolunTokenSessionRequest,
 )
 from app.services.joolun_embed import JoolunEmbedError
+from app.api.v2.joolun_auth import authorize_request
 
 
 router = APIRouter(
@@ -54,13 +56,15 @@ def _session_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
     token = credentials.credentials if credentials else None
-    if not token or request.app.state.container.auth_service.get_doctor_for_session(token) is None:
+    doctor = request.app.state.container.auth_service.get_doctor_for_session(token)
+    if not token or doctor is None:
         raise V2ApiError(
             status=401,
             code="AUTHENTICATION_REQUIRED",
             title="Authentication required",
             detail="A valid embed session is required.",
         )
+    authorize_request(request, token, doctor)
     try:
         _service(request).get_context(token)
     except JoolunEmbedError as exc:
@@ -75,6 +79,8 @@ def _session_token(
     responses=documented_problem_responses(401, 403, 409, 422, 500, 503),
 )
 def create_embed_session(payload: JoolunEmbedSessionRequest, request: Request):
+    if request.app.state.container.settings.joolun_auth_mode == "java_token":
+        raise V2ApiError(status=410, code="LEGACY_EMBED_DISABLED", title="Legacy authentication disabled", detail="Use the partner login session entry.")
     try:
         return _service(request).create_embed_session(payload)
     except JoolunEmbedError as exc:
@@ -87,6 +93,8 @@ def create_embed_session(payload: JoolunEmbedSessionRequest, request: Request):
     responses=documented_problem_responses(401, 422, 500, 503),
 )
 def exchange_embed_ticket(payload: JoolunEmbedTicketExchangeRequest, request: Request):
+    if request.app.state.container.settings.joolun_auth_mode == "java_token":
+        raise V2ApiError(status=410, code="LEGACY_EMBED_DISABLED", title="Legacy authentication disabled", detail="Use the partner login session entry.")
     try:
         result = _service(request).exchange_ticket(payload.ticket)
     except JoolunEmbedError as exc:
@@ -96,6 +104,23 @@ def exchange_embed_ticket(payload: JoolunEmbedTicketExchangeRequest, request: Re
         "case_id": result["case_id"],
         "expires_at": result["expires_at"],
     }
+
+
+@router.post("/token-sessions", status_code=201)
+def create_token_session(payload: JoolunTokenSessionRequest, request: Request,
+                         credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)):
+    if request.headers.get("X-FM-Session-BFF") != "1":
+        raise V2ApiError(status=404, code="RESOURCE_NOT_FOUND", title="Not found", detail="Not found")
+    return request.app.state.container.joolun_java_auth.create(
+        payload, credentials.credentials if credentials else None, request.cookies.get("fm_session"))
+
+
+@router.get("/token-sessions")
+def current_token_session(request: Request, session_id: str = Depends(_session_token)):
+    if request.headers.get("X-FM-Session-BFF") != "1":
+        raise V2ApiError(status=404, code="RESOURCE_NOT_FOUND", title="Not found", detail="Not found")
+    doctor = request.app.state.container.auth_service.get_doctor_for_session(session_id)
+    return request.app.state.container.joolun_java_auth.response(session_id, doctor)
 
 
 @router.get(
@@ -111,6 +136,7 @@ def get_embed_context(request: Request, session_id: str = Depends(_session_token
             "external_encounter_id": context["external_encounter_id"],
             "parent_origin": context["parent_origin"],
             "case_id": context["case_id"],
+            "read_only": bool((request.app.state.container.repository.get_joolun_login_binding(session_id) or {}).get("read_only")),
         }
     except JoolunEmbedError as exc:
         raise _translate_error(exc) from exc

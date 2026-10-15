@@ -14,6 +14,7 @@ import { WorkflowNotice } from "./workflow-shell";
 
 interface DoctorSessionValue {
   doctor: DoctorAccount;
+  readOnly: boolean;
   logout(): Promise<void>;
 }
 
@@ -31,13 +32,21 @@ export function DoctorSessionGate({ children, embedded = false }: { children: Re
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [readOnly, setReadOnly] = useState(false);
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchCurrentUser(), fetchAuthBootstrap()])
+    const bootstrap = embedded
+      ? fetch("/integration/embed/session", { credentials: "include", cache: "no-store" }).then(async response => {
+          if (!response.ok) throw new Error("登录会话不可用。");
+          return [await response.json(), { required: false }] as const;
+        })
+      : Promise.all([fetchCurrentUser(), fetchAuthBootstrap()]);
+    bootstrap
       .then(([session, bootstrap]) => {
         if (!active) return;
         setDoctor(session.doctor ?? null);
+        setReadOnly("read_only" in session && session.read_only === true);
         setBootstrapRequired(bootstrap.required);
       })
       .catch(() => {
@@ -47,7 +56,7 @@ export function DoctorSessionGate({ children, embedded = false }: { children: Re
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
     function handleExpiredSession() {
@@ -125,7 +134,7 @@ export function DoctorSessionGate({ children, embedded = false }: { children: Re
   }
 
   return (
-    <DoctorSessionContext.Provider value={{ doctor, logout: handleLogout }}>
+    <DoctorSessionContext.Provider value={{ doctor, readOnly, logout: handleLogout }}>
       {children}
     </DoctorSessionContext.Provider>
   );

@@ -41,6 +41,7 @@ class JoolunEmbedTests(unittest.TestCase):
             knowledge_root=knowledge_root,
             report_reference_path=root / "report-reference.pdf",
             joolun_embed_enabled=True,
+            joolun_auth_mode="legacy_hmac",
             joolun_embed_shared_secret="embed-test-secret",
             joolun_embed_base_url="http://localhost:3000",
             joolun_embed_allowed_parent_origins=("http://localhost:7600",),

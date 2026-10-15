@@ -119,12 +119,15 @@ class JoolunJavaAuth:
             binding = self.repository.get_joolun_login_binding(previous_session)
             if (context and binding and context["issuer"] == issuer and
                     binding["patient_id"] == payload.external_patient_id and
+                    self.digest(token) == binding["token_hash"] and
                     self.container.auth_service.get_doctor_for_session(previous_session)):
                 doctor = self.authorize(previous_session, token, context["case_id"])
                 previous_context, previous_binding = context, binding
         if previous_context:
             identity = {"id": previous_binding["external_doctor_id"], "name": doctor.display_name}
         else:
+            # A new Java credential must establish its own identity and session;
+            # never authorize it against the previous account's case binding.
             identity = self.verify(token, force=True)
             try:
                 doctor = self.container.auth_service.resolve_external_doctor(issuer=issuer, external_doctor_id=identity["id"], display_name=identity["name"])

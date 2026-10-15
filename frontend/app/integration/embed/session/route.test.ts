@@ -26,10 +26,10 @@ it("sets only an HttpOnly AI cookie and never returns either credential", async(
   expect(JSON.parse(String(init?.body))).toEqual({...body,parent_origin:origin});
   expect(init?.redirect).toBe("error");
 });
-it.each([{Origin:"https://evil.example"},{"Sec-Fetch-Site":"cross-site"}])("rejects cross-origin creation %j",async headers=>{
+it.each<Record<string, string>>([{Origin:"https://evil.example"},{"Sec-Fetch-Site":"cross-site"}])("rejects cross-origin creation %j",async headers=>{
   expect((await POST(request(headers))).status).toBe(403);expect(fetch).not.toHaveBeenCalled();
 });
-it.each([{Cookie:""},{Authorization:"Bearer other"}])("rejects absent or inconsistent login %j",async headers=>{
+it.each<Record<string, string>>([{Cookie:""},{Authorization:"Bearer other"}])("rejects absent or inconsistent login %j",async headers=>{
   expect((await POST(request(headers))).status).toBe(401);expect(fetch).not.toHaveBeenCalled();
 });
 it("queries the current session without returning its bearer",async()=>{

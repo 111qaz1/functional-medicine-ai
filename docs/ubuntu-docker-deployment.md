@@ -151,7 +151,7 @@ sudo nano /etc/nginx/sites-available/functional-medicine-ai
 server {
     listen 80;
     server_name _;
-    client_max_body_size 100m;
+    client_max_body_size 110m;
 
     proxy_http_version 1.1;
     proxy_set_header Host $host;

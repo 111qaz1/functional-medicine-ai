@@ -248,6 +248,36 @@ describe("HttpWorkflowGateway", () => {
     });
   });
 
+  it.each([
+    ["text/html", "<html>413 Content Too Large</html>"],
+    ["text/plain", "Request Entity Too Large"],
+    ["application/json", '{"detail":"too large"}'],
+    ["application/json", "{broken"]
+  ])("explains an upstream 413 with %s content without showing its body", async (contentType, body) => {
+    const gateway = new HttpWorkflowGateway(
+      vi.fn(async () => new Response(body, { status: 413, headers: { "Content-Type": contentType } })) as typeof fetch
+    );
+    await expect(gateway.uploadAttachments("case_1", "medical_record", [new File(["fixture"], "fixture.txt")]))
+      .rejects.toMatchObject({
+        problem: { status: 413, code: "PAYLOAD_TOO_LARGE", detail: expect.stringContaining("压缩文件或分批上传") }
+      });
+  });
+
+  it("preserves the backend's specific batch-limit problem", async () => {
+    const problem: ProblemDetails = {
+      type: "urn:fm-ai:problem:attachment-batch-size-exceeded",
+      title: "Attachment batch size exceeded",
+      status: 413,
+      detail: "The attachment batch exceeds the configured size limit.",
+      instance: "/api/v2/cases/case_1/attachments",
+      code: "ATTACHMENT_BATCH_SIZE_EXCEEDED",
+      errors: []
+    };
+    const gateway = new HttpWorkflowGateway(vi.fn(async () => jsonResponse(problem, 413)) as typeof fetch);
+    await expect(gateway.uploadAttachments("case_1", "medical_record", []))
+      .rejects.toMatchObject({ problem });
+  });
+
   it("rejects malformed successful JSON instead of trusting a TypeScript cast", async () => {
     const gateway = new HttpWorkflowGateway(
       vi.fn(async () => jsonResponse({ id: "case_1" })) as typeof fetch

@@ -1,7 +1,7 @@
 # Joolun 嵌入模式生产部署
 
 当前 JooLun 单入口部署请使用 [最新版JooLun服务器部署说明](../../最新版JooLun服务器部署说明.md)。
-该方案使用 `111qaz1/joolun`，公开入口为 8600，3200 仅供受控内网管理。
+该方案使用 `111qaz1/joolun`，公开入口为 8600，3200 可保持关闭；独立管理入口按需单独配置。
 下文保留早期独立域名/Java 服务端签名方案作为参考，不代表当前医生端已实现 Java 换票接口。
 
 本文档说明基础部署完成之上，启用"甲方开方页嵌入 AI 工作流"所需的增量配置。
@@ -103,10 +103,10 @@ FM_JOOLUN_SKU_MAPPING_PATH=/app/.runtime/joolun_sku_mapping.json
 docker compose up --build -d
 ```
 
-`.env` 或映射文件变更后需重启后端生效：
+`.env` 变更后需重新创建容器加载新环境；映射文件更新按服务加载策略处理：
 
 ```bash
-docker compose restart backend
+docker compose --env-file .env -f compose.yaml up -d --no-deps --force-recreate backend
 ```
 
 ## 甲方侧配合事项

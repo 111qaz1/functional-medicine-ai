@@ -15,7 +15,8 @@ server {
     ssl_certificate /etc/letsencrypt/live/fm.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/fm.example.com/privkey.pem;
 
-    client_max_body_size 100m;
+    # 100 MiB file batch plus multipart overhead; match Next.js's 110mb limit.
+    client_max_body_size 110m;
 
     proxy_http_version 1.1;
     proxy_set_header Host $host;

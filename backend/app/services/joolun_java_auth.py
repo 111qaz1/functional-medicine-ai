@@ -119,6 +119,7 @@ class JoolunJavaAuth:
             binding = self.repository.get_joolun_login_binding(previous_session)
             if (context and binding and context["issuer"] == issuer and
                     binding["patient_id"] == payload.external_patient_id and
+                    context["external_encounter_id"] == payload.external_encounter_id and
                     self.digest(token) == binding["token_hash"] and
                     self.container.auth_service.get_doctor_for_session(previous_session)):
                 doctor = self.authorize(previous_session, token, context["case_id"])
@@ -134,13 +135,13 @@ class JoolunJavaAuth:
             except ValueError:
                 reject(403, "EMBED_DOCTOR_DISABLED")
         try:
-            mapping = self.repository.resolve_patient_case(
+            mapping = self.repository.resolve_encounter_case(
                 issuer=issuer, external_doctor_id=identity["id"], external_patient_id=payload.external_patient_id,
                 external_encounter_id=payload.external_encounter_id, doctor_id=doctor.id,
                 patient_name=payload.patient_name, doctor_name=doctor.display_name)
         except PatientCaseBindingError as exc:
             raise V2ApiError(status=409, code=str(exc), title="Patient case association requires review",
-                             detail="患者旧病例关联不一致，请核对原 issuer、医生归属及病例映射；未创建替代病例。") from exc
+                             detail="本次开单病例关联不一致，请核对 issuer、医生归属及开单标识；未创建替代病例。") from exc
         except (sqlite3.Error, ValueError, OSError) as exc:
             raise V2ApiError(status=503, code="PATIENT_CASE_LOOKUP_FAILED", title="Case recovery unavailable",
                              detail="病例恢复暂不可用，请稍后重试；未创建替代病例。") from exc

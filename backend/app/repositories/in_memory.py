@@ -879,62 +879,42 @@ class LocalRepository:
             ).fetchone()
         return dict(row) if row else None
 
-    def resolve_patient_case(self, *, issuer: str, external_doctor_id: str,
-                             external_patient_id: str, external_encounter_id: str,
-                             doctor_id: str, patient_name: str, doctor_name: str) -> dict:
-        """Select/create once, including both mappings, under a cross-process SQLite lock."""
-        key = (issuer, external_doctor_id, external_patient_id)
+    def resolve_encounter_case(self, *, issuer: str, external_doctor_id: str,
+                               external_patient_id: str, external_encounter_id: str,
+                               doctor_id: str, patient_name: str, doctor_name: str) -> dict:
+        """Resolve one order atomically; patient history never selects its case."""
         with self._lock, closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            # An encounter from another patient must never be silently reassigned.
             requested = connection.execute(
                 "SELECT * FROM external_case_mappings WHERE issuer=? AND external_doctor_id=? AND external_encounter_id=?",
                 (issuer, external_doctor_id, external_encounter_id)).fetchone()
-            if requested and requested["external_patient_id"] != external_patient_id:
-                raise PatientCaseBindingError("EMBED_ENCOUNTER_IDENTITY_CONFLICT")
-            bound = connection.execute(
-                "SELECT case_id FROM external_patient_cases WHERE issuer=? AND external_doctor_id=? AND external_patient_id=?", key).fetchone()
-            rows = connection.execute(
-                "SELECT * FROM external_case_mappings WHERE issuer=? AND external_doctor_id=? AND external_patient_id=?", key).fetchall()
-            if bound:
-                rows = [row for row in rows if row["case_id"] == bound["case_id"]]
-                if not rows:
-                    raise PatientCaseBindingError("PATIENT_CASE_MAPPING_BROKEN")
-            candidates = []
-            for row in rows:
-                stored = connection.execute("SELECT * FROM cases WHERE id=?", (row["case_id"],)).fetchone()
-                if not stored or row["doctor_id"] != doctor_id or stored["owner_doctor_id"] != doctor_id or stored["workspace_scope"] != "doctor":
+            if requested:
+                if requested["external_patient_id"] != external_patient_id:
+                    raise PatientCaseBindingError("EMBED_ENCOUNTER_IDENTITY_CONFLICT")
+                stored = connection.execute("SELECT * FROM cases WHERE id=?", (requested["case_id"],)).fetchone()
+                if not stored or requested["doctor_id"] != doctor_id or stored["owner_doctor_id"] != doctor_id or stored["workspace_scope"] != "doctor":
                     raise PatientCaseBindingError("PATIENT_CASE_OWNERSHIP_CONFLICT")
-                record = self._load_case_record(stored["payload"])
-                latest = connection.execute("SELECT updated_at FROM case_analyses WHERE case_id=? ORDER BY updated_at DESC LIMIT 1", (record.id,)).fetchone()
-                has_draft = connection.execute("SELECT 1 FROM drafts WHERE case_id=? LIMIT 1", (record.id,)).fetchone()
-                meaningful = bool(record.files or (record.clinical_summary_text or "").strip() or latest or has_draft or record.questionnaire)
-                modified = max(record.updated_at.isoformat(), latest[0] if latest else record.updated_at.isoformat())
-                candidates.append((meaningful, modified, record.id, dict(row)))
-            if candidates:
-                mapping = max(candidates, key=lambda item: item[:3])[3]
-            else:
-                # A changed issuer is a configuration/migration issue, not a new patient.
-                other_issuer = connection.execute(
-                    "SELECT 1 FROM external_case_mappings WHERE external_doctor_id=? AND external_patient_id=? AND issuer<>? LIMIT 1",
-                    (external_doctor_id, external_patient_id, issuer)).fetchone()
-                if other_issuer:
-                    raise PatientCaseBindingError("PATIENT_CASE_ISSUER_CONFLICT")
-                case = CaseRecord(id=f"case_{uuid.uuid4().hex[:12]}", customer_name=patient_name,
-                                  consultant_id=doctor_name, workspace_scope=WorkspaceScope.doctor, owner_doctor_id=doctor_id)
-                now = case.created_at.isoformat()
-                connection.execute("INSERT INTO cases (id,workspace_scope,owner_doctor_id,payload) VALUES (?,?,?,?)",
-                                   (case.id, "doctor", doctor_id, case.model_dump_json()))
-                mapping = dict(issuer=issuer, external_doctor_id=external_doctor_id,
-                               external_patient_id=external_patient_id, external_encounter_id=external_encounter_id,
-                               doctor_id=doctor_id, case_id=case.id, created_at=now, updated_at=now)
-                connection.execute("INSERT INTO external_case_mappings VALUES (?,?,?,?,?,?,?,?)",
-                                   tuple(mapping[name] for name in ("issuer", "external_doctor_id", "external_encounter_id", "external_patient_id", "doctor_id", "case_id", "created_at", "updated_at")))
-                audit = AuditLog(id=f"audit_{uuid.uuid4().hex[:12]}", entity_type="case", entity_id=case.id,
-                                 action="case_created", actor_id="system", payload={"workspace_scope": "doctor", "owner_doctor_id": doctor_id})
-                connection.execute("INSERT INTO audit_logs VALUES (?,?,?,?,?,?)",
-                                   (audit.id, audit.entity_type, audit.entity_id, audit.action, audit.created_at.isoformat(), audit.model_dump_json()))
-            connection.execute("INSERT OR IGNORE INTO external_patient_cases VALUES (?,?,?,?)", (*key, mapping["case_id"]))
+                return dict(requested)
+            # Preserve the existing issuer/configuration safeguard.
+            other_issuer = connection.execute(
+                "SELECT 1 FROM external_case_mappings WHERE external_doctor_id=? AND external_patient_id=? AND issuer<>? LIMIT 1",
+                (external_doctor_id, external_patient_id, issuer)).fetchone()
+            if other_issuer:
+                raise PatientCaseBindingError("PATIENT_CASE_ISSUER_CONFLICT")
+            case = CaseRecord(id=f"case_{uuid.uuid4().hex[:12]}", customer_name=patient_name,
+                              consultant_id=doctor_name, workspace_scope=WorkspaceScope.doctor, owner_doctor_id=doctor_id)
+            now = case.created_at.isoformat()
+            connection.execute("INSERT INTO cases (id,workspace_scope,owner_doctor_id,payload) VALUES (?,?,?,?)",
+                               (case.id, "doctor", doctor_id, case.model_dump_json()))
+            mapping = dict(issuer=issuer, external_doctor_id=external_doctor_id,
+                           external_patient_id=external_patient_id, external_encounter_id=external_encounter_id,
+                           doctor_id=doctor_id, case_id=case.id, created_at=now, updated_at=now)
+            connection.execute("INSERT INTO external_case_mappings VALUES (?,?,?,?,?,?,?,?)",
+                               tuple(mapping[name] for name in ("issuer", "external_doctor_id", "external_encounter_id", "external_patient_id", "doctor_id", "case_id", "created_at", "updated_at")))
+            audit = AuditLog(id=f"audit_{uuid.uuid4().hex[:12]}", entity_type="case", entity_id=case.id,
+                             action="case_created", actor_id="system", payload={"workspace_scope": "doctor", "owner_doctor_id": doctor_id})
+            connection.execute("INSERT INTO audit_logs VALUES (?,?,?,?,?,?)",
+                               (audit.id, audit.entity_type, audit.entity_id, audit.action, audit.created_at.isoformat(), audit.model_dump_json()))
             return mapping
 
     def case_has_approved_report(self, case_id: str) -> bool:

@@ -6,6 +6,7 @@ Requires nginx on PATH; never connects to the deployment or uses real patient da
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 from pathlib import Path
@@ -34,6 +35,16 @@ class Echo(BaseHTTPRequestHandler):
 
     def respond(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.path.endswith('/attachments'):
+            result = json.dumps({
+                "body_bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+            return
         result = json.dumps({
             "path": self.path, "body": body.decode(),
             "host": self.headers.get("Host"),
@@ -177,10 +188,26 @@ http {{
                 assert result["proto"] == "http"  # Local fixture; HTTPS is supplied by production TLS.
                 assert result["cookie"] == "fm_session=synthetic"
                 assert result["authorization"] == "Bearer synthetic"
+                # Two legal 50 MiB files exceed a 100m request limit once encoded
+                # as multipart. Exercise the delivered include, not a test override.
+                boundary = b"fm-synthetic-upload-boundary"
+                part = b"x" * (50 * 1024 * 1024)
+                upload = b"".join(
+                    b"--" + boundary + b'\r\nContent-Disposition: form-data; name="files"; filename="fixture.txt"\r\n'
+                    b"Content-Type: text/plain\r\n\r\n" + part + b"\r\n"
+                    for _ in range(2)
+                ) + b"--" + boundary + b"--\r\n"
+                status, _, received = probe(public_port, "/api/v2/cases/synthetic/attachments", "POST", upload, {
+                    "Content-Type": "multipart/form-data; boundary=" + boundary.decode(),
+                })
+                assert status == 200, ("100 MiB multipart batch", status)
+                assert json.loads(received) == {
+                    "body_bytes": len(upload), "sha256": hashlib.sha256(upload).hexdigest(),
+                }
                 assert json.loads(probe(public_port, "/prod-api/admin/api/doctor/home")[2])["path"] == "/admin/api/doctor/home"
                 assert json.loads(probe(admin_port, "/products")[2])["path"] == "/products"
                 assert probe(admin_port, "/products", source=("127.0.0.2", 0))[0] == 403
-                print(f"PASS: nginx -t; {len(paths)} AI routes; Vue fallback; Java prefix; headers/body; private admin allow/deny")
+                print(f"PASS: nginx -t; {len(paths)} AI routes; Vue fallback; Java prefix; headers/body; 100 MiB multipart; private admin allow/deny")
             finally:
                 subprocess.run(command + ["-s", "quit"], check=False, creationflags=HIDDEN, capture_output=True)
                 process.wait(timeout=10)

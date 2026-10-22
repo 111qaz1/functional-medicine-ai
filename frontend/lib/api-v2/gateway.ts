@@ -68,6 +68,17 @@ function isProblemDetails(value: unknown): value is ProblemDetails {
 }
 
 function fallbackProblem(response: Response): ProblemDetails {
+  if (response.status === 413) {
+    return {
+      type: "urn:fm-ai:problem:payload-too-large",
+      title: "Payload too large",
+      status: 413,
+      detail: "上传内容超过服务器允许的大小，请压缩文件或分批上传；若文件较小仍失败，请联系管理员检查上传限制。",
+      instance: "",
+      code: "PAYLOAD_TOO_LARGE",
+      errors: []
+    };
+  }
   return {
     type: "urn:fm-ai:problem:gateway-response-invalid",
     title: "Gateway response invalid",

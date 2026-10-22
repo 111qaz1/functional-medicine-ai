@@ -1,171 +1,140 @@
-# JooLun 单入口部署说明
+# JooLun 8600 单入口部署
 
-## 1. 版本与改动
+更新日期：2026-10-22。适用于 `111qaz1/joolun` 医生端和 `111qaz1/functional-medicine-ai` 的 Java Token 融合版本。发布前记录两个仓库的实际提交 SHA；离线交付时同时保存源码版本、完整 dist 和校验和。
 
-医生端仓库：[111qaz1/joolun](https://github.com/111qaz1/joolun)，本次基于 main 的 `a163032`，保留已有剂量显示修复。AI 仓库：[111qaz1/functional-medicine-ai](https://github.com/111qaz1/functional-medicine-ai)，本次基于 main 的 `3f75051`。
+## 1. 当前链路与更新范围
 
-两个仓库的交付分支均为 `codex/joolun-single-entry-8600`。部署使用本次 PR 交付清单中的完整提交 SHA，不能再使用旧的 `codex/joolun-latest-ai-integration` 分支或 `145eaad`。部署前以 `git rev-parse HEAD` 核对实际版本；PR 未合并时，不从 main 获取本次改动。源码有本地修改时先保存，不能强制覆盖。
-
-本次改动：
-- Vue 生产配置改用 8600 同源 AI 地址；保留原 iframe、签名、商品回填及 Java 接口。
-- Next.js 的换票成功和失败跳转统一使用公开地址；网络异常、超时及无效响应进入嵌入错误页。
-- 新增前端变量 `FM_INTERNAL_ADMIN_ORIGINS`，供受控内网管理页面执行 v2 写操作；它不代替网络访问控制，也不增加 iframe 父来源。
-- 8600 增加 AI 路径代理；3200 在验收后限制为内网管理。
-- FastAPI 业务代码、接口协议、病例映射、数据库和商品映射不因本次入口迁移而变更；不新增 Java 接口。
-
-共享密钥及浏览器签名方式本次保持不变。配置示例不含真实密钥。
-
-## 2. 目标地址
-
-| 地址 | 用途 |
-| --- | --- |
-| `https://paracelsus.huapont.com.cn:8600` | 唯一公开医生端入口 |
-| 8600 的 `/prod-api/*` | 原 Java 后端，沿用原有上游 |
-| 8600 的 `/integration/embed/*`、`/_next/*`、`/api/internal/*`、`/api/v2/*`、`/api/v1/*` | Next.js，内网 `172.16.0.140:3100` |
-| `172.16.0.140:7800` | FastAPI；Next.js 容器仍通过 `http://backend:8000` 访问 |
-| `https://paracelsus.huapont.com.cn:3200` | 仅受控内网/VPN 管理，不再对公网开放 |
-
-保留 3100/7800 内部服务和原存储挂载。服务器文件名仍为 `compose.yaml`，不是本地备份名 `compose(2).yaml`。不要用仓库默认的 127.0.0.1 端口绑定覆盖服务器已有的 172.16.0.140 绑定。
-
-## 3. 构建医生端
-
-取得经过验证的交付提交，在服务器医生端源码目录确认 `VITE_APP_BASE_API=/prod-api`，生产配置为：
-
-```ini
-VITE_FM_EMBED_ENABLED=true
-VITE_FM_EMBED_ORIGIN=https://paracelsus.huapont.com.cn:8600
-VITE_FM_AI_API_BASE_URL=https://paracelsus.huapont.com.cn:8600/api/internal
-VITE_FM_JOOLUN_ISSUER=joolun-windows-pilot
+```text
+浏览器 → 8600 Nginx
+          ├─ / 与 Vue 静态资源 → 医生端 dist
+          ├─ /prod-api/* → 原 Java 后端
+          └─ AI 页面、资源和 /api/v2/* → 内部 Next.js:3100 → FastAPI:8000
 ```
 
-issuer 沿用服务器当前值；若原部署值不同，不改成示例值。将现有 `VITE_FM_JOOLUN_EMBED_SHARED_SECRET` 保留在忽略的 `.env.production.local` 或构建环境中，不能提交 Git。首次配置可参考医生端的 `.env.production.local.example`，不要覆盖已有私有配置。
+Vue 通过同源 `/integration/embed/session` 携带当前 Java 登录凭据建立或恢复会话；FastAPI 向固定 Java 地址核验医生身份及患者访问权限。Next.js 写入 HttpOnly AI Cookie，并为后续 AI 请求完成 Cookie → Bearer 转换。浏览器不再使用共享签名密钥，也不直接访问 FastAPI。
 
-检查 `.env.local`、`.env.production.local` 及进程环境是否仍覆盖为 3200。Vite 构建时固化这些变量，修改后必须重新构建。
+- 仅更新医生端业务或 20261021 融合版：构建并替换完整 Vue dist；Java 已支持对应接口时，无需重建 AI 服务。
+- 从旧签名版本升级到 Java Token 版本：Vue、Next.js、FastAPI 必须配套更新并重建，不能只更新前端。
+- 本次上传修复：重建 Next.js frontend，更新 Nginx 上传上限；已经运行新版认证后端时，无需为上传修复重建 backend。
 
-```bash
-npm install --include=dev
-node --test scripts/test-functional-medicine-embed.mjs scripts/test-functional-medicine-workbench.mjs
-npm run build:prod
-```
+3200 已关闭时保持关闭，不需要为融合版重新开放。内部 Next.js、FastAPI 及其必要连接必须保留。`joolun-integration-test` 是历史联调仓库，本次不更新。
 
-使用 Node.js 20 或 22；已有锁定依赖文件时沿用，优先 `npm ci`。发布完整 `dist`，包括 assets 和压缩资源，不能只替换 index.html。
+## 2. 配置文件
 
-本次本地无密钥构建只用于验证编译，不能当作已配置的生产包；服务器须带入现有密钥重新构建。不要在校验输出中打印密钥。
+合入需要的变量，保留现有模型、数据目录、SKU 映射、issuer、密钥及挂载；不要整份覆盖服务器配置。
 
-## 4. 更新 AI 环境和镜像
-
-将 `deploy/joolun-single-entry.env.example` 中的值合入服务器原 `.env`：
+AI `.env`：
 
 ```ini
 FM_PUBLIC_BASE_URL=https://paracelsus.huapont.com.cn:8600
 FM_JOOLUN_EMBED_BASE_URL=https://paracelsus.huapont.com.cn:8600
 FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS=https://paracelsus.huapont.com.cn:8600
 FM_CORS_ALLOW_ORIGINS=https://paracelsus.huapont.com.cn:8600
-FM_INTERNAL_ADMIN_ORIGINS=https://paracelsus.huapont.com.cn:3200
 FM_JOOLUN_EMBED_ENABLED=1
+FM_JOOLUN_AUTH_MODE=java_token
+FM_JOOLUN_JAVA_API_BASE_URL=https://paracelsus.huapont.com.cn:8600/prod-api
+FM_JOOLUN_ISSUER=joolun-windows-pilot
 FM_SESSION_COOKIE_SECURE=1
+FM_INTERNAL_ADMIN_ORIGINS=
 INTERNAL_API_BASE_URL=http://backend:8000
-BACKEND_PORT=7800
-FRONTEND_PORT=3100
 ```
 
-确有需要的既有联调来源可保留，以英文逗号分隔。独立本机 Vue 联调须改用 8600 的 AI 地址，并保留其父来源/CORS；该来源不能继续依赖公网 3200。若继承的 X-Frame-Options 为 SAMEORIGIN，本机跨来源嵌入需单独按原联调策略调整，不能把“已配置 CSP”视为浏览器链路已通过。
+issuer 必须沿用当前病例映射值。Java 核验地址可以是已有受信任内网地址，须从 backend 容器可达。`FM_INTERNAL_ADMIN_ORIGINS` 仅用于独立管理页面写操作；没有管理入口时留空，不影响 8600 医生端。
 
-共享密钥、运行路径、SKU 映射及 LLM/RAG 配置保持原值。不要用示例文件整体覆盖服务器 .env。
+医生端 `.env.production`：
 
-确认服务器 `compose.yaml` 的 frontend.environment 含：
-
-```yaml
-INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://backend:8000}
-FM_SESSION_COOKIE_SECURE: ${FM_SESSION_COOKIE_SECURE:-0}
-FM_JOOLUN_EMBED_BASE_URL: ${FM_JOOLUN_EMBED_BASE_URL:-}
-FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS: ${FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS:-}
-FM_INTERNAL_ADMIN_ORIGINS: ${FM_INTERNAL_ADMIN_ORIGINS:-}
+```ini
+VITE_APP_BASE_API=/prod-api
+VITE_FM_EMBED_ENABLED=true
+VITE_FM_EMBED_ORIGIN=https://paracelsus.huapont.com.cn:8600
 ```
 
-后台通过现有 env_file 读取 .env。本次 Next.js 有代码改动，必须构建 frontend 镜像：
+不需要 `.local` 文件。检查已有 `.env.local`、`.env.production.local` 和构建进程是否覆盖这些值；移除旧 `VITE_FM_JOOLUN_EMBED_SHARED_SECRET`、`VITE_FM_AI_API_BASE_URL` 和前端 issuer 配置。`VITE_*` 在构建时写入 dist，修改后需要重新构建。
+
+`compose.yaml` 的 frontend.environment 须保留 `INTERNAL_API_BASE_URL`、`FM_JOOLUN_EMBED_BASE_URL`、`FM_JOOLUN_EMBED_ALLOWED_PARENT_ORIGINS`、`FM_INTERNAL_ADMIN_ORIGINS` 和 Secure Cookie 变量引用。backend 通过原 `env_file` 加载 `.env`。保留已有端口绑定及卷，不把仓库默认回环地址覆盖到跨主机部署中。
+
+## 3. 构建和启动
+
+先备份配置、旧 dist、镜像和业务数据。所有 Compose 命令沿用原项目名、覆盖文件及目录；不执行 `down -v`。
+
+医生端使用 Node.js 20 或 22：
 
 ```bash
-docker compose -f compose.yaml config --quiet
-docker compose -f compose.yaml build frontend
+npm ci --include=dev
+npm run test:integration
+npm run build:prod
 ```
 
-先构建，不立即切换。维护窗口内执行：
+离线交付完整 dist 时，部署主机无需再次安装 Node.js 或构建。将新 dist 放到 Nginx 可见的新版本目录，确认该目录直接含 `index.html`、`assets/` 及压缩资源。保留上一版目录；将旧 assets 中新版缺少的文件保留到新目录，不覆盖新版文件，避免长开页面请求旧 hash 资源失败。
+
+AI 仅上传修复：
 
 ```bash
-docker compose -f compose.yaml up -d --no-build --force-recreate backend frontend
-docker compose -f compose.yaml ps
+docker compose --env-file .env -f compose.yaml config --quiet
+docker compose --env-file .env -f compose.yaml build frontend
+docker compose --env-file .env -f compose.yaml up -d --no-deps --force-recreate frontend
 ```
 
-沿用原项目名、覆盖文件参数和镜像标识。FastAPI 沿用已部署镜像，不需要因本次入口调整而重建。仅执行 restart 不会加载新环境变量。
+从旧认证版升级时，先将最新的 backend、frontend 配套源码更新到部署目录，再将上述 build/up 的服务改为 `backend frontend`。仅 `restart` 不能加载新环境，只有重新创建容器也不能更新旧镜像内的代码。
 
-## 5. 合并 Nginx 配置
+## 4. Nginx 修改
 
-使用本仓库三个示例文件：
-- `deploy/nginx/fm-next-proxy.conf.example`：安装为 `/etc/nginx/snippets/fm-next-proxy.conf`。
-- `deploy/nginx/joolun-single-entry.locations.conf.example`：安装为 `/etc/nginx/snippets/joolun-single-entry.locations.conf`，在现有 8600 server 内 include。
-- `deploy/nginx/joolun-private-admin.conf.example`：验收后合入现有 3200 server，替换旧的 location / 并限制来源。
+使用现有 Nginx，不需要重新安装。文件位置以实际运行实例为准；Docker 内 `include` 使用容器可见路径，修改相应宿主机挂载文件。
 
-8600 保留证书、Vue root 和 /prod-api；在同一 server 中加入：
+首次配置时，将 `deploy/nginx/fm-next-proxy.conf.example` 和 `joolun-single-entry.locations.conf.example` 安装为 `.conf`，逐处修改 include 路径及真实 Next.js 上游。已有 `fm-ai.locations.conf` 时合并差异，不重复添加 location。
+
+8600 保留原证书、Java `/prod-api/` 代理和 Vue 路由回退；Vue 更新只切换 `root` 到新 dist。AI 路由规则：
+
+| 路径 | 处理 |
+| --- | --- |
+| `/integration/embed/*`、`/_next/*`、`/api/v2/*` | 经 Next.js 转发，覆盖 `X-FM-Entry` 为 `public` |
+| `/api/internal/health` | 仅 GET 健康检查 |
+| 其余 `/api/internal/*`、`/api/v1/*` | 拒绝，不对公网开放旧管理 API |
+
+公共代理片段保留 `Host $http_host`、`X-Forwarded-Host $http_host`、`X-Forwarded-Proto $scheme`，清除客户端 `X-FM-Session-BFF`，保留 Cookie、Authorization 和请求体。不清空或伪造 AI 请求的 Origin，不把 `/api/v2/` 直接转发到 FastAPI，不增加 `/ai/` 前缀。
+
+上传上限在实际 `/api/v2/` location 或其公共片段内设置：
 
 ```nginx
-include /etc/nginx/snippets/joolun-single-entry.locations.conf;
-
-# 保留原 Vue 路由回退
-location / {
-    try_files $uri $uri/ /index.html;
-}
+client_max_body_size 110m;
+proxy_read_timeout 900s;
+proxy_send_timeout 900s;
 ```
 
-已有 location / 时不要重复添加。新增路径如与已有 location 冲突，合并对应块，不能重复或覆盖现有业务。示例使用 exact 和 ^~ 匹配，防止通用 .js/.css 静态规则抢占 Next.js 资源。
+默认后端单文件 50 MiB、每批最多 10 个且文件合计 100 MiB；Nginx 110m 和 Next.js 110mb 为 multipart 边界及字段预留空间。后端限制不因代理放宽而改变。自定义 `FM_MAX_UPLOAD_*` 时同步检查每层上限；前置网关也需允许该请求大小。只在 server 设置时，确认 location 没有更小的覆盖值。
 
-代理保留路径和查询参数，保留 Host 的外部端口、Cookie、Authorization 和请求体。上传上限 100m，读写超时 900s，关闭继承的代理缓存。不使用 /ai/ 前缀，不在 Nginx 剥离 /api/internal，也不把 /api/v2 直接指向 7800。
-
-Next.js 通过配置生成 CSP。同源 8600 iframe 可保留 X-Frame-Options: SAMEORIGIN；不能继承 DENY 或不允许 8600 的 frame-ancestors。医生端 frame-src/connect-src 应允许同源。保留应用返回的 Set-Cookie、Cache-Control 和 Referrer-Policy。
-
-本次不对外代理独立 AI 首页及管理页面。产品、模型、医生账号等独立页面通过内网 3200 访问，使用原 AI 管理账号。
+在实际实例检查成功后再重载，例如 Docker：
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
+docker exec <Nginx容器名> nginx -t
+docker exec <Nginx容器名> nginx -s reload
 ```
 
-3200 的管理来源示例默认 deny all，仅放行回环地址。部署人员须加入批准的管理/VPN 网段，再移除公网 NAT/防火墙放行。内网 DNS 指向可达的内部入口，浏览器地址仍使用证书匹配的域名。存在前置代理时必须在前置入口实施访问控制或正确配置可信 real_ip；不要直接放行一个所有公网流量都会经过的代理地址。3100、7800 也不得存在绕过该限制的公网映射。
+宿主机部署使用该实例的 `nginx -t`、`nginx -s reload`；原有 `-c`、`-p` 参数需保留。检查失败不重载。
 
-## 6. 发布顺序与验收
+不使用独立管理页面时无需第三个管理片段。确需管理入口时，另配受限 HTTPS 站点、实际管理 Origin 和可信代理来源控制，再引用 `joolun-private-admin.conf.example`。新旧 AI 并行运行使用独立域名：Cookie 不按端口隔离，只改 3200 为 3201 不能避免同名 `fm_session` 冲突。
 
-本地可先执行 `python scripts/test_single_entry_nginx.py`（需要 nginx 在 PATH，或通过 --nginx 指定），用合成上游检查实际 Nginx 路径、请求头、请求体和管理来源限制，不连接服务器业务数据。
+## 5. 验收与故障定位
 
-1. 记录两个提交、当前镜像 ID；备份旧 dist、Nginx、.env、compose.yaml，确认数据库及附件备份可用。
-2. 提前构建新 Vue 和 Next.js；准备路径分流，检查现有位置冲突和管理访问网段。
-3. 在短维护窗口同步更新 AI 环境及容器、新 Vue dist 和 Nginx。
-4. 完成下面的公开入口及业务验收，再将 3200 限制为内网；保留回退配置。
+开发环境可运行 `python scripts/test_single_entry_nginx.py` 检查 Nginx 分流和 100 MiB multipart 转发；完成 frontend 生产构建后，运行 `node scripts/test_upload_proxy.mjs` 检查 Next.js 的相同上传边界。两者只使用本机合成数据。
 
-配置中的 AI 公开地址是单值。切到 8600 后不保证旧 3200 iframe 仍可写入，不采用新旧入口并行操作。切换后刷新医生端重新换票；不要复用旧的一次性 ticket。
-
-无账号检查：
+只输出必要配置，避免打印完整 `.env`：
 
 ```bash
-curl -I https://paracelsus.huapont.com.cn:8600/
-curl https://paracelsus.huapont.com.cn:8600/api/internal/health
-curl -sS -D - -o /dev/null https://paracelsus.huapont.com.cn:8600/integration/embed/start
-curl -sS -D - -o /dev/null https://paracelsus.huapont.com.cn:8600/api/v2/cases
+docker compose --env-file .env -f compose.yaml exec frontend printenv FM_JOOLUN_EMBED_BASE_URL
+docker compose --env-file .env -f compose.yaml exec frontend printenv INTERNAL_API_BASE_URL
+docker compose --env-file .env -f compose.yaml exec backend python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8000/openapi.json")); print("POST token-sessions:", "post" in d.get("paths",{}).get("/api/v2/integrations/joolun/token-sessions",{}))'
 ```
 
-预期：首页 200；health 返回 status=ok；无票据返回 307，Location 为 8600 的 /integration/embed/error?code=missing-ticket，且有 no-store/no-referrer；未登录 v2 返回 JSON 401，不是 Vue HTML。
+预期依次为 8600 公开地址、`http://backend:8000`、`True`。
 
-用户执行真实业务验收：
-- 原 Java 登录、客户、商品、处方功能正常。
-- 进入开方页后自动建立 AI 会话；上传、分析、校对、批准、剂量回填和 PDF 下载完整通过。
-- 手工修改不被覆盖；刷新复用原分析标识；票据失效可重新加载。
-- 开发者工具确认 AI 请求、Next.js 静态资源和下载均不再指向 3200、3100、7800 或 localhost。
-- 内网管理员可登录，维护产品、模型和账号，v2 写入正常。
-- 公网无法访问 3200；内网管理仍可用。
+| 现象 | 重点检查 |
+| --- | --- |
+| session 403，提示只允许当前工作台 | frontend 运行环境是否仍是 3200，代理是否转到旧实例或改写 Origin；终端环境优先于 `.env` |
+| session 登录后 404 | backend 是否有 `POST token-sessions`；更新源码并重建 backend |
+| 上传 413，响应为 HTML/普通文本 | 实际 Nginx location、公共片段和前置网关上传上限；仅改 `.env` 不够 |
+| 上传 413，响应为应用 problem JSON | 按错误码检查后端单文件、数量或批次限制 |
 
-本地构建与合成请求测试不能代替服务器上述业务验收；不自动使用真实账号或病例。
+从 8600 登录验证客户切换、AI 会话、上传分析、校对批准、推荐回填、报告下载和刷新恢复。前端融合版另验证自由搭配单项每日 8、各餐合计 6、配方恢复、海关登记人、机构定价和角色权限。浏览器不得依赖 3200/3100/7800；自动化合成数据验证不代替真实登录和业务验收。
 
-## 7. 回退
-
-保留旧镜像标签和配置直到验收结束。回退时恢复旧 dist、Next.js 镜像、.env 和 Nginx；如已限制 3200，则按原配置恢复公网规则，再重新创建容器并检查旧入口。
-
-本次无数据库迁移。回退不能恢复旧数据库覆盖期间新产生的病例或附件，也不要删除 .runtime。
+回退 Vue 时恢复旧 root，检查后 reload。回退 AI 时恢复对应镜像和环境再创建容器；不恢复旧数据库覆盖期间新增的数据。3200 的开放状态按当前已验收方案处理，无需为回退普通 Vue 更新重新开放。

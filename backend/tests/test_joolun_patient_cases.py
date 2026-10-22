@@ -44,47 +44,67 @@ class PatientCaseTests(unittest.TestCase):
             doctor_id=doctor.id, case_id=case.id, created_at=case.created_at.isoformat(), updated_at=case.updated_at.isoformat()))
         return case
 
-    def test_new_uuid_new_browser_and_process_restart_restore_same_case(self):
+    def test_same_order_survives_new_session_and_process_restart(self):
         first = self.create()
         service = JoolunJavaAuth(self.container)
         service.transport = self.service.transport
-        for encounter in ("new-browser", "after-prescription-submission"):
-            result = service.create(self.payload.model_copy(update={"external_encounter_id":encounter}), "synthetic-java-token")
-            self.assertEqual(result["case_id"], first["case_id"])
-            self.assertEqual(result["external_encounter_id"], "encounter")
-        self.assertEqual(self.counts(), (1,1,1))
-        self.assertFalse(first["read_only"])
+        repeated = service.create(self.payload, "synthetic-java-token")
+        self.assertEqual(repeated["case_id"], first["case_id"])
+        self.assertEqual(repeated["external_encounter_id"], self.payload.external_encounter_id)
+        self.assertEqual(self.counts(), (1, 1, 0))
 
-    def test_old_content_beats_new_blank_and_does_not_merge_or_delete(self):
+    def test_new_order_does_not_restore_old_content_analysis_or_blank_cases(self):
         old = self.legacy("old-content", content=True, age=3)
+        analyzed = self.legacy("analyzed")
+        self.container.repository.save_case_analysis(workflow_tests.V2WorkflowApiTests._analysis(analyzed.id))
         blank = self.legacy("new-blank")
         result = self.create()
-        self.assertEqual(result["case_id"], old.id)
-        self.assertEqual(result["external_encounter_id"], "old-content")
-        self.assertIsNotNone(self.container.repository.get_case(blank.id))
-        self.assertEqual(self.counts(), (2,2,1))
+        self.assertNotIn(result["case_id"], {old.id, analyzed.id, blank.id})
+        case = self.container.repository.get_case(result["case_id"])
+        self.assertFalse(case.files)
+        self.assertFalse(case.draft_ids)
+        self.assertFalse(case.clinical_summary_text)
+        self.assertFalse(result["read_only"])
+        self.assertEqual(self.counts(), (4, 4, 0))
         self.assertEqual(self.container.repository.get_case(old.id).clinical_summary_text, "Synthetic saved summary")
+        with closing(self.container.repository._connect()) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM case_analyses WHERE case_id=?", (analyzed.id,)).fetchone()[0], 1)
 
-    def test_analysis_only_is_meaningful_and_latest_content_wins(self):
-        self.legacy("older-content", content=True, age=5)
-        analyzed = self.legacy("analyzed", age=2)
-        self.container.repository.save_case_analysis(workflow_tests.V2WorkflowApiTests._analysis(analyzed.id))
-        self.legacy("latest-blank")
-        self.assertEqual(self.create()["case_id"], analyzed.id)
+    def test_legacy_fixed_patient_binding_is_preserved_but_ignored(self):
+        old = self.legacy("approved-old", content=True, approved=True)
+        with closing(self.container.repository._connect()) as db, db:
+            db.execute("INSERT INTO external_patient_cases VALUES (?,?,?,?)", ("joolun", str(self.home["data"]["doctorInfo"]["id"]), self.payload.external_patient_id, old.id))
+        result = self.create()
+        self.assertNotEqual(result["case_id"], old.id)
+        self.assertFalse(result["read_only"])
+        self.assertEqual(self.counts(), (2, 2, 1))
+        with closing(self.container.repository._connect()) as db:
+            self.assertEqual(db.execute("SELECT case_id FROM external_patient_cases").fetchone()[0], old.id)
 
-    def test_all_blank_reuses_latest_blank(self):
-        self.legacy("older", age=1)
-        latest = self.legacy("latest")
-        self.assertEqual(self.create()["case_id"], latest.id)
-        self.assertEqual(self.counts(), (2,2,1))
+    def test_new_order_with_previous_cookie_is_writable_and_cannot_read_old_case(self):
+        first = self.create()
+        old = self.container.repository.get_case(first["case_id"])
+        old.status = CaseStatus.approved
+        old.clinical_summary_text = "Previous report source"
+        self.container.repository.save_case(old)
+        second = self.service.create(self.payload.model_copy(update={"external_encounter_id": "second-order"}), "synthetic-java-token", first["access_token"])
+        self.assertNotEqual(second["case_id"], first["case_id"])
+        self.assertFalse(second["read_only"])
+        self.assertFalse(self.container.repository.get_joolun_login_binding(second["access_token"])["protected"])
+        headers = self.api_headers(second)
+        self.assertEqual(self.client.put(f"/api/v2/cases/{second['case_id']}/clinical-summary", json={"clinical_summary": "New order"}, headers=headers).status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v2/cases/{old.id}", headers=headers).status_code, 403)
+        self.assertEqual(self.container.repository.get_case(old.id).clinical_summary_text, "Previous report source")
+        self.assertIsNone(self.container.auth_service.get_doctor_for_session(first["access_token"]))
 
-    def test_existing_binding_stays_stable_even_if_old_other_record_changes(self):
-        first = self.legacy("first", content=True)
-        other = self.legacy("other", content=True, age=3)
-        self.assertEqual(self.create()["case_id"], first.id)
-        other.updated_at = utc_now() + timedelta(days=1)
-        self.container.repository.save_case(other)
-        self.assertEqual(self.create()["case_id"], first.id)
+    def test_new_order_cannot_borrow_previous_analysis_login_protection(self):
+        first = self.create()
+        self.service.protect(first["access_token"], first["case_id"])
+        self.info = {"code": 401}
+        before = self.counts()
+        with self.assertRaises(V2ApiError):
+            self.service.create(self.payload.model_copy(update={"external_encounter_id": "new-order"}), "synthetic-java-token", first["access_token"])
+        self.assertEqual(self.counts(), before)
 
     def test_doctors_and_patients_are_isolated_with_long_string_ids(self):
         first = self.create()
@@ -92,7 +112,7 @@ class PatientCaseTests(unittest.TestCase):
         self.home["data"]["doctorInfo"]["id"] = "2099664879912943620"
         third = self.service.create(self.payload, "another-doctor-token")
         self.assertEqual(len({first["case_id"],second["case_id"],third["case_id"]}),3)
-        self.assertEqual(self.counts(), (3,3,3))
+        self.assertEqual(self.counts(), (3,3,0))
         response = self.client.get("/api/v2/cases/"+first["case_id"],headers=self.api_headers(second))
         self.assertEqual(response.status_code,403)
 
@@ -105,14 +125,14 @@ class PatientCaseTests(unittest.TestCase):
         self.assertEqual(self.counts(),before)
 
     def test_broken_mapping_and_database_error_never_create_fallback(self):
-        case = self.legacy("broken", content=True)
+        case = self.legacy(self.payload.external_encounter_id, content=True)
         with closing(self.container.repository._connect()) as db, db:
             db.execute("UPDATE cases SET owner_doctor_id='wrong-owner' WHERE id=?",(case.id,))
         before = self.counts()
         with self.assertRaises(V2ApiError) as error:
             self.create()
         self.assertEqual(error.exception.status,409)
-        with patch.object(self.container.repository,"resolve_patient_case",side_effect=sqlite3.OperationalError("private diagnostic")):
+        with patch.object(self.container.repository,"resolve_encounter_case",side_effect=sqlite3.OperationalError("private diagnostic")):
             with self.assertRaises(V2ApiError) as error:
                 self.create()
         self.assertEqual(error.exception.status,503)
@@ -122,7 +142,7 @@ class PatientCaseTests(unittest.TestCase):
     def test_atomic_creation_rolls_back_on_binding_write_failure(self):
         class BrokenConnection(sqlite3.Connection):
             def execute(self, sql, parameters=()):
-                if sql.startswith("INSERT OR IGNORE INTO external_patient_cases"):
+                if sql.startswith("INSERT INTO audit_logs"):
                     raise sqlite3.OperationalError("synthetic disk failure")
                 return super().execute(sql,parameters)
         def connect():
@@ -140,17 +160,37 @@ class PatientCaseTests(unittest.TestCase):
         doctor=self.container.auth_service.resolve_external_doctor(issuer="joolun", external_doctor_id=str(self.home["data"]["doctorInfo"]["id"]),display_name="Synthetic")
         repos=[LocalRepository(self.container.repository.database_path) for _ in range(5)]
         def resolve(i):
-            return repos[i].resolve_patient_case(issuer="joolun",external_doctor_id=str(self.home["data"]["doctorInfo"]["id"]),
-                external_patient_id=self.payload.external_patient_id,external_encounter_id="concurrent-"+str(i),
+            return repos[i].resolve_encounter_case(issuer="joolun",external_doctor_id=str(self.home["data"]["doctorInfo"]["id"]),
+                external_patient_id=self.payload.external_patient_id,external_encounter_id="concurrent-same-order",
                 doctor_id=doctor.id,patient_name="Synthetic",doctor_name="Synthetic")["case_id"]
         with ThreadPoolExecutor(max_workers=5) as pool:
             ids=list(pool.map(resolve,range(5)))
         self.assertEqual(len(set(ids)),1)
-        self.assertEqual(self.counts(),(1,1,1))
+        self.assertEqual(self.counts(),(1,1,0))
         self.assertEqual(len(self.container.repository.list_audit_logs(ids[0])),1)
 
+    def test_concurrent_distinct_orders_create_distinct_cases(self):
+        doctor = self.container.auth_service.resolve_external_doctor(issuer="joolun", external_doctor_id=str(self.home["data"]["doctorInfo"]["id"]), display_name="Synthetic")
+        repos = [LocalRepository(self.container.repository.database_path) for _ in range(5)]
+        def resolve(i):
+            return repos[i].resolve_encounter_case(issuer="joolun", external_doctor_id=str(self.home["data"]["doctorInfo"]["id"]),
+                external_patient_id=self.payload.external_patient_id, external_encounter_id="order-" + str(i),
+                doctor_id=doctor.id, patient_name="Synthetic", doctor_name="Synthetic")["case_id"]
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            ids = list(pool.map(resolve, range(5)))
+        self.assertEqual(len(set(ids)), 5)
+        self.assertEqual(self.counts(), (5, 5, 0))
+
+    def test_same_order_cannot_be_reassigned_to_other_patient(self):
+        self.create()
+        before = self.counts()
+        with self.assertRaises(V2ApiError) as error:
+            self.service.create(self.payload.model_copy(update={"external_patient_id": "different-patient"}), "synthetic-java-token")
+        self.assertEqual(error.exception.code, "EMBED_ENCOUNTER_IDENTITY_CONFLICT")
+        self.assertEqual(self.counts(), before)
+
     def test_reopened_approved_is_read_only_in_session_context_and_write_routes(self):
-        case=self.legacy("approved",content=True,approved=True)
+        case=self.legacy(self.payload.external_encounter_id,content=True,approved=True)
         result=self.create()
         self.assertTrue(result["read_only"])
         headers=self.api_headers(result)
@@ -172,7 +212,7 @@ class PatientCaseTests(unittest.TestCase):
         self.container.repository.save_case(case)
         response=self.client.post(f"/api/v2/cases/{case.id}/analyses",json={"third_party_processing_confirmed":True},headers=self.api_headers(result))
         self.assertEqual(response.status_code,403,response.text)
-        restored=self.service.create(self.payload.model_copy(update={"external_encounter_id":"changed"}),"synthetic-java-token",result["access_token"])
+        restored=self.service.create(self.payload,"synthetic-java-token",result["access_token"])
         self.assertTrue(restored["read_only"])
         self.assertEqual(restored["access_token"],result["access_token"])
         self.assertEqual(restored["expires_at"],result["expires_at"])
